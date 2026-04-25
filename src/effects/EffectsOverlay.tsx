@@ -1,14 +1,37 @@
 import { useEffect, useRef, useState } from 'react'
 import confetti from 'canvas-confetti'
-import type { LevelUpRecord } from '../character'
+import type { DeathRecord, LevelUpRecord } from '../character'
 import { xpToNextLevel } from '../character'
 import { rarityColor, rarityLabel, skullsFor } from '../items'
 import type { Effects } from '../themes'
+import {
+  DEATH_DURATION_CONFIG,
+  LEVEL_UP_DURATION_CONFIG,
+  deathDurationMs,
+  levelUpDurationMs,
+} from './durations'
 import type { EffectEvent } from './types'
 
 interface Props {
   events: EffectEvent[]
   effects: Effects
+  /** Monotonically-increasing counter. Each bump tears down every active
+   *  and queued fullscreen effect instantly (no fade). Used when the
+   *  player navigates to the roster or opens Settings — the current
+   *  banner must vanish with the play surface, not keep animating over
+   *  an unrelated screen. Incrementing it also marks the current
+   *  `events` array as already-seen so returning to play doesn't replay
+   *  whatever was mid-flight. */
+  interruptCounter?: number
+  /** Fired when a blocking fullscreen effect is dismissed — either by its
+   *  own animation ending or by the user clicking Continue. App.tsx uses
+   *  this to clear the tick-pause so the game resumes immediately on
+   *  early dismissal instead of waiting out the scripted pause duration. */
+  onBlockingDismiss?: () => void
+  /** Fired when the user hovers over / leaves a blocking card. While
+   *  hovered the card's CSS animations pause (so it stays on screen) and
+   *  App.tsx blocks tick resume until the mouse leaves. */
+  onBlockingHoverChange?: (hovered: boolean) => void
 }
 
 interface ActiveFx {
@@ -16,58 +39,22 @@ interface ActiveFx {
   kind: EffectEvent['kind']
   /** 0–1 intensity used by damage/heal flashes. */
   intensity?: number
-  /** Level-up card on-screen duration, chosen per level reached. */
+  /** Level-up / death card on-screen duration, chosen per level or
+   *  death-count. Drives the card's CSS animation via --fx-*-dur. */
   durationMs?: number
   levelUp?: {
     record: LevelUpRecord
     previousAt: number
     previousGold: number
   }
+  death?: {
+    record: DeathRecord | undefined
+  }
   /** Area name used by the new-area fullscreen banner. */
   name?: string
   /** Area rarity — drives the new-area banner variant. Rare+ renders a
    *  distinct "Rare Area Discovered" card in the rarity color. */
   rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
-}
-
-// Per-level on-screen durations for the level-up card. Tuned in code so
-// notable milestones linger longer than routine levels.
-const LEVEL_UP_DURATION_CONFIG = {
-  /** Levels 1..earlyMaxLevel get earlyDurationMs on screen. */
-  earlyMaxLevel: 4,
-  earlyDurationMs: 5000,
-  /** Between earlyMaxLevel and dropoffEndLevel, duration ramps down to
-   *  defaultDurationMs so the very first few levels feel special without
-   *  slowing the game forever. */
-  dropoffEndLevel: 9,
-  /** Baseline dwell time for routine levels beyond the dropoff. */
-  defaultDurationMs: 2000,
-  /** Multiples of 10 (but not 50) linger for this long — the 10/20/30/40
-   *  "notable" levels. */
-  tenMultipleDurationMs: 5000,
-  /** Multiples of 50 linger longest and grow each milestone. */
-  fiftyMultipleBaseDurationMs: 7000,
-  /** Every additional multiple of 50 adds this many ms. */
-  fiftyMultipleIncrementMs: 2000,
-} as const
-
-function levelUpDurationMs(level: number): number {
-  const c = LEVEL_UP_DURATION_CONFIG
-  if (level <= 0) return c.defaultDurationMs
-  if (level <= c.earlyMaxLevel) return c.earlyDurationMs
-  if (level % 50 === 0) {
-    const steps = level / 50
-    return c.fiftyMultipleBaseDurationMs + c.fiftyMultipleIncrementMs * (steps - 1)
-  }
-  if (level % 10 === 0) return c.tenMultipleDurationMs
-  if (level <= c.dropoffEndLevel) {
-    const span = c.dropoffEndLevel - c.earlyMaxLevel
-    const t = span > 0 ? (level - c.earlyMaxLevel) / span : 1
-    return Math.round(
-      c.earlyDurationMs + t * (c.defaultDurationMs - c.earlyDurationMs),
-    )
-  }
-  return c.defaultDurationMs
 }
 
 function formatDuration(ms: number): string {
@@ -108,6 +95,60 @@ function fireConfetti(): void {
   confetti({ ...defaults, particleCount: 40, origin: { x: 0.5, y: 0.3 }, spread: 140 })
 }
 
+// Fireworks-style bursts — several staggered pops across the mid-upper
+// screen, using canvas-confetti's star shape and a full 360° spread so
+// each burst reads as a radial firework rather than a directional spray.
+// Scheduled with setTimeout so the bursts arrive over ~1.4s, overlapping
+// the level-up card's opening beats (card fade-in peaks around 400ms).
+function fireFireworks(): void {
+  const palette = [
+    readCssColor('--accent-hot', '#ffd27a'),
+    readCssColor('--accent', '#e4a657'),
+    readCssColor('--good', '#7cd67c'),
+    readCssColor('--magic', '#c084fc'),
+  ]
+  // (x-fraction, y-fraction, delay ms, palette-subset-index pairs)
+  const bursts: Array<{ x: number; y: number; delay: number; color: string }> = [
+    { x: 0.25, y: 0.35, delay: 60,  color: palette[0] },
+    { x: 0.75, y: 0.30, delay: 280, color: palette[3] },
+    { x: 0.5,  y: 0.22, delay: 520, color: palette[2] },
+    { x: 0.18, y: 0.28, delay: 820, color: palette[1] },
+    { x: 0.82, y: 0.40, delay: 1100, color: palette[0] },
+  ]
+  for (const b of bursts) {
+    setTimeout(() => {
+      // Tail/spark — smaller, shorter-lived dots that trail after the pop.
+      confetti({
+        particleCount: 18,
+        startVelocity: 22,
+        spread: 360,
+        ticks: 50,
+        gravity: 1.1,
+        decay: 0.92,
+        scalar: 0.7,
+        origin: { x: b.x, y: b.y },
+        colors: [b.color, palette[(palette.indexOf(b.color) + 2) % palette.length]],
+        disableForReducedMotion: true,
+      })
+      // Main burst — star-shaped particles, radial 360° spread for the
+      // classic firework silhouette.
+      confetti({
+        particleCount: 45,
+        startVelocity: 32,
+        spread: 360,
+        ticks: 90,
+        gravity: 0.9,
+        decay: 0.94,
+        scalar: 1.1,
+        shapes: ['star'],
+        origin: { x: b.x, y: b.y },
+        colors: palette,
+        disableForReducedMotion: true,
+      })
+    }, b.delay)
+  }
+}
+
 // Maps "amount relative to maxHp" into a 0..1 intensity. A grazing 5% hit
 // barely whispers; a one-shot ≥80% hit fills the screen. Square root keeps
 // the low end visible without turning mid-range into near-max.
@@ -133,13 +174,50 @@ const BLOCKING_KINDS = new Set<EffectEvent['kind']>([
 
 const isBlocking = (fx: ActiveFx): boolean => BLOCKING_KINDS.has(fx.kind)
 
-export default function EffectsOverlay({ events, effects }: Props) {
+// "How close did you come" quip for the death card, keyed off the mob's
+// remaining HP fraction. Five buckets so the phrasing changes distinctly
+// as the player gets closer to winning the fight they lost.
+function howCloseQuip(remainingHp: number, maxHp: number): string {
+  if (maxHp <= 0) return ''
+  const ratio = Math.max(0, Math.min(1, remainingHp / maxHp))
+  if (ratio >= 0.85) return 'It barely broke a sweat.'
+  if (ratio >= 0.6) return 'You landed a few, but it was never close.'
+  if (ratio >= 0.35) return 'You traded blows — a real fight.'
+  if (ratio >= 0.15) return "You almost had it. One more exchange."
+  if (ratio > 0) return 'A breath from victory. A single swing short.'
+  return 'You took it down with you.'
+}
+
+export default function EffectsOverlay({
+  events,
+  effects,
+  interruptCounter,
+  onBlockingDismiss,
+  onBlockingHoverChange,
+}: Props) {
+  // Hover handlers shared by both blocking cards — bound once so the
+  // mousenter/leave references are stable across renders.
+  const onCardEnter = () => onBlockingHoverChange?.(true)
+  const onCardLeave = () => onBlockingHoverChange?.(false)
   const seenRef = useRef<Set<string>>(new Set())
   const primedRef = useRef(false)
   const [active, setActive] = useState<ActiveFx[]>([])
   // Queue of blocking fullscreen effects waiting for the current one to
   // finish. FIFO — first queued, first played.
   const [queue, setQueue] = useState<ActiveFx[]>([])
+  // Mirror refs of active / queue so the main derive effect can make an
+  // admit-vs-hold decision WITHOUT reading either via the updater arg.
+  // React 18's StrictMode intentionally double-invokes state updaters,
+  // which turned the previous nested `setQueue` inside the `setActive`
+  // updater into a duplicate-schedule bug: each blocking effect past the
+  // first landed in the queue two or three times and then played back
+  // the same number of times. Refs give the outer effect the post-
+  // commit snapshot without adding `active`/`queue` to the dep array
+  // (which would re-fire on every handleEnd tear-down).
+  const activeRef = useRef<ActiveFx[]>(active)
+  const queueRef = useRef<ActiveFx[]>(queue)
+  useEffect(() => { activeRef.current = active }, [active])
+  useEffect(() => { queueRef.current = queue }, [queue])
 
   // Mark whatever's already in the queue at mount as seen, without rendering
   // any of it — the saved-game backlog must not replay on page load. Done as
@@ -151,6 +229,25 @@ export default function EffectsOverlay({ events, effects }: Props) {
     for (const e of events) seenRef.current.add(e.id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Navigating away from the play surface (roster, Settings) bumps
+  // `interruptCounter`. Tear down every active and queued fullscreen
+  // effect instantly — no fade — and mark the current `events` array as
+  // seen so the derive pass below doesn't re-admit whatever was in
+  // flight when the player returns. Skips on initial mount.
+  const lastInterruptRef = useRef<number | undefined>(interruptCounter)
+  useEffect(() => {
+    if (interruptCounter === undefined) return
+    if (lastInterruptRef.current === interruptCounter) return
+    lastInterruptRef.current = interruptCounter
+    // Mark everything currently in props.events as seen so the derive
+    // effect below treats them as backlog — they won't re-admit.
+    for (const e of events) seenRef.current.add(e.id)
+    setActive([])
+    setQueue([])
+    activeRef.current = []
+    queueRef.current = []
+  }, [interruptCounter, events])
 
   const fs = effects.fullscreen
   const fsOn = fs.enabled
@@ -175,7 +272,12 @@ export default function EffectsOverlay({ events, effects }: Props) {
           },
         })
       } else if (e.kind === 'death' && fs.death) {
-        renderable.push({ id: e.id, kind: e.kind })
+        renderable.push({
+          id: e.id,
+          kind: e.kind,
+          durationMs: deathDurationMs(e.deathCount),
+          death: { record: e.record },
+        })
       } else if (e.kind === 'damage-taken' && fs.damage) {
         renderable.push({ id: e.id, kind: e.kind, intensity: intensityFor(e.amount, e.maxHp) })
       } else if (e.kind === 'heal-self' && fs.heal) {
@@ -202,35 +304,94 @@ export default function EffectsOverlay({ events, effects }: Props) {
     // on screen; non-blocking rim flashes always play immediately.
     if (renderable.length > 0) {
       const nonBlocking = renderable.filter((fx) => !isBlocking(fx))
-      const blocking = renderable.filter(isBlocking)
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setActive((prev) => {
-        const hasBlocking = prev.some(isBlocking)
-        const admitFromQueue: ActiveFx[] = []
-        const holdForQueue: ActiveFx[] = []
-        if (hasBlocking) {
-          holdForQueue.push(...blocking)
-        } else if (blocking.length > 0) {
-          // First blocking arrival goes live; the rest wait.
-          admitFromQueue.push(blocking[0])
-          holdForQueue.push(...blocking.slice(1))
-        }
-        if (holdForQueue.length > 0) {
-          setQueue((q) => [...q, ...holdForQueue])
-        }
-        return [...prev, ...nonBlocking, ...admitFromQueue]
-      })
-    }
+      let blocking = renderable.filter(isBlocking)
 
-    if (fsOn && fs.levelUpConfetti) {
-      for (const e of fresh) {
-        if (e.kind === 'level-up') fireConfetti()
+      // Level-up dedup: when a new level-up arrives, drop any older
+      // level-ups still queued AND dismiss an active level-up so the
+      // newest takes over. Multi-level grants (dev-panel "set XP",
+      // chained XP rewards that cross several level boundaries) would
+      // otherwise spam the FIFO with stale "Lv N → N+1" cards before
+      // the player ever sees the final level. Other blocking kinds
+      // (death, new-area) keep FIFO semantics — only level-ups dedup.
+      const newLevelUps = blocking.filter((fx) => fx.kind === 'level-up')
+      if (newLevelUps.length > 0) {
+        const latest = newLevelUps[newLevelUps.length - 1]
+        blocking = blocking.filter(
+          (fx) => fx.kind !== 'level-up' || fx === latest,
+        )
+        if (queueRef.current.some((fx) => fx.kind === 'level-up')) {
+          queueRef.current = queueRef.current.filter(
+            (fx) => fx.kind !== 'level-up',
+          )
+          setQueue((q) => q.filter((fx) => fx.kind !== 'level-up'))
+        }
+        const activeLU = activeRef.current.find((fx) => fx.kind === 'level-up')
+        if (activeLU) {
+          // Mirror handleEnd: drop the active card and clear the
+          // host's tick-pause so the new card admits cleanly.
+          activeRef.current = activeRef.current.filter(
+            (fx) => fx.id !== activeLU.id,
+          )
+          setActive((prev) => prev.filter((fx) => fx.id !== activeLU.id))
+          onBlockingDismiss?.()
+        }
+      }
+
+      // Decide admit-vs-hold OUTSIDE any setState updater so StrictMode's
+      // double-invocation can't duplicate side effects. A pending queue
+      // counts as "in flight" — promoting a late blocking arrival past
+      // items already waiting would break the FIFO contract.
+      const inFlight =
+        activeRef.current.some(isBlocking) || queueRef.current.length > 0
+      const admit: ActiveFx[] = [...nonBlocking]
+      const hold: ActiveFx[] = []
+      if (inFlight) {
+        hold.push(...blocking)
+      } else if (blocking.length > 0) {
+        admit.push(blocking[0])
+        hold.push(...blocking.slice(1))
+      }
+      if (admit.length > 0) {
+        setActive((prev) => [...prev, ...admit])
+      }
+      if (hold.length > 0) {
+        setQueue((q) => [...q, ...hold])
       }
     }
-  }, [events, fsOn, fs.levelUpBanner, fs.death, fs.damage, fs.heal, fs.levelUpConfetti, fs.newArea])
+
+    if (fsOn) {
+      for (const e of fresh) {
+        if (e.kind === 'level-up') {
+          // Two layered effects on the same event: the side-spray confetti
+          // sets the first frame, then staggered firework bursts pop over
+          // the next ~1.4s so the card-reveal has motion backing it the
+          // whole way in. Both respect canvas-confetti's reduced-motion
+          // guard via the `disableForReducedMotion` flag. Always-on —
+          // level-up is the single biggest payoff moment and got its own
+          // carve-out from the per-effect toggles.
+          fireConfetti()
+          fireFireworks()
+        }
+      }
+    }
+    // onBlockingDismiss is referenced by the level-up dedup branch
+    // above (when an active card is evicted, the host's tick-pause
+    // gets cleared mirroring handleEnd's behavior). Including it in
+    // deps so React Hook lint is happy — parent re-renders that swap
+    // the callback identity will re-run this effect, but the
+    // seenRef-based dedup makes that idempotent.
+  }, [events, fsOn, fs.levelUpBanner, fs.death, fs.damage, fs.heal, fs.newArea, onBlockingDismiss])
 
   const handleEnd = (id: string) => {
+    // Capture whether this effect was blocking BEFORE we tear it down, so
+    // we can signal the host to clear its tick-pause. Called after
+    // setActive so React batches the state commit before the caller
+    // observes the change.
+    const wasBlocking = activeRef.current.some(
+      (fx) => fx.id === id && isBlocking(fx),
+    )
     setActive((prev) => prev.filter((fx) => fx.id !== id))
+    if (wasBlocking) onBlockingDismiss?.()
   }
 
   // Promote the next queued blocking effect the moment there's no blocking
@@ -270,12 +431,14 @@ export default function EffectsOverlay({ events, effects }: Props) {
                   // the card finishes.
                   if (e.target === e.currentTarget) handleEnd(fx.id)
                 }}
+                onMouseEnter={onCardEnter}
+                onMouseLeave={onCardLeave}
               >
                 <div className="fx-levelup-celebration">🎉</div>
                 <div className="fx-banner fx-banner--levelup">Level Up</div>
                 {rec && (
                   <div className="fx-levelup-sub">
-                    Lv {rec.from} → {rec.to}
+                    {rec.to}
                   </div>
                 )}
                 {rec && (
@@ -291,8 +454,12 @@ export default function EffectsOverlay({ events, effects }: Props) {
                     <div>
                       <dt>Gold</dt>
                       <dd className="fx-levelup-gold">
-                        {goldGained > 0 ? `+${goldGained}` : goldGained < 0 ? `${goldGained}` : '—'}
+                        {goldGained > 0 ? `+${goldGained}` : goldGained < 0 ? `${goldGained}` : '0'}
                       </dd>
+                    </div>
+                    <div>
+                      <dt>Deaths</dt>
+                      <dd className="fx-levelup-deaths">{rec.deathsThisLevel ?? 0}</dd>
                     </div>
                     {(() => {
                       const g = rec.gains
@@ -309,6 +476,22 @@ export default function EffectsOverlay({ events, effects }: Props) {
                         </div>
                       )
                     })()}
+                    {rec.learnedSpells && rec.learnedSpells.length > 0 && (
+                      <div>
+                        <dt>Spells learned</dt>
+                        <dd className="fx-levelup-spells">
+                          {rec.learnedSpells.map((s, i) => (
+                            <span
+                              key={s.id}
+                              className={`fx-levelup-spell fx-levelup-spell--lv${s.level}`}
+                            >
+                              {s.name}
+                              {i < rec.learnedSpells!.length - 1 ? ' · ' : ''}
+                            </span>
+                          ))}
+                        </dd>
+                      </div>
+                    )}
                     <div>
                       <dt>Best item</dt>
                       <dd>
@@ -321,7 +504,7 @@ export default function EffectsOverlay({ events, effects }: Props) {
                             </span>
                           </span>
                         ) : (
-                          <span className="fx-levelup-muted">—</span>
+                          <span className="fx-levelup-muted">nothing found</span>
                         )}
                       </dd>
                     </div>
@@ -341,15 +524,38 @@ export default function EffectsOverlay({ events, effects }: Props) {
                     </div>
                   </dl>
                 )}
+                <button
+                  type="button"
+                  className="fx-levelup-continue"
+                  onClick={() => handleEnd(fx.id)}
+                >
+                  Continue
+                </button>
               </div>
             </div>
           )
         }
         if (fx.kind === 'death') {
+          const durationMs = fx.durationMs ?? DEATH_DURATION_CONFIG.defaultDurationMs
+          const rec = fx.death?.record
+          const killer = rec?.mobName
+          const haveHpSnapshot =
+            rec?.mobRemainingHp != null && rec?.mobMaxHp != null && rec.mobMaxHp > 0
+          const quip = haveHpSnapshot
+            ? howCloseQuip(rec.mobRemainingHp!, rec.mobMaxHp!)
+            : ''
           return (
-            <div key={fx.id} className="fx-cluster">
+            <div
+              key={fx.id}
+              className="fx-cluster"
+              style={{ ['--fx-death-dur' as string]: `${durationMs}ms` }}
+            >
               <div className="fx-vignette fx-vignette--death" />
-              <div className="fx-death-stack">
+              <div
+                className="fx-death-stack"
+                onMouseEnter={onCardEnter}
+                onMouseLeave={onCardLeave}
+              >
                 <div
                   className="fx-banner fx-banner--death"
                   onAnimationEnd={(e) => {
@@ -365,6 +571,31 @@ export default function EffectsOverlay({ events, effects }: Props) {
                   </span>
                 </div>
                 <div className="fx-death-big" aria-hidden="true">💀</div>
+                {(killer || quip) && (
+                  <div className="fx-death-panel">
+                    {killer && (
+                      <div className="fx-death-killer">
+                        Cut down by <span className="fx-death-mob">{killer}</span>
+                      </div>
+                    )}
+                    {haveHpSnapshot && (
+                      <div className="fx-death-hp">
+                        Opponent remaining:{' '}
+                        <span className="fx-death-hp-val">
+                          {rec!.mobRemainingHp} / {rec!.mobMaxHp} HP
+                        </span>
+                      </div>
+                    )}
+                    {quip && <div className="fx-death-quip">{quip}</div>}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="fx-death-continue"
+                  onClick={() => handleEnd(fx.id)}
+                >
+                  Continue
+                </button>
               </div>
             </div>
           )
@@ -599,7 +830,7 @@ export default function EffectsOverlay({ events, effects }: Props) {
         }
         .fx-levelup-sub {
           font-family: var(--font-display);
-          font-size: var(--text-lg);
+          font-size: calc(var(--text-xl) * 2);
           letter-spacing: 0.08em;
           color: var(--fg-1);
         }
@@ -631,15 +862,65 @@ export default function EffectsOverlay({ events, effects }: Props) {
         .fx-levelup-gains { color: var(--good) !important; text-shadow: 0 0 4px rgba(124, 214, 124, 0.35); }
         .fx-levelup-tier { color: var(--fg-3); font-variant-caps: all-small-caps; letter-spacing: 0.06em; }
         .fx-levelup-muted { color: var(--fg-3); font-style: italic; }
+        /* Learned-spell list — paints each name in its rarity-tier color
+           (tier-1 uses the UI green via --rarity-uncommon for legibility,
+           same as the spellbook tooltip). Inline · separators keep it
+           compact when multiple spells unlock on the same level. */
+        .fx-levelup-spells {
+          display: inline;
+          font-variant-numeric: normal;
+        }
+        .fx-levelup-spell { font-weight: 500; }
+        .fx-levelup-spell--lv1 { color: var(--rarity-uncommon); }
+        .fx-levelup-spell--lv2 { color: var(--rarity-uncommon); }
+        .fx-levelup-spell--lv3 { color: var(--rarity-rare); }
+        .fx-levelup-spell--lv4 { color: var(--rarity-epic); }
+        .fx-levelup-spell--lv5 { color: var(--rarity-legendary); text-shadow: 0 0 4px currentColor; }
+        /* Continue button — lets the impatient skip the card. Overrides the
+           overlay's pointer-events:none so clicks land on the button but
+           not on anything behind it. Fades in shortly after the card is
+           readable so it doesn't compete with the opening beats. */
+        .fx-levelup-continue {
+          margin-top: var(--sp-4);
+          align-self: center;
+          padding: var(--sp-2) var(--sp-5);
+          background: transparent;
+          color: var(--fg-2);
+          border: 1px solid var(--line-2);
+          font-family: var(--font-display);
+          font-size: var(--text-sm);
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          cursor: pointer;
+          pointer-events: auto;
+          opacity: 0;
+          animation: fx-levelup-continue-in 400ms ease-out 600ms forwards;
+          transition: color var(--dur-fast) var(--ease-crt),
+                      border-color var(--dur-fast) var(--ease-crt),
+                      background var(--dur-fast) var(--ease-crt);
+        }
+        .fx-levelup-continue:hover,
+        .fx-levelup-continue:focus-visible {
+          color: var(--accent-hot);
+          border-color: var(--accent-hot);
+          background: rgba(255, 255, 255, 0.04);
+          outline: none;
+          text-shadow: var(--glow-sm);
+        }
+        @keyframes fx-levelup-continue-in {
+          from { opacity: 0; transform: translateY(4px); }
+          to   { opacity: 0.75; transform: translateY(0); }
+        }
 
         .fx-vignette { position: absolute; inset: 0; }
-        /* Death vignette slams to near-black so the Defeated banner sits on
-           a somber, unambiguous stage. Duration and peak opacity are
-           deliberately higher than damage/heal flashes — this is a beat
-           worth sitting with. */
+        /* Death vignette goes full black at peak — the player is dead,
+           the game behind it should disappear entirely. The opacity
+           animation still fades the vignette in and back out so the
+           transition is smooth; peak hold is pure #000 with no
+           gradient falloff. */
         .fx-vignette--death {
-          background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.82) 55%, #000 120%);
-          animation: fx-death 4200ms ease-out forwards;
+          background: #000;
+          animation: fx-death var(--fx-death-dur, 4200ms) ease-out forwards;
           opacity: 0;
         }
         @keyframes fx-death {
@@ -663,6 +944,17 @@ export default function EffectsOverlay({ events, effects }: Props) {
           text-shadow: var(--glow-lg), 0 0 32px var(--accent);
           font-size: var(--text-2xl, 32px);
           letter-spacing: 0.18em;
+          animation: fx-levelup-banner 1400ms ease-out 80ms both;
+        }
+        /* Banner pops in slightly after the card — the 80ms delay lets the
+           card's own fade-in seat first, then the "LEVEL UP" text punches
+           with a brief zoom-and-settle that lines up with the first
+           firework burst (~60ms) and the audio sparkle tail. */
+        @keyframes fx-levelup-banner {
+          0%   { opacity: 0; transform: scale(1.6); letter-spacing: 0.40em; filter: blur(3px); }
+          25%  { opacity: 1; transform: scale(1.12); letter-spacing: 0.22em; filter: blur(0); }
+          60%  { transform: scale(1); letter-spacing: 0.18em; }
+          100% { opacity: 1; transform: scale(1); letter-spacing: 0.18em; filter: blur(0); }
         }
         /* Death banner: stacked on top of a big centered skull. The
            top-percentage shifts the whole cluster upward so the word and
@@ -671,12 +963,12 @@ export default function EffectsOverlay({ events, effects }: Props) {
           position: absolute;
           left: 0;
           right: 0;
-          top: 30%;
+          top: 25%;
           display: flex;
           flex-direction: column;
           align-items: center;
           gap: var(--sp-3);
-          animation: fx-death-stack 4200ms ease-out forwards;
+          animation: fx-death-stack var(--fx-death-dur, 4200ms) ease-out forwards;
           opacity: 0;
         }
         @keyframes fx-death-stack {
@@ -694,7 +986,7 @@ export default function EffectsOverlay({ events, effects }: Props) {
           display: inline-flex;
           align-items: center;
           gap: var(--sp-3);
-          animation: fx-banner-death 4200ms ease-out forwards;
+          animation: fx-banner-death var(--fx-death-dur, 4200ms) ease-out forwards;
           opacity: 0;
         }
         @keyframes fx-banner-death {
@@ -718,6 +1010,111 @@ export default function EffectsOverlay({ events, effects }: Props) {
           color: #fff;
           filter: drop-shadow(0 0 18px rgba(255, 255, 255, 0.65))
                   drop-shadow(0 0 32px var(--bad));
+        }
+        /* Death stack receives mouse events so hover can pause the
+           animations (see fx-cluster:has rule below). pointer-events:auto
+           is scoped to the stack only so the vignette around it stays
+           non-interactive and clicks behind the overlay still reach the
+           game (though the tick-pause blocks any game activity anyway). */
+        .fx-death-stack { pointer-events: auto; }
+        /* Killer / HP / quip panel, stacked below the big skull.
+           Shares the death banner's somber tone — muted fg on a
+           semi-opaque inset so the red banner still dominates. The
+           panel rides the fx-death-stack's opacity animation via
+           animation-fill-mode, so it fades in and out with the rest. */
+        .fx-death-panel {
+          /* Push the details panel well below the big skull so it
+             lands roughly at viewport center — separates the somber
+             "Defeated" beat at the top from the factual recap below. */
+          margin-top: 16vh;
+          max-width: 560px;
+          padding: var(--sp-3) var(--sp-5);
+          background: rgba(8, 10, 12, 0.85);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          color: var(--fg-2);
+          font-family: var(--font-body);
+          font-size: var(--text-sm);
+          text-align: center;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+        .fx-death-killer { color: var(--fg-2); letter-spacing: 0.04em; }
+        .fx-death-mob {
+          color: var(--bad);
+          font-weight: 700;
+          text-shadow: 0 0 6px rgba(220, 80, 80, 0.35);
+        }
+        .fx-death-hp {
+          color: var(--fg-3);
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          font-variant-numeric: tabular-nums;
+          letter-spacing: 0.04em;
+        }
+        .fx-death-hp-val { color: var(--fg-1); }
+        .fx-death-quip {
+          color: var(--fg-1);
+          font-style: italic;
+          margin-top: 2px;
+          letter-spacing: 0.02em;
+        }
+        /* Death Continue button — same visual language as the level-up
+           version but tuned for the somber backdrop. Same fade-in delay
+           so it doesn't compete with the banner's entry animation. */
+        .fx-death-continue {
+          margin-top: var(--sp-3);
+          padding: var(--sp-2) var(--sp-5);
+          background: transparent;
+          color: var(--fg-2);
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          font-family: var(--font-display);
+          font-size: var(--text-sm);
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          cursor: pointer;
+          pointer-events: auto;
+          opacity: 0;
+          animation: fx-levelup-continue-in 400ms ease-out 700ms forwards;
+          transition: color var(--dur-fast) var(--ease-crt),
+                      border-color var(--dur-fast) var(--ease-crt),
+                      background var(--dur-fast) var(--ease-crt);
+        }
+        .fx-death-continue:hover,
+        .fx-death-continue:focus-visible {
+          color: var(--bad);
+          border-color: var(--bad);
+          background: rgba(255, 255, 255, 0.04);
+          outline: none;
+        }
+        /* Hover-pause — freezing the level-up card and the death stack
+           when the user rests their cursor on them. :hover propagates
+           from descendants, so hovering the stats / buttons inside the
+           card keeps the pause active. The :has() selector on the
+           cluster pauses the death vignette (a previous sibling of the
+           stack) when the stack is hovered — it can't be reached via
+           sibling combinators. */
+        .fx-levelup-card:hover,
+        .fx-levelup-card:hover *,
+        .fx-death-stack:hover,
+        .fx-death-stack:hover *,
+        .fx-cluster:has(.fx-death-stack:hover) .fx-vignette--death {
+          animation-play-state: paused !important;
+        }
+        /* Force full opacity on the animating elements when hovered.
+           animation-play-state: paused alone freezes at whatever
+           opacity the keyframe was mid-transition to — hovering during
+           the fade-in or fade-out tail leaves the card dim. Override
+           so anything hovered reads as fully visible regardless of
+           where in the animation the cursor landed. Targets only the
+           elements whose own keyframes drive opacity; children
+           (Continue button, sparkles, etc.) keep their own entry
+           animations. */
+        .fx-levelup-card:hover,
+        .fx-death-stack:hover,
+        .fx-death-stack:hover .fx-banner--death,
+        .fx-cluster:has(.fx-death-stack:hover) .fx-vignette--death {
+          opacity: 1 !important;
         }
 
         /* New-area banner — fullscreen reveal that fades a dim scrim over
@@ -931,13 +1328,13 @@ export default function EffectsOverlay({ events, effects }: Props) {
             rgba(0, 0, 0, 0.65) 0%,
             rgba(0, 0, 0, 0.45) 55%,
             transparent 90%);
-          animation: fx-genarea-scrim 3200ms ease-out forwards;
+          animation: fx-genarea-scrim 800ms ease-out forwards;
           opacity: 0;
         }
         @keyframes fx-genarea-scrim {
           0%   { opacity: 0; }
-          12%  { opacity: 1; }
-          85%  { opacity: 1; }
+          20%  { opacity: 1; }
+          75%  { opacity: 1; }
           100% { opacity: 0; }
         }
         .fx-genarea-card {
@@ -952,13 +1349,13 @@ export default function EffectsOverlay({ events, effects }: Props) {
           padding: var(--sp-4) var(--sp-6, 24px);
           color: var(--magic, #c084fc);
           text-align: center;
-          animation: fx-genarea-card 3200ms ease-out forwards;
+          animation: fx-genarea-card 800ms ease-out forwards;
           opacity: 0;
         }
         @keyframes fx-genarea-card {
           0%   { opacity: 0; transform: translate(-50%, -42%) scale(0.92); }
-          12%  { opacity: 1; transform: translate(-50%, -50%) scale(1.0); }
-          85%  { opacity: 1; transform: translate(-50%, -50%) scale(1.0); }
+          20%  { opacity: 1; transform: translate(-50%, -50%) scale(1.0); }
+          75%  { opacity: 1; transform: translate(-50%, -50%) scale(1.0); }
           100% { opacity: 0; transform: translate(-50%, -54%) scale(1.02); }
         }
         .fx-genarea-rule {
@@ -993,7 +1390,7 @@ export default function EffectsOverlay({ events, effects }: Props) {
           line-height: 1;
           font-weight: 500;
           text-shadow: 0 0 24px var(--magic, #c084fc), 0 0 48px rgba(192, 132, 252, 0.35);
-          animation: fx-genarea-pulse 1200ms ease-in-out infinite alternate;
+          animation: none;
         }
         @keyframes fx-genarea-pulse {
           0%   { opacity: 0.7; transform: scale(1); }
@@ -1064,6 +1461,11 @@ export default function EffectsOverlay({ events, effects }: Props) {
         @media (prefers-reduced-motion: reduce) {
           .fx-flash, .fx-vignette, .fx-banner, .fx-death-stack { animation-duration: 900ms; }
           .fx-banner, .fx-death-stack { animation-timing-function: linear; }
+          /* Reduced motion: strip the banner zoom/blur keyframes so the
+             Level Up text just fades in cleanly without scale/letter-spacing
+             animation. Duration already shortened by the .fx-banner rule. */
+          .fx-banner--levelup { animation: none; }
+          .fx-levelup-celebration { animation: none; }
           .fx-newarea-card, .fx-newarea-scrim, .fx-newarea-glyph {
             animation-duration: 1800ms;
             animation-timing-function: linear;
@@ -1073,7 +1475,7 @@ export default function EffectsOverlay({ events, effects }: Props) {
             animation-timing-function: linear;
           }
           .fx-genarea-card, .fx-genarea-scrim {
-            animation-duration: 2400ms;
+            animation-duration: 800ms;
             animation-timing-function: linear;
           }
           .fx-genarea-name { animation: none; }

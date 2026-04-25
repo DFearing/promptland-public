@@ -47,4 +47,16 @@ export const FANTASY_CONDITIONS: ConditionDef[] = [
     verb: 'blesses',
     noun: 'the blessing',
   },
+  {
+    id: 'ice_armored',
+    name: 'Ice-Armored',
+    description: 'A second skin of glacier-glass. Most blows bite glass first.',
+    kind: 'stat-mod',
+    polarity: 'buff',
+    defaultDuration: 5,
+    params: { defense: 3 },
+    element: 'ice',
+    verb: 'armors',
+    noun: 'the armor',
+  },
 ]

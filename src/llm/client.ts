@@ -73,6 +73,7 @@ export class OpenAICompatClient implements LLMClient {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
+        signal: req.signal,
       })
     } catch (cause) {
       throw new LLMError(

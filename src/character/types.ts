@@ -74,6 +74,13 @@ export interface DeathRecord {
   roomName?: string
   roomKey?: string
   mobName?: string
+  /** Mob HP remaining at the moment of the kill. Combined with
+   *  `mobMaxHp` it powers the "how close did you come" quip on the
+   *  death card. Absent on deaths recorded before this field existed
+   *  or on deaths not caused by combat (poison, traps, etc). */
+  mobRemainingHp?: number
+  /** Mob's max HP. See `mobRemainingHp`. */
+  mobMaxHp?: number
 }
 
 export interface LevelUpRecord {
@@ -97,6 +104,23 @@ export interface LevelUpRecord {
    *  ("+1 STR +1 CON") — empty on levels that aren't a stat-bump multiple.
    *  Absent on records written before this field existed. */
   gains?: { hp: number; mp: number; statText: string }
+  /** Number of deaths suffered during the segment that ended at this
+   *  level-up. Snapshotted from \`character.deaths\` whose timestamps
+   *  fall after the previous segment's start. Absent on records
+   *  written before this field existed. */
+  deathsThisLevel?: number
+  /** Spells unlocked at this level-up (curated `unlockLevel` matches
+   *  plus the LLM-stub past level 15). Empty / absent when none.
+   *  Snapshotted here so the level-up card and history dialog can
+   *  list them without re-running the unlock pipeline. */
+  learnedSpells?: LevelUpLearnedSpell[]
+}
+
+export interface LevelUpLearnedSpell {
+  id: string
+  name: string
+  /** Spell tier (1–5), used to color the entry in the level-up card. */
+  level: 1 | 2 | 3 | 4 | 5
 }
 
 /** Running tally for the level the character is currently inside. Reset
@@ -114,7 +138,6 @@ export interface Character {
   worldId: string
   worldVersion: string
   speciesId: string
-  genderId: string
   classId: string
   createdAt: number
   level: number
@@ -178,4 +201,103 @@ export interface Character {
    *  re-spawning its curated boss. Absent on pre-feature saves —
    *  treated as `[]`. */
   defeatedRooms?: string[]
+  /** Chronological journal of milestone events — area discoveries,
+   *  first mob kills, first loot pickups, level-ups, deaths. Grouped
+   *  by area in the Journal tab. Absent on pre-feature saves —
+   *  treated as `[]`. */
+  journal?: JournalEntry[]
+  /** Most recent top drive (hunger / fatigue / greed / curiosity /
+   *  weight) observed during explore. Used to detect top-drive
+   *  transitions and emit flavor log lines when the character's
+   *  primary concern shifts. Absent ⇒ no prior top drive. Stored as
+   *  the raw Drive string (matches Drives' keys) or null when no
+   *  drive is above threshold. */
+  lastTopDrive?: import('../game/drives').Drive | null
+  /** Ranger trap state — when set, the next mob encountered in the
+   *  current room eats flat damage before combat begins. The ranger
+   *  "lays" the trap during exploration; it consumes on first trigger.
+   *
+   *  TODO: implementation is currently minimal (damage applied at
+   *  encounter-spawn time, no placement UI). Future work: tie this to
+   *  specific rooms via `roomKey`, expire traps after N ticks, and let
+   *  the player see a "trap set" indicator in the Topbar. */
+  trap?: { damage: number; roomKey?: string }
+  /** Per-character PRNG state — a 32-bit integer consumed and re-stamped
+   *  each tick by Rng.fromState / Rng.save. All game-state randomness
+   *  flows through this so (character, seed, tick-sequence) replays
+   *  identically. */
+  rngState: number
+  /** Pending post-combat loot held in a strange chest. While locked, items
+   *  are *won* but not yet *seen* — they aren't in the inventory, the
+   *  player can't equip them, and combat keeps using the prior loadout.
+   *  When the timer hits zero the chest unlatches: items merge into
+   *  inventory, auto-equip runs, and the standard "picks up" loot line
+   *  fires (so journal first-finds key off the same moment the player
+   *  sees the item). Subsequent kills while a chest is locked merge into
+   *  it and bump the timer. Gold-only kills skip the chest entirely.
+   *
+   *  This is the diegetic surface that hides any post-combat asynchrony
+   *  (issue #75: per-descriptor sprite generation). The chest exists as
+   *  a real gameplay beat on its own — generation just runs invisibly
+   *  inside the lock window when that lands. */
+  lockedChest?: LockedChest
+}
+
+export interface LockedChest {
+  /** Items waiting to be revealed. Already fully resolved (rarity, level,
+   *  acquisition metadata) at lock time so nothing rolls again on unlock. */
+  items: InventoryItem[]
+  /** Coin queued in the chest. Released alongside items on unlock. */
+  gold: number
+  /** Ticks until the chest unlatches. Decremented at the top of every tick
+   *  regardless of state so a long fight doesn't pin the chest shut. */
+  ticksLeft: number
+  /** Most recent kill that contributed to the chest. Used for unlock-log
+   *  flavor and to scope the unlock entry's areaId for the journal. */
+  source?: {
+    mobName?: string
+    areaId?: string
+    roomName?: string
+  }
+}
+
+/** Kinds of achievement / milestone tracked in the character's journal. */
+export type JournalEntryKind =
+  | 'area-discovered'
+  | 'mob-first-defeat'
+  | 'boss-defeat'
+  | 'item-first-loot'
+  | 'level-up'
+  | 'spell-learned'
+  | 'death'
+
+export interface JournalEntry {
+  /** Wall-clock ms when the entry was recorded. */
+  at: number
+  /** Area id this entry is scoped to — drives Journal-panel grouping. */
+  areaId: string
+  kind: JournalEntryKind
+  /** One-line human-readable summary for the Journal-panel list. */
+  text: string
+  /** Optional structured metadata for richer rendering (rarity colors,
+   *  icons) without re-parsing `text`. */
+  meta?: JournalEntryMeta
+}
+
+export interface JournalEntryMeta {
+  mobId?: string
+  mobName?: string
+  mobRarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
+  itemId?: string
+  itemName?: string
+  itemRarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
+  roomName?: string
+  fromLevel?: number
+  toLevel?: number
+  cause?: string
+  /** Spell id and display name on a `spell-learned` entry. The id maps to
+   *  the world spell library so the journal can resolve the description /
+   *  level for a future popover. */
+  spellId?: string
+  spellName?: string
 }

@@ -8,6 +8,7 @@ import { getWorldContent, type WorldContent } from '../worlds'
 import HistoryDialog from './HistoryDialog'
 import Popover from './Popover'
 import LogPopoverContent, { type Subject } from './LogPopoverContent'
+import { resolveSubjectRarity } from './logPopoverRarity'
 
 type SubjectClickHandler = (
   subject: Subject,
@@ -58,35 +59,6 @@ function stateTip(state: GameState | undefined, paused: boolean): string | undef
   }
 }
 
-// Maps a heal amount into a qualitative power descriptor. Tiers are tuned
-// against the shipped spell + potion amounts so each tier captures a
-// couple of steps — lesser-heal spells (6 HP) and minor potions (3 HP)
-// land in the lowest bands; greater-heal spells (14 HP) and larger
-// potions (18 HP) in the middle; anything beyond is reserved for future
-// high-tier sources. Zero-heal entries fall through to null so the
-// caller can skip the tag entirely.
-function healPowerDescriptor(amount: number): string {
-  if (amount <= 0) return 'no effect'
-  if (amount < 6) return 'a faint mend'
-  if (amount < 12) return 'a modest mend'
-  if (amount < 20) return 'a strong mend'
-  if (amount < 35) return 'a potent mend'
-  return 'a miraculous mend'
-}
-
-// Mirror of healPowerDescriptor for MP restores. Tuned against shipped
-// mana-tincture amounts so each tier captures a meaningful step: tiny
-// sips, usable top-ups, full-cup swigs, and anything beyond reads as
-// rare/legendary territory.
-function manaPowerDescriptor(amount: number): string {
-  if (amount <= 0) return 'no effect'
-  if (amount < 5) return 'a faint shimmer'
-  if (amount < 10) return 'a modest surge'
-  if (amount < 18) return 'a strong surge'
-  if (amount < 30) return 'a potent surge'
-  return 'a brilliant surge'
-}
-
 function sampleEntries(name: string): LogEntry[] {
   return [
     { kind: 'chapter', text: `${name} stirs.` },
@@ -99,6 +71,10 @@ function sampleEntries(name: string): LogEntry[] {
 interface HighlightPart {
   match: string
   render: (matched: string) => ReactNode
+  /** Hard cap on how many times this part can match in a single line.
+   *  Used by the direction tint so a flavor-text "southern" doesn't
+   *  inherit the action verb's "south" highlight. Default: unlimited. */
+  maxMatches?: number
 }
 
 function conditionDescription(
@@ -126,20 +102,42 @@ function buildParts(
   }
   if (meta.mobName) {
     const mobName = meta.mobName
+    // Rare+ mobs earn a mirrored star bracket (`★ Name ★`, `★★ Name ★★`,
+    // …) so they read as "elite" while scrolling. Stars sit OUTSIDE the
+    // clickable button so hover/hit target stays on the name. Mob names
+    // already carry trailing stars from mobDisplayName; we strip them
+    // off the rendered text and draw matching leading stars as a
+    // separate decorator so both sides line up. Color is always the
+    // mob-token "threat" color (var(--bad)) — rarity reads via the name
+    // prefix ("Strong ", "King ", …) and the ★ pips already. Rarity-
+    // tinted names belong on mob cards, not in the running log where
+    // color consistency makes combatants easy to scan.
+    const starMatch = mobName.match(/\s(★+)$/)
+    const stars = starMatch ? starMatch[1] : ''
+    const cleanName = starMatch ? mobName.slice(0, -starMatch[0].length) : mobName
     parts.push({
       match: mobName,
-      render: (t) =>
-        onSubjectClick ? (
+      render: () => {
+        const nameEl = onSubjectClick ? (
           <button
             type="button"
             className="logp__tok logp__tok--mob logp__tok--link"
             onClick={(e) => onSubjectClick({ kind: 'mob', name: mobName }, e)}
           >
-            {t}
+            {cleanName}
           </button>
         ) : (
-          <span className="logp__tok logp__tok--mob">{t}</span>
-        ),
+          <span className="logp__tok logp__tok--mob">{cleanName}</span>
+        )
+        if (!stars) return nameEl
+        return (
+          <span className="logp__mob-wrap">
+            <span className="logp__mob-star">{stars} </span>
+            {nameEl}
+            <span className="logp__mob-star"> {stars}</span>
+          </span>
+        )
+      },
     })
   }
   // Items render as [Name] to set them apart from mob / room / player tokens.
@@ -179,7 +177,18 @@ function buildParts(
   // with (e.g. "[Healing Draught]" and "(+8 HP)" share a color).
   const potionColor = (effect: NonNullable<LogMeta['potionEffect']>) =>
     effect === 'heal' ? 'var(--log-hp, var(--hp))' : 'var(--log-mp, var(--mp))'
-  if (meta.itemName && meta.itemId) {
+  // Batched pickup lines carry an `items` array — render each name as its
+  // own clickable bracketed token. When the array is absent, fall back to
+  // the singular itemName/itemId so every other log line (equip, consume,
+  // drop, death-loss …) keeps working unchanged.
+  if (meta.items && meta.items.length > 0) {
+    const seen = new Set<string>()
+    for (const it of meta.items) {
+      if (seen.has(it.name)) continue
+      seen.add(it.name)
+      pushItemPart(it.id, it.name, rarityColor(it.rarity ?? 'common'))
+    }
+  } else if (meta.itemName && meta.itemId) {
     const color = meta.potionEffect
       ? potionColor(meta.potionEffect)
       : rarityColor(meta.itemRarity ?? 'common')
@@ -229,6 +238,11 @@ function buildParts(
   if (meta.direction) {
     parts.push({
       match: meta.direction,
+      // Direction is a common English word ("south" appears inside
+      // "southern", "southward", etc.) so cap to one match. The action
+      // verb sits before any flavor text, so the first occurrence is
+      // always the right one.
+      maxMatches: 1,
       render: (t) => <span className="logp__tok logp__tok--dir">{t}</span>,
     })
   }
@@ -367,11 +381,21 @@ function Highlight({
   const chunks: ReactNode[] = []
   let i = 0
   let key = 0
+  // Per-part match counts so `maxMatches` is enforced across the scan
+  // (direction is the only consumer today, capped at 1 — keeps a flavor
+  // "southern" from inheriting the action verb's "south" highlight).
+  const counts = new Map<HighlightPart, number>()
   while (i < displayText.length) {
     let bestIdx = displayText.length
     let bestPart: HighlightPart | null = null
     for (const part of parts) {
       if (!part.match) continue
+      if (
+        part.maxMatches !== undefined &&
+        (counts.get(part) ?? 0) >= part.maxMatches
+      ) {
+        continue
+      }
       const idx = displayText.indexOf(part.match, i)
       if (idx >= 0 && idx < bestIdx) {
         bestIdx = idx
@@ -387,6 +411,7 @@ function Highlight({
     }
     const matched = displayText.slice(bestIdx, bestIdx + bestPart.match.length)
     chunks.push(<Fragment key={key++}>{bestPart.render(matched)}</Fragment>)
+    counts.set(bestPart, (counts.get(bestPart) ?? 0) + 1)
     i = bestIdx + bestPart.match.length
   }
   return <>{chunks}</>
@@ -399,6 +424,55 @@ function Highlight({
 const INLINE_NUMERIC_PAREN = /\s*\(\s*[+\-−]?\d+\s*(?:HP|MP|XP)(?:\s*[·\-/,]\s*[+\-−]?\d+\s*(?:HP|MP|XP))*\s*\)\s*$/i
 function stripInlineNumbers(text: string): string {
   return text.replace(INLINE_NUMERIC_PAREN, '')
+}
+
+// Inline sparkler decoration for level-up chapter lines. Renders a small
+// constellation of star / spark glyphs positioned absolutely around the
+// log row, each looping a rise-and-fade animation so the line keeps
+// twinkling for as long as it stays on screen. Pixel-style sharp glyphs
+// — no smooth gradients, just CRT-appropriate color pops in accent /
+// good / magic. Staggered delays + slightly different durations keep the
+// seven sparks out of phase so the overall effect reads as a continuous
+// twinkle rather than a metronome.
+const SPARKLE_CONFIG: Array<{
+  glyph: string
+  left: string
+  top: string
+  delayMs: number
+  colorVar: string
+  fontSize: string
+  driftX: string
+}> = [
+  { glyph: '✦', left: '-14px', top: '40%',  delayMs: 0,   colorVar: 'var(--accent-hot)', fontSize: '12px', driftX: '-6px' },
+  { glyph: '✧', left: '32px',  top: '-4px', delayMs: 120, colorVar: 'var(--good)',       fontSize: '10px', driftX: '3px'  },
+  { glyph: '★', left: '72px',  top: '50%',  delayMs: 260, colorVar: 'var(--accent-hot)', fontSize: '11px', driftX: '-4px' },
+  { glyph: '✦', left: '116px', top: '-2px', delayMs: 420, colorVar: 'var(--magic)',      fontSize: '13px', driftX: '5px'  },
+  { glyph: '·', left: '168px', top: '30%',  delayMs: 60,  colorVar: 'var(--accent-hot)', fontSize: '14px', driftX: '-2px' },
+  { glyph: '✧', left: '212px', top: '55%',  delayMs: 340, colorVar: 'var(--good)',       fontSize: '10px', driftX: '4px'  },
+  { glyph: '✦', left: '260px', top: '0%',   delayMs: 180, colorVar: 'var(--magic)',      fontSize: '11px', driftX: '-3px' },
+]
+
+function LevelUpSparkles() {
+  return (
+    <span className="logp__sparkles" aria-hidden="true">
+      {SPARKLE_CONFIG.map((s, i) => (
+        <span
+          key={i}
+          className="logp__spark"
+          style={{
+            left: s.left,
+            top: s.top,
+            color: s.colorVar,
+            fontSize: s.fontSize,
+            animationDelay: `${s.delayMs}ms`,
+            ['--logp-spark-drift' as string]: s.driftX,
+          }}
+        >
+          {s.glyph}
+        </span>
+      ))}
+    </span>
+  )
 }
 
 function LogLine({
@@ -415,22 +489,94 @@ function LogLine({
   const meta = 'meta' in entry ? entry.meta : undefined
 
   switch (entry.kind) {
-    case 'narrative':
+    case 'narrative': {
+      // Strip any trailing "(+N HP)" / "(+N MP · +N HP)" parenthetical
+      // when log numbers are hidden — used by the rest / meditate
+      // end-of-session summaries, which embed the hard totals in the
+      // text so the qualitative adverb can stand alone with numbers off.
+      const text = showNumbers ? entry.text : stripInlineNumbers(entry.text)
       return (
         <p className="logp__line logp__line--narrative">
-          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
+          <Highlight text={text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
         </p>
       )
+    }
 
     case 'system':
       return <p className="logp__line logp__line--system">{entry.text}</p>
 
-    case 'chapter':
+    case 'meta':
+      // Shared style for out-of-diegesis asides: world-shift speed
+      // bumps, autosave notifications. Leading glyph + muted accent +
+      // italic keeps them visually distinct from the narrative stream
+      // without drowning out the action.
       return (
-        <p className="logp__line logp__line--chapter">
+        <p className="logp__line logp__line--meta">
+          <span className="logp__meta-glyph">∙ …</span>
           <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
         </p>
       )
+
+    case 'thought':
+      // In-character interior beats — drive focus shifts, other
+      // inner-monologue lines. Italic + soft accent + leading tilde
+      // + small indent reads as "the character is thinking" rather
+      // than "the character did something" or "the system is
+      // narrating". Distinct from `meta` (which is system asides).
+      return (
+        <p className="logp__line logp__line--thought">
+          <span className="logp__thought-glyph">~</span>
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
+        </p>
+      )
+
+    case 'chapter': {
+      // Celebrated chapter entries — level-ups (meta.levelTo set by the
+      // tick loop) and title-earned announcements (meta.titleEarned).
+      // The sparkler is anchored around a specific token inside the
+      // line so the spark cluster centers on what the line is about:
+      // the level number for level-ups, the new title for title-earned.
+      // Non-celebrated chapter lines (character stirs, etc.) render plain.
+      const isCelebration = meta?.levelTo != null || meta?.titleEarned === true
+      if (!isCelebration) {
+        return (
+          <p className="logp__line logp__line--chapter">
+            <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
+          </p>
+        )
+      }
+      // Locate the token to anchor the sparkler to. levelTo wins when
+      // present (it's a number — match "level N" so the cluster sits
+      // over the digit). Falls back to titleText for title-earned.
+      const target = meta?.levelTo != null ? `level ${meta.levelTo}` : meta?.titleText
+      const idx = target ? entry.text.indexOf(target) : -1
+      if (idx === -1 || !target) {
+        // Couldn't find the token — drop sparkles at the line level so
+        // the celebration still reads as decorated.
+        return (
+          <p className="logp__line logp__line--chapter logp__line--levelup">
+            <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
+            <LevelUpSparkles />
+          </p>
+        )
+      }
+      const before = entry.text.slice(0, idx)
+      const after = entry.text.slice(idx + target.length)
+      return (
+        <p className="logp__line logp__line--chapter logp__line--levelup">
+          {before && (
+            <Highlight text={before} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
+          )}
+          <span className="logp__celebration-anchor">
+            {target}
+            <LevelUpSparkles />
+          </span>
+          {after && (
+            <Highlight text={after} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
+          )}
+        </p>
+      )
+    }
 
     case 'area':
       return (
@@ -457,12 +603,29 @@ function LogLine({
       // "the" / "a" / punctuation don't drag an effect along with it. When
       // the user wants numbers, trail a compact tag showing final damage,
       // the attacker's pre-defense roll, and the defender's reduction —
-      // "(3 dmg · 7 ATK − 4 DEF)" — so combat math is legible.
+      // "(3 DMG · 7 ATK − 4 DEF)" for physical, "(… · N MATK − N MDEF)"
+      // for spells. A final `scaleMult` segment shows when the level-delta
+      // multiplier bent the math off the raw line: "(15 DMG · 31 ATK − 0
+      // DEF · ×0.48 MOD)" — otherwise a 31-vs-0 shown dealing 15 reads as
+      // a bug.
       const showDmg =
         showNumbers &&
         typeof entry.amount === 'number' &&
         typeof meta?.attackPower === 'number' &&
         typeof meta?.defense === 'number'
+      // spellName in the entry meta is the signal that this came from
+      // castSpell — swap the ATK / DEF labels to MATK / MDEF so the
+      // player reads "magic attack" instead of mistaking spell damage for
+      // a physical swing. The underlying fields (attackPower, defense)
+      // stay shared with the physical path; only the label differs.
+      const isMagic = !!meta?.spellName
+      const atkLabel = isMagic ? 'MATK' : 'ATK'
+      const defLabel = isMagic ? 'MDEF' : 'DEF'
+      // Treat a scaleMult within 1% of 1.0 as "no scaling" — floating point
+      // drift from compound multipliers shouldn't surface a meaningless
+      // "×1.00 MOD" on every hit.
+      const scaleMult = typeof meta?.scaleMult === 'number' ? meta.scaleMult : 1
+      const showScale = showDmg && Math.abs(scaleMult - 1) > 0.01
       return (
         <p className="logp__line logp__line--narrative">
           <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
@@ -471,10 +634,18 @@ function LogLine({
               {' ('}
               <span className="logp__tag-part--dmg">{entry.amount} DMG</span>
               {' · '}
-              <span className="logp__tag-part--atk">{meta!.attackPower} ATK</span>
+              <span className="logp__tag-part--atk">{meta!.attackPower} {atkLabel}</span>
               {' − '}
-              <span className="logp__tag-part--def">{meta!.defense} DEF</span>
-              {')'}
+              <span className="logp__tag-part--def">{meta!.defense} {defLabel}</span>
+              {showScale ? (
+                <>
+                  {' · '}
+                  <span className="logp__tag-part--scale">
+                    ×&thinsp;{scaleMult.toFixed(2)} MOD
+                  </span>
+                </>
+              ) : null}
+              {' )'}
             </span>
           ) : null}
         </p>
@@ -486,11 +657,13 @@ function LogLine({
       // their text rather than carrying an amount field — strip that when
       // the player has numbers hidden so the story stays clean.
       const text = showNumbers ? entry.text : stripInlineNumbers(entry.text)
+      // Only surface the numeric tag when the player has numbers enabled.
+      // With numbers hidden the heal text itself ("…feeling somewhat
+      // better.") already names the intensity; a parallel "a modest mend"
+      // tag reads as a redundant second adverb.
       const tag =
-        typeof entry.amount === 'number'
-          ? showNumbers
-            ? `+${entry.amount} HP`
-            : healPowerDescriptor(entry.amount)
+        showNumbers && typeof entry.amount === 'number'
+          ? `+${entry.amount} HP`
           : null
       return (
         <p className="logp__line logp__line--action">
@@ -514,13 +687,15 @@ function LogLine({
       )
 
     case 'consume': {
+      // With numbers hidden the consume text already carries the qualitative
+      // cue ("feeling somewhat better." / "focusing sharply.") — the
+      // descriptor tag duplicates that adverb, so drop it entirely and only
+      // show a tag when the player has numbers enabled.
       const tag = showNumbers
         ? entry.effect === 'heal'
           ? `+${entry.amount} HP`
           : `+${entry.amount} MP`
-        : entry.effect === 'heal'
-          ? healPowerDescriptor(entry.amount)
-          : manaPowerDescriptor(entry.amount)
+        : null
       const partClass =
         entry.effect === 'restore-magic'
           ? 'logp__tag-part--mp'
@@ -528,11 +703,13 @@ function LogLine({
       return (
         <p className="logp__line logp__line--action">
           <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
-          <span className="logp__tag">
-            {' ('}
-            <span className={partClass}>{tag}</span>
-            {')'}
-          </span>
+          {tag ? (
+            <span className="logp__tag">
+              {' ('}
+              <span className={partClass}>{tag}</span>
+              {')'}
+            </span>
+          ) : null}
         </p>
       )
     }
@@ -693,24 +870,49 @@ export default function LogPanel({
         emptyText="Still alive."
         onClose={() => setShowDeaths(false)}
       />
-      <Popover
-        open={popover != null}
-        anchor={popover?.anchor ?? null}
-        onClose={() => setPopover(null)}
-      >
-        {popover && (
-          <LogPopoverContent
-            subject={popover.subject}
-            ctx={{
-              character,
-              areas,
-              mobs: world?.mobs,
-              items: world?.items,
-              defeatedMobs,
-            }}
-          />
-        )}
-      </Popover>
+      {(() => {
+        const popoverCtx = {
+          character,
+          areas,
+          mobs: world?.mobs,
+          items: world?.items,
+          defeatedMobs,
+        }
+        const popoverRarity = popover
+          ? resolveSubjectRarity(popover.subject, popoverCtx) ?? undefined
+          : undefined
+        // Key on the subject so switching between two open popovers (click
+        // a legendary mob, then click a common item without dismissing in
+        // between) unmounts + remounts the Popover rather than re-using
+        // its DOM node. Previously the stale rarity tint would sometimes
+        // carry across the re-render because inline style reconciliation
+        // couldn't reliably clear background/border-color mid-flight.
+        const popoverKey = (() => {
+          if (!popover) return 'closed'
+          const s = popover.subject
+          switch (s.kind) {
+            case 'room': return `room:${s.areaId}:${s.roomKey}`
+            case 'mob': return `mob:${s.name}`
+            case 'item': return `item:${s.id}`
+            case 'character': return 'character'
+            case 'effect': return `effect:${s.name}`
+            case 'stat-bonus': return `stat:${s.stat}`
+          }
+        })()
+        return (
+          <Popover
+            key={popoverKey}
+            open={popover != null}
+            anchor={popover?.anchor ?? null}
+            onClose={() => setPopover(null)}
+            rarity={popoverRarity}
+          >
+            {popover && (
+              <LogPopoverContent subject={popover.subject} ctx={popoverCtx} />
+            )}
+          </Popover>
+        )
+      })()}
       <div className="logp-wrap">
         <div className="logp" ref={scrollRef}>
           {lines.map((entry, i) => (
@@ -786,11 +988,106 @@ export default function LogPanel({
           color: var(--fg-2);
           font-style: italic;
         }
+        /* Meta lines — drive focus shifts, world-shift cadence bumps,
+           autosave notifications. Visually distinct from both narrative
+           and system entries: muted accent color + italic so the tone
+           reads as "aside / annotation" rather than story beat, and a
+           leading glyph sets them apart while scrolling fast. */
+        .logp__line--meta {
+          color: var(--fg-3);
+          font-style: italic;
+          opacity: 0.9;
+          letter-spacing: 0.01em;
+        }
+        .logp__meta-glyph {
+          color: var(--accent);
+          opacity: 0.7;
+          margin-right: var(--sp-1);
+          font-style: normal;
+          letter-spacing: 0.1em;
+        }
+        /* Thought lines — drive focus shifts and other inner-monologue
+           beats. Italic + soft accent body, leading tilde glyph in the
+           hot accent color, and a small left indent so the line reads
+           as "stepping inward" while remaining clearly part of the
+           same log column. */
+        .logp__line--thought {
+          color: var(--fg-2);
+          font-style: italic;
+          padding-left: var(--sp-2);
+          margin-top: var(--sp-1);
+          opacity: 0.95;
+        }
+        .logp__thought-glyph {
+          color: var(--accent-hot);
+          opacity: 0.65;
+          margin-right: var(--sp-1);
+          font-style: normal;
+        }
         .logp__line--chapter {
           color: var(--accent-hot);
           text-shadow: var(--glow-sm);
           letter-spacing: 0.02em;
           margin-top: var(--sp-2);
+        }
+        /* Celebrated chapter — level-ups + title-earned. Line stays
+           left-justified; the sparkler is anchored around a specific
+           token inside the line (the level number on level-ups, the new
+           title text on title-earned) via .logp__celebration-anchor. */
+        .logp__line--levelup {
+          position: relative;
+          padding: 2px 0;
+        }
+        /* Inline-block wrapper around the celebrated token. Provides the
+           positioning context for .logp__sparkles so the spark cluster
+           centers on the token, not the row. */
+        .logp__celebration-anchor {
+          position: relative;
+          display: inline-block;
+        }
+        /* Sparkler container is centered horizontally on its parent
+           (the celebration-anchor) with a fixed 280px width — matches
+           the spread of the seven sparks so the existing per-spark
+           left-offsets render unchanged but cluster around the
+           anchor's midpoint. */
+        .logp__sparkles {
+          position: absolute;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 280px;
+          top: 0;
+          bottom: 0;
+          pointer-events: none;
+          overflow: visible;
+        }
+        /* Individual sparks. Each sits at a scripted offset (via inline
+           style.left / top) and loops a rise-and-fade animation so the
+           line keeps twinkling for its whole lifetime on screen. The
+           seven delays below are permanent phase offsets — with a shared
+           1400ms period, the sparks stay out of phase indefinitely and
+           the overall field reads as a continuous sparkler rather than
+           a metronome. line-height:1 keeps the glyph from affecting the
+           surrounding row height. */
+        .logp__spark {
+          position: absolute;
+          line-height: 1;
+          font-family: var(--font-mono);
+          font-weight: 700;
+          text-shadow: 0 0 4px currentColor, 0 0 1px #000;
+          animation: logp-spark 1400ms ease-out infinite;
+          opacity: 0;
+          transform-origin: center;
+          will-change: transform, opacity;
+        }
+        @keyframes logp-spark {
+          0%   { opacity: 0; transform: translate(0, 2px) scale(0.4); }
+          12%  { opacity: 1; transform: translate(calc(var(--logp-spark-drift, 0px) * 0.25), -2px) scale(1.1); }
+          35%  { opacity: 0.95; transform: translate(calc(var(--logp-spark-drift, 0px) * 0.55), -10px) scale(1); }
+          75%  { opacity: 0.55; transform: translate(calc(var(--logp-spark-drift, 0px) * 0.85), -18px) scale(0.9); }
+          100% { opacity: 0; transform: translate(var(--logp-spark-drift, 0px), -26px) scale(0.7); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .logp__spark { animation: none; opacity: 0; }
         }
         /* Area-entry announcement — two-line banner wrapped in dashed
            rules so stepping into a new region feels like a scene break
@@ -870,8 +1167,17 @@ export default function LogPanel({
         .logp__tag-part--hp  { color: var(--log-hp, var(--hp)); text-shadow: 0 0 3px currentColor; }
         .logp__tag-part--mp  { color: var(--log-mp, var(--mp)); text-shadow: 0 0 3px currentColor; }
         .logp__tag-part--dmg { color: var(--log-neutral, var(--fg-1)); }
-        .logp__tag-part--atk { color: var(--log-hp, var(--bad)); }
-        .logp__tag-part--def { color: var(--log-muted, var(--fg-dim)); }
+        .logp__tag-part--atk { color: var(--verb-emph); }
+        /* DEF reads as the "reduction" side of the combat math and wants
+           a quieter presence than ATK. Lighter gray than the shared
+           --log-muted token so the number stays legible without
+           competing with the colored stat values on either side. */
+        .logp__tag-part--def { color: #a0a0a0; }
+        /* Level-delta scale multiplier segment — "×0.48 swing". Warm
+           sienna so it reads as "the system is bending the math" without
+           colliding with the HP/MP/ATK stat colors that sit alongside
+           it inside the same combat-math tag. */
+        .logp__tag-part--scale { color: var(--log-scale, #6f4e37); font-style: italic; }
         /* Inline stat mentions — "+8 MP" and "+2 HP" appearing inside a
            log entry's body text rather than as a trailing tag. Share the
            stat colors and glow treatment with the tags so "(+8 HP)" and
@@ -881,7 +1187,21 @@ export default function LogPanel({
         .logp__tok--mp { color: var(--log-mp, var(--mp)); text-shadow: 0 0 3px currentColor; font-variant-numeric: tabular-nums; }
         .logp__tok--name { color: var(--player, var(--accent-hot)); font-weight: 500; text-shadow: 0 0 3px currentColor; }
         .logp__tok--dir { color: var(--dir, var(--link)); text-shadow: 0 0 3px currentColor; font-variant-caps: all-small-caps; letter-spacing: 0.05em; }
+        /* Base mob color — used when no rarity was threaded (legacy
+           paths). Rare+ mobs override with an inline color via
+           rarityColor(), so this only covers commons. */
         .logp__tok--mob { color: var(--bad); }
+        /* Mirrored-star bracket around rare+ mob names. Inherits the
+           mob's rarity color from the wrap span so the stars read as
+           part of the same token without stealing visual weight from
+           the name itself. Slightly dimmer so they frame rather than
+           fight. */
+        .logp__mob-wrap { display: inline; }
+        .logp__mob-star {
+          opacity: 0.75;
+          font-weight: 600;
+          letter-spacing: 0.02em;
+        }
         .logp__tok--room { color: var(--magic); }
         .logp__tok--item { color: var(--good); }
         .logp__tok--cond { color: var(--magic); font-style: italic; }
@@ -896,7 +1216,8 @@ export default function LogPanel({
           font-variant-numeric: tabular-nums;
         }
         .logp__tok--xp {
-          color: #ffffff;
+          color: var(--log-xp, var(--xp));
+          text-shadow: 0 0 3px currentColor;
           font-variant-numeric: tabular-nums;
           letter-spacing: 0.02em;
         }

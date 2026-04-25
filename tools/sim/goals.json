@@ -1,0 +1,15 @@
+{
+  "startingCharacter": {
+    "world": "fantasy",
+    "species": "human",
+    "class": "warrior",
+    "name": "Simulatrix"
+  },
+  "goals": [
+    { "level": 2, "medianMinutes": 1.5, "toleranceMinutes": 0.5 },
+    { "level": 3, "medianMinutes": 3.5, "toleranceMinutes": 1.0 },
+    { "level": 4, "medianMinutes": 7.0, "toleranceMinutes": 1.5 }
+  ],
+  "seeds": 50,
+  "maxTicks": 3000
+}

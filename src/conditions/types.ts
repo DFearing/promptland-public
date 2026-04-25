@@ -42,4 +42,11 @@ export interface ActiveCondition {
   remainingTicks: number
   /** Optional: who / what applied this. Free text for log flavor. */
   source?: string
+  /** Snapshot of the caster's contribution to per-tick DoT damage at the
+   *  moment of application. When set, `tickConditions` / `tickMobConditions`
+   *  use this instead of the condition def's `params.damagePerTick` — so a
+   *  high-INT Mage's poison stays hot even as later ticks resolve, and a
+   *  weak source's DoT doesn't suddenly scale up if a stronger caster
+   *  refreshes it via the same condition id. */
+  damagePerTickOverride?: number
 }

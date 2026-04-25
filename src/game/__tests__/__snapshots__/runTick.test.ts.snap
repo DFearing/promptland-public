@@ -1,0 +1,124 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`runTick: rendered-text snapshot (first 15 log entries) > matches recorded log text 1`] = `
+[
+  {
+    "kind": "narrative",
+    "text": "Wayfarer explores northwest to the Market Lane. A narrow cobbled lane crowded with tilted stalls and the smell of bread. Locals side-step each other without looking.",
+  },
+  {
+    "kind": "narrative",
+    "text": "A Strong Cellar Spider bars the way. Big as a cat, patient as a jailer.",
+  },
+  {
+    "kind": "narrative",
+    "text": "The Strong Cellar Spider catches Wayfarer off guard! (Ambush — 2× damage)",
+  },
+  {
+    "kind": "damage",
+    "text": "The Strong Cellar Spider perforates Wayfarer.",
+  },
+  {
+    "kind": "damage",
+    "text": "Wayfarer hammers the Strong Cellar Spider.",
+  },
+  {
+    "kind": "damage",
+    "text": "The Strong Cellar Spider needles Wayfarer.",
+  },
+  {
+    "kind": "damage",
+    "text": "Wayfarer lands on the Strong Cellar Spider.",
+  },
+  {
+    "kind": "damage",
+    "text": "The Strong Cellar Spider perforates Wayfarer.",
+  },
+  {
+    "kind": "narrative",
+    "text": "Wayfarer Hiro slumps, skewered by the Strong Cellar Spider. They wake again in the Market Square.",
+  },
+  {
+    "kind": "narrative",
+    "text": "Wayfarer explores north to the The Crow & Cup. Low beams, smoke-stained rafters, a fire that gives more light than warmth. Three tables, one tap, a keep who pretends not to listen.",
+  },
+  {
+    "kind": "narrative",
+    "text": "Wayfarer explores east to the Potter's Row. A line of shuttered workshops. Clay dust never fully settles; you can taste it on the back of your tongue.",
+  },
+  {
+    "kind": "narrative",
+    "text": "Wayfarer explores east to the The Old Smithy. A smithy with a cold forge. The anvil is still here because it's too heavy to steal. Iron filings crunch underfoot.",
+  },
+  {
+    "kind": "narrative",
+    "text": "A Barrow Crow bars the way. A big, black bird with a grudge. It has seen things in that hole and decided they were yours.",
+  },
+  {
+    "kind": "narrative",
+    "text": "The Barrow Crow catches Wayfarer off guard! (Ambush — 2× damage)",
+  },
+  {
+    "kind": "damage",
+    "text": "The Barrow Crow bites into Wayfarer.",
+  },
+]
+`;
+
+exports[`runTick: structural invariants over a 50-tick scripted run > reports drift between meta.name and entry.text (KNOWN ISSUE) 1`] = `
+{
+  "offenderCount": 8,
+  "offenderKinds": [
+    "loot",
+    "narrative",
+  ],
+}
+`;
+
+exports[`runTick: structural snapshot > matches the recorded structural fingerprint 1`] = `
+{
+  "deathCount": 2,
+  "finalGold": 0,
+  "finalHp": 13,
+  "finalLevel": 2,
+  "finalMaxHp": 47,
+  "finalState": "fighting",
+  "inventorySize": 3,
+  "journalEntryKinds": [
+    "death",
+    "death",
+    "level-up",
+    "mob-first-defeat",
+  ],
+  "levelUpCount": 1,
+  "logCount": 87,
+  "logKindCounts": {
+    "chapter": 2,
+    "damage": 30,
+    "death-loss": 2,
+    "loot": 6,
+    "narrative": 46,
+    "thought": 1,
+  },
+  "stateTransitions": [
+    "exploring",
+    "fighting",
+    "exploring",
+    "fighting",
+    "exploring",
+    "fighting",
+    "exploring",
+    "fighting",
+    "exploring",
+    "fighting",
+    "exploring",
+    "resting",
+    "exploring",
+    "fighting",
+    "exploring",
+    "fighting",
+  ],
+  "ticks": 50,
+  "visitedRoomCount": 10,
+}
+`;

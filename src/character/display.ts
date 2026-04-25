@@ -5,7 +5,6 @@ export interface CharacterDisplay {
   worldName?: string
   speciesName?: string
   className?: string
-  genderName?: string
 }
 
 export function describeCharacter(character: Character): CharacterDisplay {
@@ -14,6 +13,5 @@ export function describeCharacter(character: Character): CharacterDisplay {
     worldName: world?.name,
     speciesName: world?.species.find((s) => s.id === character.speciesId)?.name,
     className: world?.classes.find((c) => c.id === character.classId)?.name,
-    genderName: world?.genders.find((g) => g.id === character.genderId)?.name,
   }
 }

@@ -15,6 +15,11 @@ export interface LLMCompletionRequest {
   messages: LLMMessage[]
   temperature?: number
   maxTokens?: number
+  /** Optional AbortSignal — when aborted, the in-flight fetch is
+   *  cancelled and the returned promise rejects. Used by the area
+   *  generation timeout to tear down requests that outlive their
+   *  budget. */
+  signal?: AbortSignal
 }
 
 export interface LLMCompletionResponse {

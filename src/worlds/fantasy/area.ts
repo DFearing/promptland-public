@@ -55,6 +55,7 @@ const MILLHAVEN_ARCHETYPES: RoomArchetype[] = [
   { x: 1, y: 2, z: 0, type: 'corridor' },
   { x: 2, y: 2, z: 0, type: 'water', satisfies: ['hunger'] },
   { x: 3, y: 2, z: 0, type: 'corridor' },
+  { x: 4, y: 2, z: 0, type: 'corridor' },
 ]
 
 const MILLHAVEN_FLAVORS: Record<string, RoomFlavor> = {
@@ -138,11 +139,17 @@ const MILLHAVEN_FLAVORS: Record<string, RoomFlavor> = {
     description:
       'A cart track between the mill and the southern fields, overgrown at the edges. The ruts are filled with standing water that never quite dries.',
   },
+  '4,2,0': {
+    name: 'Overgrown Fence',
+    description:
+      'A sagging fence of split oak runs between the smithy yard and the southern pasture. Bramble has claimed half of it; the rest leans at angles that suggest giving up.',
+  },
 }
 
 export const FANTASY_START_AREA: Area = {
   id: 'millhaven',
   name: 'Millhaven',
+  kind: 'settlement',
   level: 1,
   startX: 2,
   startY: 1,
@@ -205,6 +212,7 @@ const BARROW_APPROACH_FLAVORS: Record<string, RoomFlavor> = {
 export const FANTASY_BARROW_APPROACH: Area = {
   id: 'barrow-approach',
   name: 'Barrow Approach',
+  kind: 'wilderness',
   level: 2,
   startX: 2,
   startY: 1,
@@ -320,6 +328,7 @@ const BARROW_FLAVORS: Record<string, RoomFlavor> = {
 
 export const FANTASY_BARROW_AREA: Area = {
   id: 'barrow-of-fallen-king',
+  kind: 'dungeon',
   name: 'Barrow of the Fallen King',
   level: 7,
   rarity: 'rare',
@@ -413,6 +422,7 @@ const MILL_STREAM_FLAVORS: Record<string, RoomFlavor> = {
 
 export const FANTASY_MILL_STREAM: Area = {
   id: 'mill-stream',
+  kind: 'wilderness',
   name: 'The Mill Stream',
   level: 2,
   startX: 0,
@@ -495,6 +505,7 @@ const THORNWOOD_FLAVORS: Record<string, RoomFlavor> = {
 
 export const FANTASY_THORNWOOD: Area = {
   id: 'thornwood-clearing',
+  kind: 'wilderness',
   name: 'Thornwood Clearing',
   level: 3,
   startX: 0,
@@ -516,10 +527,13 @@ export const FANTASY_THORNWOOD: Area = {
 //  y=1: (gap)      corridor   entrance   (← top of ladder)
 //
 //   z=1:
-//   x:  2          3
-//  y=1: chamber              ←  bottom of ladder
-//  y=1:            chamber   ←  boss
-//  y=2: corridor   storage   ←  chest antechamber
+//   x:  2          3          4
+//  y=1: chamber    chamber    entrance   ←  boss at (3,1,1); stairs down at (4,1,1)
+//  y=2: corridor   storage               ←  chest antechamber
+//
+//   z=2:                                   ← old forgotten passage
+//   x:  4          5          6          7
+//  y=1: chamber    corridor   corridor   portal   ←  portal hub at the end
 // ---------------------------------------------------------------------------
 
 const BARROWDOWN_ARCHETYPES: RoomArchetype[] = [
@@ -535,6 +549,19 @@ const BARROWDOWN_ARCHETYPES: RoomArchetype[] = [
   { x: 2, y: 2, z: 1, type: 'corridor' },
   { x: 3, y: 2, z: 1, type: 'storage' },
   { x: 3, y: 1, z: 1, type: 'chamber' },
+  // Hidden stairwell behind the Marrow Lord's lair — only reachable by
+  // defeating the boss. Drops down to a long-forgotten passage on z=2.
+  { x: 4, y: 1, z: 1, type: 'entrance' },
+  // Old forgotten passage on z=2 — bottom of the stairs, two corridor
+  // segments, then the Portal Hub itself at the far end.
+  { x: 4, y: 1, z: 2, type: 'chamber' },
+  { x: 5, y: 1, z: 2, type: 'corridor' },
+  { x: 6, y: 1, z: 2, type: 'corridor' },
+  // Portal Hub — the single multi-destination portal at the deepest
+  // point of the authored world. Placed at the end of the forgotten
+  // passage so the player must defeat the boss AND walk the long hall
+  // to reach it.
+  { x: 7, y: 1, z: 2, type: 'portal', permanentFrontier: true, portalHub: true },
 ]
 
 const BARROWDOWN_FLAVORS: Record<string, RoomFlavor> = {
@@ -583,10 +610,36 @@ const BARROWDOWN_FLAVORS: Record<string, RoomFlavor> = {
     description:
       'A domed chamber lit by a pale fungal glow. Bones are piled along the walls in deliberate patterns, and one large shape at the centre shifts as you enter.',
   },
+  '4,1,1': {
+    name: 'Hidden Stair',
+    description:
+      'A narrow stairwell, half-buried behind a pile of bones the Marrow Lord had been arranging. The steps descend into colder air. They are worn smooth in the centre — many feet have come this way, but none recently.',
+  },
+  '4,1,2': {
+    name: 'Dust-Choked Landing',
+    description:
+      'The stairs end in a low antechamber buried in dust thick enough to muffle sound. Whatever air moves down here moves slowly. A worked passage leads away east.',
+  },
+  '5,1,2': {
+    name: 'Hall of Worn Stones',
+    description:
+      'The corridor is taller than the cave above and lined with dressed masonry, the joints so close they need no mortar. The work is meticulous; the cracks are old. Nothing has been mended in living memory.',
+  },
+  '6,1,2': {
+    name: 'The Long Walk',
+    description:
+      'The passage stretches further than the cave above could possibly hold. Torchlight ahead fades into emptiness. Whoever cut this passage cared more about reach than about any one place along it.',
+  },
+  '7,1,2': {
+    name: 'The Forgotten Threshold',
+    description:
+      'The corridor opens into a vast circular hall that has no business existing inside this stone. The ceiling vanishes upward into a darkness that swallows torchlight. Black-veined pillars ring a slow-shifting nothing at the centre — a doorway, plainly, but one nobody has stepped through in centuries. Dust hangs in the still air. Whatever sovereign or order raised this place, the world has long since forgotten them.',
+  },
 }
 
 export const FANTASY_BARROWDOWN_CAVE: Area = {
   id: 'barrowdown-cave',
+  kind: 'dungeon',
   name: 'Barrowdown Cave',
   level: 4,
   rarity: 'uncommon',

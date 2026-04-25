@@ -9,8 +9,11 @@ import {
   type Rarity,
 } from '../items'
 import type { Mob } from '../mobs'
+import type { Rng } from '../rng'
 import { uuid } from '../util/uuid'
 import type { WorldContent } from '../worlds'
+import { biasEquipmentDrop } from './lootBias'
+import { computeInventoryWeight, weightCapacity } from './weight'
 
 function rarityRank(r: Rarity): number {
   return RARITIES.indexOf(r)
@@ -34,6 +37,16 @@ export interface RewardContext {
   mobLevel: number
   roomType?: RoomType
   areaRarity?: Rarity
+}
+
+/** Context for the drop-bias layer — class / room name / world item
+ *  pool — so a drop can be swapped for a class- or room-appropriate
+ *  alternative. Absent ⇒ no bias (keeps curated/test paths honest). */
+export interface DropBiasContext {
+  classId?: string
+  roomName?: string
+  roomType?: RoomType
+  worldItems: ItemDef[]
 }
 
 /**
@@ -80,9 +93,10 @@ export interface DropItem {
   level?: number
 }
 
-function rollRange(min: number, max: number): number {
+function rollRange(min: number, max: number, rng: Rng): number {
   if (max <= min) return min
-  return min + Math.floor(Math.random() * (max - min + 1))
+  const span = max - min + 1
+  return min + rng.nextInt(span)
 }
 
 /**
@@ -97,10 +111,10 @@ function rollRange(min: number, max: number): number {
  * lands around level 7; rarity bumps only at extreme mults (≥3.0) so
  * author intent is respected in normal play.
  */
-export function rollCuratedLoot(curated: RoomCuratedLoot, ctx?: RewardContext): Drops {
+export function rollCuratedLoot(curated: RoomCuratedLoot, ctx: RewardContext | undefined, rng: Rng): Drops {
   const mult = ctx ? combatRewardMult(ctx) : 1
   const baseGold = curated.gold
-    ? Math.max(0, rollRange(curated.gold.min, curated.gold.max))
+    ? Math.max(0, rollRange(curated.gold.min, curated.gold.max, rng))
     : 0
   const gold = Math.round(baseGold * mult)
   const items: DropItem[] = (curated.items ?? [])
@@ -147,20 +161,47 @@ function bumpCuratedRarity(rarity: Rarity, mult: number): Rarity {
   return RARITIES[Math.min(RARITIES.length - 1, idx + 1)]
 }
 
-export function rollLoot(mob: Mob, ctx?: RewardContext): Drops {
+export function rollLoot(
+  mob: Mob,
+  ctx: RewardContext | undefined,
+  bias: DropBiasContext | undefined,
+  world: WorldContent | undefined,
+  rng: Rng,
+): Drops {
   const mult = ctx ? combatRewardMult(ctx) : 1
   let gold = 0
   const items: DropItem[] = []
+  // Curated-item gate: archetype loot tables shouldn't leak curated
+  // items (legendary set-pieces) into the background pool, even if a
+  // hardcoded mob table or an LLM-authored bespoke mob's table mis-
+  // references one. Curated items only reach the player through per-
+  // room curated-loot overrides (rollCuratedLoot). When a world is
+  // provided we filter here; absent world (legacy callers) means no
+  // filter, which matches prior behaviour.
+  const curatedIds = world
+    ? new Set(world.items.filter((i) => i.curated).map((i) => i.id))
+    : null
   const rollOnce = () => {
     for (const entry of mob.loot ?? []) {
       // Scale item drop chance upward at high reward mults.
       const chanceBonus = mult >= 2.0 ? 0.2 : 0
-      if (Math.random() > entry.chance + chanceBonus) continue
+      const dropRoll = rng.next()
+      if (dropRoll > entry.chance + chanceBonus) continue
       if (entry.kind === 'gold') {
-        gold += Math.round(rollRange(entry.min, entry.max) * mult)
+        gold += Math.round(rollRange(entry.min, entry.max, rng) * mult)
       } else {
-        const qty = rollRange(entry.min ?? 1, entry.max ?? 1)
-        if (qty > 0) items.push({ itemId: entry.itemId, qty })
+        if (curatedIds?.has(entry.itemId)) continue
+        const qty = rollRange(entry.min ?? 1, entry.max ?? 1, rng)
+        if (qty > 0) {
+          // Class + room-context bias layer. Curated drops (loot with an
+          // explicit rarity/level) go through `rollCuratedLoot` and bypass
+          // this — authored drops stay authored. Only ordinary mob-table
+          // equipment / scroll drops get the class/context swap.
+          const rolledId = bias
+            ? biasEquipmentDrop(entry.itemId, bias, rng)
+            : entry.itemId
+          items.push({ itemId: rolledId, qty })
+        }
       }
     }
   }
@@ -170,10 +211,13 @@ export function rollLoot(mob: Mob, ctx?: RewardContext): Drops {
   return { gold, items }
 }
 
-// Rarity only rolls for equipment and scrolls. Junk & consumables stay baseline
-// to avoid log-clutter on small drops.
-function rollDropRarity(def: ItemDef, mobRarity: Rarity, rewardMult = 1): Rarity {
-  if (def.kind !== 'equipment' && def.kind !== 'scroll') return 'common'
+// Rarity only rolls for equipment. Junk, consumables, and scrolls stay
+// baseline — consumables and scrolls have their own progression axes
+// (size / level) defined per-archetype. Exported so tick.ts can pre-roll
+// each drop's rarity before the log line fires, keeping the log color in
+// lockstep with the inventory item's actual rarity.
+export function rollDropRarity(def: ItemDef, mobRarity: Rarity, rewardMult: number, rng: Rng): Rarity {
+  if (def.kind !== 'equipment') return 'common'
   // Bias upward by the mob's own tier: stronger mobs drop better loot.
   let bias = (['common', 'uncommon', 'rare', 'epic', 'legendary'] as Rarity[]).indexOf(mobRarity)
   // Additional bias from the combined reward multiplier — rare mobs in rare
@@ -181,22 +225,29 @@ function rollDropRarity(def: ItemDef, mobRarity: Rarity, rewardMult = 1): Rarity
   if (rewardMult >= 4.0) bias += 2.0
   else if (rewardMult >= 2.5) bias += 1.0
   else if (rewardMult >= 1.5) bias += 0.5
-  return rollRarity(Math.max(0, bias))
+  return rollRarity(Math.max(0, bias), rng)
 }
 
 /**
- * Roll a level for a dropped item. Equipment/scrolls scale by mob level
- * with a small jitter so a level-5 mob can drop something between level 4
- * and level 7. Junk and consumables stay at level 1 — a "level 3 rat tail"
- * is more confusing than useful.
+ * Roll a level for a dropped item. Only equipment scales by mob level
+ * with a small jitter (a level-5 mob can drop something between level 4
+ * and 7). Junk, consumables, and scrolls stay at level 1 — consumables
+ * derive their power from `size` and scrolls from their own archetype
+ * `level` field, neither of which the per-drop level roll touches.
  */
-function rollDropLevel(def: ItemDef, mobLevel: number): number {
-  if (def.kind !== 'equipment' && def.kind !== 'scroll') return 1
-  const jitter = Math.floor(Math.random() * 4) - 1 // -1..2
+function rollDropLevel(def: ItemDef, mobLevel: number, rng: Rng): number {
+  if (def.kind !== 'equipment') return 1
+  const jitter = rng.nextInt(4) - 1 // -1..2
   return Math.max(1, mobLevel + jitter)
 }
 
-function addItem(
+/**
+ * Merges an item into an inventory, stacking if the archetype + rarity +
+ * level already exist and the def is stackable. Shared between live loot
+ * drops and the dev panel's "give item" action so both paths can never
+ * diverge on stacking rules.
+ */
+export function addItemToInventory(
   inventory: InventoryItem[],
   def: ItemDef,
   qty: number,
@@ -237,27 +288,137 @@ function addItem(
   ]
 }
 
+/** Hard encumbrance cap as a multiple of the character's capacity.
+ *  Soft threshold (capacity × 1.0) is what drives the weight drive;
+ *  hard cap (× this multiplier) is the "absolutely can't fit another
+ *  thing in the pack" ceiling. Beyond it, new drops are abandoned. */
+const HARD_CAP_MULT = 2.0
+
+export interface ApplyDropsResult {
+  character: Character
+  /** Items the character couldn't carry. Caller surfaces these as
+   *  "leaves behind" log entries so the player sees what was lost. */
+  abandoned: ItemDef[]
+}
+
 export function applyDrops(
   character: Character,
   world: WorldContent,
   drops: Drops,
-  mob?: Mob,
-  context?: { areaId?: string; roomName?: string },
-  rewardCtx?: RewardContext,
-): Character {
+  mob: Mob | undefined,
+  context: { areaId?: string; roomName?: string } | undefined,
+  rewardCtx: RewardContext | undefined,
+  rng: Rng,
+): ApplyDropsResult {
+  // Encumbrance check uses the live inventory as the baseline; chest path
+  // doesn't apply here, so the working inventory is just the character's.
+  const resolved = resolveDrops(
+    character,
+    character.inventory,
+    world,
+    drops.items,
+    mob,
+    context,
+    rewardCtx,
+    rng,
+  )
+  // Merge resolved entries into the inventory, stacking against existing
+  // entries the same way `addItemToInventory` would.
   let inventory = character.inventory
   let segment = character.segment
+  for (const entry of resolved.entries) {
+    const def = world.items.find((i) => i.id === entry.archetypeId)
+    if (!def) continue
+    inventory = addItemToInventory(
+      inventory,
+      def,
+      entry.quantity ?? 1,
+      entry.rarity ?? 'common',
+      entry.level ?? 1,
+      entry.acquired ?? {
+        at: Date.now(),
+        source: 'mob',
+        mobName: mob?.name,
+        mobRarity: mob?.rarity,
+        areaId: context?.areaId,
+        roomName: context?.roomName,
+      },
+    )
+    // Track best pickup for the current level segment.
+    const baseValue = def.value ?? 0
+    const scaledValue = Math.round(baseValue * rarityValueMult(entry.rarity ?? 'common'))
+    const bestItem = betterItem(segment, {
+      name: def.name,
+      rarity: entry.rarity ?? 'common',
+      value: scaledValue,
+    })
+    segment = segment
+      ? { ...segment, bestItem }
+      : { startedAt: character.createdAt, startGold: character.gold, bestItem }
+  }
+  return {
+    character: {
+      ...character,
+      gold: character.gold + drops.gold,
+      inventory,
+      segment,
+    },
+    abandoned: resolved.abandoned,
+  }
+}
+
+/** Resolves a list of `DropItem`s into fully-rolled `InventoryItem`
+ *  entries WITHOUT mutating the character. Rolls rarity (when not
+ *  pre-stamped), level, and acquisition metadata, and walks the
+ *  encumbrance hard-cap exactly like the prior inline loop did. Items
+ *  beyond the cap go to `abandoned`; everything else lands in
+ *  `entries` (one entry per drop — stacking is the caller's job at
+ *  inventory-merge time).
+ *
+ *  Encumbrance baseline is `existingInventory`, which lets the chest
+ *  path pass `pack + already-in-chest` so a multi-kill chest can't
+ *  sneak past the cap by spreading drops across kills.
+ *
+ *  Shared between `applyDrops` and `resolveChestDrops` so neither path
+ *  can drift on level / rarity rolls or encumbrance accounting. */
+function resolveDrops(
+  character: Character,
+  existingInventory: InventoryItem[],
+  world: WorldContent,
+  dropItems: readonly DropItem[],
+  mob: Mob | undefined,
+  context: { areaId?: string; roomName?: string } | undefined,
+  rewardCtx: RewardContext | undefined,
+  rng: Rng,
+): { entries: InventoryItem[]; abandoned: ItemDef[] } {
+  const entries: InventoryItem[] = []
+  const abandoned: ItemDef[] = []
   const mobRarity: Rarity = mob?.rarity ?? 'common'
   const mobLevel = mob?.level ?? 1
   const rewardMult = rewardCtx ? combatRewardMult(rewardCtx) : 1
-  for (const drop of drops.items) {
+  const capacity = weightCapacity(character)
+  const hardCap = capacity > 0 ? capacity * HARD_CAP_MULT : Infinity
+  // Track running weight as a number so a multi-drop table cumulatively
+  // pushes against the cap without rebuilding a working inventory each
+  // iteration. Equipped weight is captured by `computeInventoryWeight`
+  // when called against the existing pack — the equipped contribution
+  // is constant across this loop, so a single starting baseline plus
+  // per-drop addends matches `applyDrops`'s prior behaviour.
+  let runningWeight = computeInventoryWeight(
+    { ...character, inventory: existingInventory },
+    world.items,
+  )
+  for (const drop of dropItems) {
     const def = world.items.find((i) => i.id === drop.itemId)
     if (!def) continue
-    // Curated drops (drop.rarity / drop.level set) skip the rarity /
-    // level rolls — they're authored or LLM-picked to land at an exact
-    // tier. Plain drops roll the usual way.
-    const rarity = drop.rarity ?? rollDropRarity(def, mobRarity, rewardMult)
-    const level = drop.level ?? rollDropLevel(def, mobLevel)
+    const addWeight = (def.weight ?? 1) * drop.qty
+    if (runningWeight + addWeight > hardCap) {
+      abandoned.push(def)
+      continue
+    }
+    runningWeight += addWeight
+    const rarity = drop.rarity ?? rollDropRarity(def, mobRarity, rewardMult, rng)
+    const level = drop.level ?? rollDropLevel(def, mobLevel, rng)
     const acquired: ItemAcquisition = {
       at: Date.now(),
       source: 'mob',
@@ -266,8 +427,47 @@ export function applyDrops(
       areaId: context?.areaId,
       roomName: context?.roomName,
     }
-    inventory = addItem(inventory, def, drop.qty, rarity, level, acquired)
-    // Track best pickup for the current level segment.
+    entries.push({
+      id: uuid(),
+      archetypeId: def.id,
+      name: def.name,
+      description: def.description,
+      quantity: drop.qty,
+      rarity,
+      level,
+      acquired,
+    })
+  }
+  return { entries, abandoned }
+}
+
+/** Adds a chest's worth of pre-resolved entries into the character's
+ *  inventory (stacking rules apply via `addItemToInventory`) and
+ *  updates the segment's best-item tracker. Used at chest-unlock time.
+ *  Gold is NOT touched here — caller adds it separately so callers can
+ *  log the gold pickup as part of the unlock line. */
+export function applyChestEntries(
+  character: Character,
+  world: WorldContent,
+  entries: readonly InventoryItem[],
+): Character {
+  let inventory = character.inventory
+  let segment = character.segment
+  for (const entry of entries) {
+    if (!entry.archetypeId) continue
+    const def = world.items.find((i) => i.id === entry.archetypeId)
+    if (!def) continue
+    const rarity = entry.rarity ?? 'common'
+    const level = entry.level ?? 1
+    const qty = entry.quantity ?? 1
+    inventory = addItemToInventory(
+      inventory,
+      def,
+      qty,
+      rarity,
+      level,
+      entry.acquired ?? { at: Date.now(), source: 'mob' },
+    )
     const baseValue = def.value ?? 0
     const scaledValue = Math.round(baseValue * rarityValueMult(rarity))
     const bestItem = betterItem(segment, {
@@ -279,10 +479,27 @@ export function applyDrops(
       ? { ...segment, bestItem }
       : { startedAt: character.createdAt, startGold: character.gold, bestItem }
   }
-  return {
-    ...character,
-    gold: character.gold + drops.gold,
-    inventory,
-    segment,
-  }
+  return { ...character, inventory, segment }
+}
+
+/** Resolves drops to entries for the chest queue without mutating the
+ *  character's live inventory. Encumbrance check spans the character's
+ *  pack PLUS items already in the chest, so a chest can't sneak past
+ *  the hard cap by spreading drops across multiple kills.
+ *
+ *  Returns the resolved entries (ready to merge into the chest) and
+ *  any abandoned `ItemDef`s for the standard "sacrifices to the road"
+ *  log line. */
+export function resolveChestDrops(
+  character: Character,
+  world: WorldContent,
+  dropItems: readonly DropItem[],
+  mob: Mob | undefined,
+  context: { areaId?: string; roomName?: string } | undefined,
+  rewardCtx: RewardContext | undefined,
+  rng: Rng,
+): { entries: InventoryItem[]; abandoned: ItemDef[] } {
+  const inChest = character.lockedChest?.items ?? []
+  const baseline = inChest.length > 0 ? [...character.inventory, ...inChest] : character.inventory
+  return resolveDrops(character, baseline, world, dropItems, mob, context, rewardCtx, rng)
 }

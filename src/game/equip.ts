@@ -17,6 +17,8 @@ function equipmentOf(
 const BONUS_KEYS: (keyof EquipBonuses)[] = [
   'attack',
   'defense',
+  'magicAttack',
+  'magicDefense',
   'strength',
   'dexterity',
   'constitution',
@@ -63,6 +65,17 @@ function scaledBonuses(
     const rarityBonus = Math.max(0, Math.round(base * rarityDelta))
     const total = baseAtLevel + rarityBonus
     if (total > 0) out[k] = total
+  }
+  // Buff-slot fractions (hungerSlow, restBoost) scale on a softer curve —
+  // they're already percentages, so linear item-level scaling would push
+  // them past 100 % quickly. Instead, light level-scaling (× 1.05 per level
+  // past 1) + flat rarity delta.
+  const fractionalLevelFactor = 1 + 0.05 * (safeLevel - 1)
+  if (raw.hungerSlow) {
+    out.hungerSlow = raw.hungerSlow * fractionalLevelFactor * mult
+  }
+  if (raw.restBoost) {
+    out.restBoost = raw.restBoost * fractionalLevelFactor * mult
   }
   return out
 }
@@ -173,6 +186,8 @@ export function combatBonuses(
 ): EquipBonuses {
   let attack = 0
   let defense = 0
+  let magicAttack = 0
+  let magicDefense = 0
   const eq = character.equipped
   const worn: Array<InventoryItem | undefined> = [
     eq.weapon,
@@ -192,11 +207,55 @@ export function combatBonuses(
     const b = equipBonusesFor(item, world)
     attack += b.attack ?? 0
     defense += b.defense ?? 0
+    magicAttack += b.magicAttack ?? 0
+    magicDefense += b.magicDefense ?? 0
   }
   const cond = conditionStatMods(character, world)
   return {
     attack: attack + cond.attack,
     defense: defense + cond.defense,
+    magicAttack,
+    magicDefense,
+  }
+}
+
+/**
+ * Sums the hunger-slow and rest-boost multipliers from every equipped item.
+ * Both are bounded:
+ *   - hungerSlow: capped at 0.9 so hunger never fully stops
+ *   - restBoost: capped at 1.5 (3.5× recovery) so a fully-kitted rest
+ *                doesn't trivialize exploration
+ * Returned values feed directly into the tick.ts hunger/rest formulas.
+ */
+export function buffMultipliers(
+  character: Character,
+  world: WorldContent,
+): { hungerSlow: number; restBoost: number } {
+  let hungerSlow = 0
+  let restBoost = 0
+  const eq = character.equipped
+  const worn: Array<InventoryItem | undefined> = [
+    eq.weapon,
+    eq.offhand,
+    eq.armor,
+    eq.head,
+    eq.arms,
+    eq.hands,
+    eq.legs,
+    eq.feet,
+    eq.cape,
+    eq.amulet,
+    eq.ring1,
+    eq.ring2,
+  ]
+  for (const item of worn) {
+    const b = equipBonusesFor(item, world)
+    hungerSlow += b.hungerSlow ?? 0
+    restBoost += b.restBoost ?? 0
+  }
+  return {
+    hungerSlow: Math.min(0.9, Math.max(0, hungerSlow)),
+    restBoost: Math.min(1.5, Math.max(0, restBoost)),
   }
 }
 
@@ -577,7 +636,15 @@ export function isRedundantEquip(event: EquipEvent): boolean {
 
 export function equipLogEntry(character: Character, event: EquipEvent): LogEntry {
   const verb = EQUIP_VERBS[event.slot] ?? 'equips'
-  const text = event.replaced
+  // "setting aside" names the PREVIOUSLY-equipped item being swapped out.
+  // Guard against the replaced name matching the incoming item's name —
+  // that would read as "dons the Pot Helm, setting aside the Pot Helm."
+  // which is nonsense. Two paths this could happen: the slot was empty
+  // (no replaced at all) or the previous wearable shared an archetype
+  // name with the incoming one (re-equipping a copy). Both cases drop
+  // the clause entirely.
+  const hasReplaced = !!event.replaced && event.replaced !== event.itemName
+  const text = hasReplaced
     ? `${character.name} ${verb} the ${event.itemName}, setting aside the ${event.replaced}.`
     : `${character.name} ${verb} the ${event.itemName}.`
   // The persisted log entry's `slot` field is a narrow 'weapon' | 'armor'
@@ -595,9 +662,13 @@ export function equipLogEntry(character: Character, event: EquipEvent): LogEntry
       itemId: event.itemId,
       itemName: event.itemName,
       itemRarity: event.itemRarity,
-      replacedItemId: event.replacedId,
-      replacedItemName: event.replaced,
-      replacedItemRarity: event.replacedRarity,
+      // Only thread the replaced-item meta when the clause actually
+      // rendered — otherwise the tokenizer has no text to match
+      // against (and would try to decorate a name that isn't on
+      // the line).
+      replacedItemId: hasReplaced ? event.replacedId : undefined,
+      replacedItemName: hasReplaced ? event.replaced : undefined,
+      replacedItemRarity: hasReplaced ? event.replacedRarity : undefined,
     },
   }
 }

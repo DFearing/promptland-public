@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import Panel from './Panel'
 import type { Character } from '../character'
 import {
@@ -6,8 +7,12 @@ import {
   roomKey,
   visitedKey,
   type Area,
+  type Position,
+  type Room,
 } from '../areas'
-import { rarityColor } from '../items'
+import { predictNextStep, type GameState } from '../game'
+import { rarityLabel } from '../items'
+import { formatRelative } from '../util/time'
 import { getWorldContent } from '../worlds'
 
 /** How many recent rooms (including current) participate in the trail-fade
@@ -15,15 +20,9 @@ import { getWorldContent } from '../worlds'
  *  until the background matches the baseline tile color. */
 const TRAIL_LENGTH = 6
 
-/** Scale + vertical nudge (in ems) for the "@" player marker so its ink
- *  size and vertical center line up with the balanced legend glyphs.
- *  Matches the glyphScale / glyphYOffset pattern on RoomTypeVisual —
- *  values come from tools/measure-glyphs.mjs. */
-const YOU_SCALE = 0.85
-const YOU_Y_OFFSET = -0.05
-
 interface Props {
   character: Character
+  state: GameState
 }
 
 const EMPTY_AREA: Area = {
@@ -35,7 +34,180 @@ const EMPTY_AREA: Area = {
   rooms: {},
 }
 
-export default function MapPanel({ character }: Props) {
+// Arrow glyph for an 8-way compass delta. Returned string doubles as the
+// ink rendered over the current-cell when we paint the next-step hint —
+// we deliberately use the Unicode arrow set so the glyph inherits the
+// cell's font stack and sits at the same visual weight as the room glyphs.
+function arrowForDelta(dx: number, dy: number): string | null {
+  const vx = Math.sign(dx)
+  const vy = Math.sign(dy)
+  if (vx === 0 && vy === 0) return null
+  if (vx === 0 && vy < 0) return '↑'
+  if (vx > 0 && vy < 0) return '↗'
+  if (vx > 0 && vy === 0) return '→'
+  if (vx > 0 && vy > 0) return '↘'
+  if (vx === 0 && vy > 0) return '↓'
+  if (vx < 0 && vy > 0) return '↙'
+  if (vx < 0 && vy === 0) return '←'
+  if (vx < 0 && vy < 0) return '↖'
+  return null
+}
+
+// Compass-word form of the same 8-way delta — used in human-readable
+// tooltips ("You: traveling northwest") where the Unicode glyph would
+// read awkwardly. Screen coordinates are y-down, so negative y = north.
+function directionNameForDelta(dx: number, dy: number): string | null {
+  const vx = Math.sign(dx)
+  const vy = Math.sign(dy)
+  if (vx === 0 && vy === 0) return null
+  if (vx === 0 && vy < 0) return 'north'
+  if (vx > 0 && vy < 0) return 'northeast'
+  if (vx > 0 && vy === 0) return 'east'
+  if (vx > 0 && vy > 0) return 'southeast'
+  if (vx === 0 && vy > 0) return 'south'
+  if (vx < 0 && vy > 0) return 'southwest'
+  if (vx < 0 && vy === 0) return 'west'
+  if (vx < 0 && vy < 0) return 'northwest'
+  return null
+}
+
+// Per-state overlay painted on the current-location cell. A generic
+// direction arrow always read as "traveling" regardless of what the
+// character was actually doing — resting, fighting, or mid-portal all
+// showed the same glyph. This picks a state-specific icon so the map
+// reflects the current activity at a glance.
+//
+// variant drives the CSS color + pulse treatment; glyph is the Unicode
+// ink.
+type ActivityVariant =
+  | 'idle'
+  | 'travel'
+  | 'travel-portal'
+  | 'fight'
+  | 'rest'
+  | 'meditate'
+  | 'use-sell'
+  | 'use-portal'
+  | 'use-shrine'
+  | 'use-satisfy'
+  | 'generating'
+
+type ActivityIndicator = {
+  glyph: string
+  variant: ActivityVariant
+  tip: string
+}
+
+// Picks the glyph + variant that represents what the character is doing
+// right now. The returned shape drives both the on-map player marker (the
+// `@` used to sit here) and the live "You" legend entry. Always returns
+// a non-null indicator so the player's cell is never empty.
+//
+// Tips are sentence-case action phrases — rendered as-is in tooltips and
+// in the legend caption (no "You:" prefix). "Traveling west" /
+// "Fighting Goblin" / "Resting" / "Standing here".
+function activityIndicator(
+  state: GameState,
+  travelArrow: string | null,
+  travelDirection: string | null,
+  travelIsPortalHop: boolean,
+): ActivityIndicator {
+  switch (state.kind) {
+    case 'exploring': {
+      if (travelArrow) {
+        if (travelIsPortalHop) {
+          return {
+            glyph: travelArrow,
+            variant: 'travel-portal',
+            tip: 'Stepping through a portal',
+          }
+        }
+        return {
+          glyph: travelArrow,
+          variant: 'travel',
+          tip: travelDirection ? `Traveling ${travelDirection}` : 'Traveling',
+        }
+      }
+      // No predicted next step (no-op tick, blocked path). Render a neutral
+      // "here, idle" marker so the cell/legend still has a player glyph.
+      return { glyph: '◆', variant: 'idle', tip: 'Standing here' }
+    }
+    case 'fighting':
+      return { glyph: '⚔', variant: 'fight', tip: `Fighting ${state.mob.name}` }
+    case 'resting':
+      return { glyph: 'Z', variant: 'rest', tip: 'Resting' }
+    case 'meditating':
+      return { glyph: '☯', variant: 'meditate', tip: 'Meditating' }
+    case 'using-room':
+      switch (state.action.kind) {
+        case 'sell':
+          return { glyph: '$', variant: 'use-sell', tip: 'Selling loot' }
+        case 'traverse-portal':
+          return { glyph: '◎', variant: 'use-portal', tip: 'Traversing a portal' }
+        case 'sacrifice':
+          return { glyph: '✝', variant: 'use-shrine', tip: 'Sacrificing at the shrine' }
+        case 'satisfy':
+          return { glyph: '✓', variant: 'use-satisfy', tip: 'Using this room' }
+      }
+      return { glyph: '◆', variant: 'idle', tip: 'Standing here' }
+    case 'generating-area':
+      return { glyph: '⧖', variant: 'generating', tip: 'Generating a new area' }
+  }
+}
+
+// Inline SVG pin icon. Filled (solid tint) when pinned, outlined+muted
+// when not. currentColor lets the surrounding CSS recolor based on state
+// (pinned → --good green, unpinned → --fg-3 muted).
+function PinIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M6 1.5h4v1H9.5l.8 4 2.2 1.5v1H8.8v4.5L8 14.5l-.8-1v-4.5H3.5v-1l2.2-1.5.8-4H6v-1z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+// Inline SVG book icon — opens the room index popup. Matches the visual
+// weight of PinIcon (same 16x16 viewbox, same stroke width) so the two
+// header controls read as a pair.
+function BookIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M2 3c2 0 4.5.25 6 1.5V14c-1.5-1.25-4-1.5-6-1.5V3zM14 3c-2 0-4.5.25-6 1.5V14c1.5-1.25 4-1.5 6-1.5V3z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M8 4.5v9.5"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+export default function MapPanel({ character, state }: Props) {
   const worldContent = getWorldContent(character.worldId)
   const currentArea =
     worldContent?.areas?.find((a) => a.id === character.position.areaId) ??
@@ -76,9 +248,36 @@ export default function MapPanel({ character }: Props) {
     return set
   }, [area.id, displayedZ, visitedRooms])
 
+  // Classic fog-of-war "peek through the doorway": any same-floor room
+  // grid-adjacent to a visited room is rendered dimmed even if the
+  // character hasn't entered it. Mirrors the 8-way neighbor set used by
+  // movement (areas/movement.ts → DIRS_2D), so what the character can
+  // step into is exactly what the map glimpses.
+  const seenInArea = useMemo(() => {
+    const set = new Set<string>()
+    const dirs: ReadonlyArray<readonly [number, number]> = [
+      [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1],
+    ]
+    for (const key of visitedInArea) {
+      const [xs, ys] = key.split(',')
+      const x = Number(xs)
+      const y = Number(ys)
+      for (const [dx, dy] of dirs) {
+        const nx = x + dx
+        const ny = y + dy
+        const nkey = `${nx},${ny},${displayedZ}`
+        if (visitedInArea.has(nkey)) continue
+        if (set.has(nkey)) continue
+        if (!area.rooms[roomKey(nx, ny, displayedZ)]) continue
+        set.add(nkey)
+      }
+    }
+    return set
+  }, [area.rooms, displayedZ, visitedInArea])
+
   const bbox = useMemo(() => {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-    for (const key of visitedInArea) {
+    const consider = (key: string) => {
       const [xs, ys] = key.split(',')
       const x = Number(xs)
       const y = Number(ys)
@@ -87,8 +286,10 @@ export default function MapPanel({ character }: Props) {
       if (y < minY) minY = y
       if (y > maxY) maxY = y
     }
+    for (const key of visitedInArea) consider(key)
+    for (const key of seenInArea) consider(key)
     return { minX, maxX, minY, maxY }
-  }, [visitedInArea])
+  }, [visitedInArea, seenInArea])
 
   const currentKey = roomKey(position.x, position.y, position.z)
   // Only mark the `@` tile when the character is actually standing in the
@@ -125,6 +326,62 @@ export default function MapPanel({ character }: Props) {
 
   const hasAny = visitedInArea.size > 0
 
+  // Predict where the character is heading next so we can paint a subtle
+  // directional indicator on the current cell + ghost the target cell.
+  // Wrapped in try/catch because `predictNextStep` runs the same projection
+  // the live tick uses — any world-content hiccup (stale areaId, mid-pin
+  // state) should degrade silently rather than break the map render.
+  const worldForPredict = getWorldContent(character.worldId)
+  const nextStep: Position | null = useMemo(() => {
+    if (!worldForPredict) return null
+    if (!charInDisplayedArea) return null
+    try {
+      return predictNextStep(character, worldForPredict)
+    } catch {
+      return null
+    }
+  }, [character, worldForPredict, charInDisplayedArea])
+  // `next-step` key for the cell overlay — only meaningful when it's on
+  // the same floor as the displayed map (cross-floor hops are painted via
+  // stairs badges already).
+  const nextStepKey =
+    nextStep && nextStep.areaId === area.id && nextStep.z === displayedZ
+      ? roomKey(nextStep.x, nextStep.y, nextStep.z)
+      : null
+  // Direction from the character's current cell to the predicted step.
+  // Only meaningful while exploring — fighting / resting / etc. don't have
+  // a "next cell," so we fall back to a state-specific glyph below.
+  // Arrow glyph paints the on-map overlay; compass-word form drives the
+  // "You: traveling west" tooltip.
+  const nextStepArrow = nextStep && charInDisplayedArea && nextStep.z === position.z
+    ? arrowForDelta(nextStep.x - position.x, nextStep.y - position.y)
+    : null
+  const nextStepDirection = nextStep && charInDisplayedArea && nextStep.z === position.z
+    ? directionNameForDelta(nextStep.x - position.x, nextStep.y - position.y)
+    : null
+  // When the next-step lands on a portal tile that leads to a different
+  // area, emphasize the portal with a dashed chevron (portal-hop indicator).
+  const nextStepIsPortalHop = (() => {
+    if (!nextStepKey) return false
+    const room = area.rooms[nextStepKey]
+    if (!room) return false
+    if (room.type !== 'portal') return false
+    return !!room.destination && room.destination.areaId !== area.id
+  })()
+  // Live activity indicator — the glyph + color that represents what the
+  // character is doing right now. Replaces both (a) the static `@` that
+  // used to mark the player's cell and (b) the tiny corner arrow that
+  // only read as "traveling." Used for both the current-cell marker and
+  // the live "You" entry in the legend. Computed regardless of
+  // charInDisplayedArea so the legend stays live when the map is pinned
+  // to another area.
+  const indicator = activityIndicator(
+    state,
+    nextStepArrow,
+    nextStepDirection,
+    nextStepIsPortalHop,
+  )
+
   const hasMultipleFloors = useMemo(() => {
     let firstZ: number | null = null
     for (const key in area.rooms) {
@@ -135,19 +392,24 @@ export default function MapPanel({ character }: Props) {
     return false
   }, [area.rooms])
 
-  // Area name gets the rarity color so it reads as a first-class world-state
-  // element. Absent rarity falls through to `common`. Rendering the meta as
-  // JSX (rather than a string) lets us color just the name while keeping any
-  // floor prefix in a neutral muted tone.
-  const areaColor = rarityColor(area.rarity ?? 'common')
+  // Panel meta is a two-line stack:
+  //   Line 1: area name, display font — the world-state anchor.
+  //   Line 2: area kind (settlement / wilderness / dungeon / ruin) in the
+  //           smaller mono-chip style, mirroring the room-type line in
+  //           RoomDescPanel so "rooms describe what this square is; areas
+  //           describe what the whole place is" reads parallel.
+  // Rarity-tint on the name was dropped — the chip reads as the panel
+  // identity, not a tier indicator; rarity still lives on the book
+  // dialog's per-room rarity badge where it matters. Floor indicator
+  // lives as a floater inside the map grid (top-right) rather than
+  // sharing the UI header.
+  const areaKindLabel = area.kind ? area.kind.toUpperCase() : null
   const meta = (
     <span className="mapp__area">
-      {hasMultipleFloors && charInDisplayedArea && (
-        <span className="mapp__area-floor">F{position.z + 1}</span>
+      <span className="mapp__area-name">{area.name}</span>
+      {areaKindLabel && (
+        <span className="mapp__area-kind">{areaKindLabel}</span>
       )}
-      <span className="mapp__area-name" style={{ color: areaColor }}>
-        {area.name}
-      </span>
     </span>
   )
 
@@ -172,28 +434,58 @@ export default function MapPanel({ character }: Props) {
 
   let hoveredLabel: string | null = null
   if (hoveredLegend === 'you') {
-    hoveredLabel = 'You'
+    // Caption is the bare action phrase — "Traveling west" / "Resting" /
+    // "Fighting Goblin" — rendered without any "You:" prefix.
+    hoveredLabel = indicator.tip
   } else if (hoveredLegend) {
     hoveredLabel =
       ROOM_TYPE_VISUALS[hoveredLegend as keyof typeof ROOM_TYPE_VISUALS]
         ?.label ?? null
   }
 
+  // Book dialog — alphabetized list of discovered rooms in the displayed area.
+  // Backing state lives here so the Panel header button can toggle it; the
+  // popup itself renders inside the map body below the grid.
+  const [bookOpen, setBookOpen] = useState(false)
+  const [selectedRoomKey, setSelectedRoomKey] = useState<string | null>(null)
+  // Reset the dialog selection when the displayed area/floor changes — a
+  // stale selection from the previous area reads as broken when no room
+  // with that key exists here. Uses React's derive-from-props pattern
+  // (compare prev key during render) instead of useEffect(setState), which
+  // wastes a render pass and trips the react-hooks/set-state-in-effect rule.
+  // https://react.dev/reference/react/useState#storing-information-from-previous-renders
+  const areaFloorKey = `${area.id}:${displayedZ}`
+  const [prevAreaFloorKey, setPrevAreaFloorKey] = useState(areaFloorKey)
+  if (areaFloorKey !== prevAreaFloorKey) {
+    setPrevAreaFloorKey(areaFloorKey)
+    setSelectedRoomKey(null)
+  }
+
   // Lock the displayed area to whatever's showing when the user toggles on.
   // Unchecking drops back to following the character's current area.
   const titleExtra = (
-    <label
-      className="mapp__pin"
-      data-tip={isPinned ? 'Unpin map — follow character' : 'Pin map to this area'}
-    >
-      <input
-        type="checkbox"
-        className="mapp__pin-input"
-        checked={isPinned}
-        onChange={(e) => setPinnedAreaId(e.target.checked ? area.id : null)}
-      />
-      <span className="mapp__pin-label">Pin</span>
-    </label>
+    <span className="mapp__header-controls">
+      <button
+        type="button"
+        className={'mapp__pin' + (isPinned ? ' mapp__pin--on' : '')}
+        onClick={() => setPinnedAreaId(isPinned ? null : area.id)}
+        aria-label={isPinned ? 'Unpin map — follow character' : 'Pin map to this area'}
+        aria-pressed={isPinned}
+        data-tip={isPinned ? 'Unpin map — follow character' : 'Pin map to this area'}
+      >
+        <PinIcon filled={isPinned} />
+      </button>
+      <button
+        type="button"
+        className={'mapp__book' + (bookOpen ? ' mapp__book--on' : '')}
+        onClick={() => setBookOpen((v) => !v)}
+        aria-label={bookOpen ? 'Close room index' : 'Open room index'}
+        aria-pressed={bookOpen}
+        data-tip="Room index — discovered rooms in this area"
+      >
+        <BookIcon />
+      </button>
+    </span>
   )
 
   // Legend shows every room type in the game so the key strip is a stable
@@ -229,11 +521,17 @@ export default function MapPanel({ character }: Props) {
       title="Map"
       titleExtra={titleExtra}
       meta={meta}
-      className="scanlines flicker"
+      className="flicker"
       noPad
     >
       <div className="mapp">
         <div className="mapp__grid-wrap">
+          {hasMultipleFloors && charInDisplayedArea && (
+            <span className="mapp__area-floor mapp__area-floor--floater">
+              <span className="mapp__area-floor-label">Floor</span>
+              <span className="mapp__area-floor-value">{position.z + 1}</span>
+            </span>
+          )}
           {hasAny ? (
             <div
               className="mapp__grid"
@@ -242,6 +540,40 @@ export default function MapPanel({ character }: Props) {
                 gridTemplateRows: `repeat(${bbox.maxY - bbox.minY + 1}, var(--mapp-cell))`,
               }}
             >
+              {[...seenInArea].map((key) => {
+                const [xs, ys, zs] = key.split(',')
+                const x = Number(xs)
+                const y = Number(ys)
+                const z = Number(zs)
+                const room = area.rooms[roomKey(x, y, z)]
+                const visual = room ? ROOM_TYPE_VISUALS[room.type] : undefined
+                return (
+                  <div
+                    key={`seen:${area.id}:${key}`}
+                    className="mapp__cell mapp__cell--seen"
+                    style={{
+                      gridColumn: x - bbox.minX + 1,
+                      gridRow: y - bbox.minY + 1,
+                      ['--mapp-glyph-color' as string]: visual?.color ?? 'var(--fg-2)',
+                    }}
+                    aria-label="Glimpsed room"
+                    data-tip="Glimpsed — step in to explore"
+                  >
+                    {visual && (
+                      <span
+                        className="mapp__glyph"
+                        style={
+                          visual.glyphScale
+                            ? { fontSize: `calc(var(--mapp-cell) * 0.55 * ${visual.glyphScale})` }
+                            : undefined
+                        }
+                      >
+                        {visual.glyph}
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
               {[...visitedInArea].map((key) => {
                 const [xs, ys, zs] = key.split(',')
                 const x = Number(xs)
@@ -289,6 +621,13 @@ export default function MapPanel({ character }: Props) {
                     ? isCurrent
                     : room?.type === hoveredLegend)
                 const isYouMatch = hoveredLegend === 'you' && isCurrent
+                // Predicted next step ghost overlay. Applies whenever the
+                // tick projection lands on this tile (but only when it's
+                // not the character's current cell — that already gets the
+                // brighter "here" treatment). `nextStepIsPortalHop` pushes
+                // the dashed-chevron variant, which reads as "step through"
+                // rather than "walk to".
+                const isNextStep = nextStepKey === key && !isCurrent
                 const baseTip = room
                   ? visual
                     ? `${room.name} · ${visual.label}`
@@ -312,6 +651,8 @@ export default function MapPanel({ character }: Props) {
                       (trailBand >= 0 && !isCurrent ? ' mapp__cell--trail' : '') +
                       (isLegendMatch ? ' mapp__cell--match' : '') +
                       (isYouMatch ? ' mapp__cell--match-you' : '') +
+                      (isNextStep ? ' mapp__cell--next' : '') +
+                      (isNextStep && nextStepIsPortalHop ? ' mapp__cell--next-portal' : '') +
                       (edgeN ? ' mapp__cell--edge-n' : '') +
                       (edgeS ? ' mapp__cell--edge-s' : '') +
                       (edgeE ? ' mapp__cell--edge-e' : '') +
@@ -331,12 +672,11 @@ export default function MapPanel({ character }: Props) {
                   >
                     {isCurrent ? (
                       <span
-                        className="mapp__you"
-                        style={{
-                          fontSize: `calc(var(--mapp-cell) * 0.55 * ${YOU_SCALE})`,
-                        }}
+                        className={`mapp__you mapp__you--${indicator.variant}`}
+                        aria-label={indicator.tip}
+                        data-tip={indicator.tip}
                       >
-                        @
+                        {indicator.glyph}
                       </span>
                     ) : visual ? (
                       <span
@@ -367,18 +707,18 @@ export default function MapPanel({ character }: Props) {
           <ul className="mapp__legend" aria-label="Map key">
           <li
             className="mapp__legend-item"
-            data-tip={charInDisplayedArea ? 'You are here' : 'You are elsewhere'}
+            data-tip={
+              charInDisplayedArea
+                ? indicator.tip
+                : `${indicator.tip} (elsewhere)`
+            }
             onPointerEnter={() => setHoveredLegend('you')}
             onPointerLeave={() => setHoveredLegend(null)}
           >
             <span
-              className="mapp__legend-glyph mapp__legend-glyph--you"
-              style={{
-                fontSize: `calc(var(--mapp-legend-size) * ${YOU_SCALE})`,
-                transform: `translateY(${YOU_Y_OFFSET}em)`,
-              }}
+              className={`mapp__legend-glyph mapp__legend-glyph--you mapp__legend-glyph--you-${indicator.variant}`}
             >
-              @
+              {indicator.glyph}
             </span>
           </li>
           {legendEntries.map(({ id, visual }) => {
@@ -418,6 +758,17 @@ export default function MapPanel({ character }: Props) {
           </ul>
           <div className="mapp__legend-label">{hoveredLabel ?? 'Legend'}</div>
         </div>
+        {bookOpen && (
+          <BookDialog
+            area={area}
+            displayedZ={displayedZ}
+            hasMultipleFloors={hasMultipleFloors}
+            visitedInArea={visitedInArea}
+            selectedKey={selectedRoomKey}
+            onSelect={setSelectedRoomKey}
+            onClose={() => setBookOpen(false)}
+          />
+        )}
       </div>
       <style>{`
         /* Cell size has been bumped twice — 22 → 33 → 50px — so rooms read
@@ -431,7 +782,24 @@ export default function MapPanel({ character }: Props) {
            Panel's own body padding was dropped (via noPad) to let the
            grid's black extend edge-to-edge. */
         .mapp__legend-group { display: flex; flex-direction: column; gap: 6px; padding: 0 var(--sp-3) var(--sp-3); }
-        .mapp__grid-wrap { flex: 1; min-height: 0; background: var(--bg-inset); padding: var(--sp-2); display: flex; align-items: center; justify-content: center; overflow: auto; }
+        /* Grid-wrap background reads as "undiscovered" — it fills both the
+           padding around the grid and the 2px gap between visited tiles.
+           Pure --bg-inset is near-black on most themes; mixing in a touch
+           of --fg-3 lifts the color just enough to distinguish "unexplored
+           terrain" from absolute black, without competing with the visited
+           tiles (--bg-2). 8% is intentionally subtle — pick it up on
+           attention, not at a glance. */
+        .mapp__grid-wrap {
+          flex: 1;
+          min-height: 0;
+          background: color-mix(in srgb, var(--bg-inset) 92%, var(--fg-3) 8%);
+          padding: var(--sp-2);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: auto;
+          position: relative;
+        }
         .mapp__grid { display: grid; gap: 2px; }
         /* Cell background layers: the base tile color, plus a trail-accent
            overlay controlled by --mapp-trail-alpha. The overlay is the
@@ -471,6 +839,22 @@ export default function MapPanel({ character }: Props) {
           transition: background var(--dur-base) var(--ease-crt);
         }
         .mapp__cell:hover { border-color: var(--line-3); }
+        /* Peeked tile — a same-floor neighbor of any visited room. The
+           character hasn't been there, but the map "glimpses" what's next
+           door. Renders the room-type glyph at low opacity over a
+           background mid-way between unexplored and explored, so the eye
+           reads the three states (unexplored / glimpsed / entered) as a
+           clear hierarchy. No edge highlight, trail, match, or stairs
+           overlay — those are reserved for explored territory. */
+        .mapp__cell--seen {
+          background: color-mix(in srgb, var(--bg-2) 55%, var(--bg-inset) 45%);
+          border-color: color-mix(in srgb, var(--line-1) 50%, transparent);
+          opacity: 0.55;
+        }
+        .mapp__cell--seen .mapp__glyph {
+          text-shadow: none;
+          color: color-mix(in srgb, var(--mapp-glyph-color, var(--fg-2)) 70%, transparent);
+        }
         /* Edge detection — sides of visited tiles with no visited neighbor
            on the same floor get a brighter, thicker border so the outline of
            the explored region reads at a glance. Sides adjacent to another
@@ -517,15 +901,46 @@ export default function MapPanel({ character }: Props) {
           box-shadow: 0 0 0 2px var(--accent-hot),
                       0 0 14px 2px var(--accent-hot);
         }
-        /* Player marker scales with the tile, matching the room-type glyph
-           size. Previously a fixed tiny font that vanished on 50px tiles.
-           position+z-index keep it above the trail overlay pseudo-element. */
+        /* Player marker — formerly a static "@" glyph, now whatever glyph
+           the ActivityIndicator picks for the current state (arrow when
+           traveling, ⚔ when fighting, Z when resting, etc.). Scales with
+           the tile to match room-type glyph size; each variant paints a
+           state-specific color and, for motion states, a subtle opacity
+           pulse that nudges the eye without competing with the main grid. */
         .mapp__you {
           position: relative;
           z-index: 1;
           line-height: 1;
           font-size: calc(var(--mapp-cell) * 0.6);
           font-weight: 700;
+          font-family: var(--font-mono);
+          text-shadow: 0 0 4px currentColor, 0 0 2px rgba(0, 0, 0, 0.75);
+        }
+        .mapp__you--idle { color: var(--accent-hot); }
+        .mapp__you--travel { color: var(--accent-hot); }
+        .mapp__you--travel-portal { color: var(--magic); }
+        .mapp__you--fight {
+          color: var(--bad);
+          animation: mapp-activity-pulse 1.1s var(--ease-crt) infinite;
+        }
+        .mapp__you--rest {
+          color: var(--good);
+          animation: mapp-activity-pulse 2.4s var(--ease-crt) infinite;
+        }
+        .mapp__you--meditate {
+          color: var(--magic);
+          animation: mapp-activity-pulse 2.8s var(--ease-crt) infinite;
+        }
+        .mapp__you--use-sell { color: #d4b24c; }
+        .mapp__you--use-portal {
+          color: var(--magic);
+          animation: mapp-activity-pulse 1.6s var(--ease-crt) infinite;
+        }
+        .mapp__you--use-shrine { color: var(--good); }
+        .mapp__you--use-satisfy { color: var(--accent-hot); }
+        .mapp__you--generating {
+          color: var(--fg-3);
+          animation: mapp-activity-pulse 1.4s var(--ease-crt) infinite;
         }
         /* Per-type glyph color injected by the cell style. Font size scales
            with cell size so the glyphs stay readable at any tile scale. */
@@ -608,76 +1023,672 @@ export default function MapPanel({ character }: Props) {
           vertical-align: middle;
           text-shadow: 0 0 3px currentColor;
         }
+        /* Legend "You" entry mirrors the on-map activity glyph's color
+           but intentionally does NOT inherit the per-variant pulse
+           animation — the legend is a static key, not a live pulse
+           indicator, and a flashing glyph down there reads as a bug.
+           The on-map marker still pulses; this block only sets colors. */
         .mapp__legend-glyph--you { color: var(--accent-hot); }
+        .mapp__legend-glyph--you-idle { color: var(--accent-hot); }
+        .mapp__legend-glyph--you-travel { color: var(--accent-hot); }
+        .mapp__legend-glyph--you-travel-portal { color: var(--magic); }
+        .mapp__legend-glyph--you-fight { color: var(--bad); }
+        .mapp__legend-glyph--you-rest { color: var(--good); }
+        .mapp__legend-glyph--you-meditate { color: var(--magic); }
+        .mapp__legend-glyph--you-use-sell { color: #d4b24c; }
+        .mapp__legend-glyph--you-use-portal { color: var(--magic); }
+        .mapp__legend-glyph--you-use-shrine { color: var(--good); }
+        .mapp__legend-glyph--you-use-satisfy { color: var(--accent-hot); }
+        .mapp__legend-glyph--you-generating { color: var(--fg-3); }
 
-        /* Panel meta used to render area name in tiny dim text that was easy
-           to overlook. It now reads as a display-font tag colored by area
-           rarity, with an optional floor prefix kept muted for contrast. */
+        /* Panel meta stacks two lines: area name on top, area kind below.
+           Right-aligned so each line hangs off the header's right edge
+           without the shorter kind chip drifting away from the name. */
         .mapp__area {
           display: inline-flex;
-          align-items: baseline;
-          gap: var(--sp-1);
-          font-family: var(--font-display);
-          font-size: var(--text-md);
-          letter-spacing: 0.06em;
-          text-transform: none;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 2px;
+          line-height: 1.1;
         }
+        /* Floor chip — split label + value with a vertical divider. The
+           --floater variant pins it to the top-right of the grid area so
+           the floor indicator sits over the map content, not the UI
+           chrome. Opaque bg + border so it stays legible over visited /
+           trail-lit tiles underneath. */
         .mapp__area-floor {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 2px 8px;
+          border: 1px solid var(--line-2);
+          background: var(--bg-inset);
           color: var(--fg-3);
           font-family: var(--font-mono);
           font-size: var(--text-xs);
           letter-spacing: 0.12em;
           text-transform: uppercase;
+          line-height: 1.2;
         }
-        .mapp__area-name {
-          text-shadow: 0 0 6px currentColor, 0 0 2px rgba(0, 0, 0, 0.6);
+        .mapp__area-floor--floater {
+          position: absolute;
+          top: var(--sp-2);
+          right: var(--sp-2);
+          z-index: 2;
+          pointer-events: none;
+          background: color-mix(in srgb, var(--bg-1) 88%, transparent);
+        }
+        .mapp__area-floor-label {
+          color: var(--fg-3);
+          letter-spacing: 0.14em;
+        }
+        .mapp__area-floor-value {
+          color: var(--fg-2);
           font-weight: 600;
+          padding-left: 6px;
+          border-left: 1px solid var(--line-2);
+        }
+        /* Area name — display-font tag. Intentionally matches
+           RoomDescPanel's .roomd__meta-name exactly (same font,
+           weight, case) so the two panel headers read as visual
+           parallels. The previous font-weight:600 made the name look
+           noticeably brighter/heavier than the equivalent room name. */
+        .mapp__area-name {
+          font-family: var(--font-display);
+          font-size: var(--text-md);
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          color: var(--fg-1);
+        }
+        /* Area-kind chip — intentionally smaller than the name above and
+           styled like RoomDescPanel's room-type meta so the two panels
+           read as parallel (area = whole place, room = this square). */
+        .mapp__area-kind {
+          font-family: var(--font-mono);
+          font-size: calc(var(--text-xs) * 0.9);
+          color: var(--fg-3);
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
         }
 
-        /* Pin toggle sits inline with the "MAP" title. The monospaced label
-           matches the meta/panel tone; the native checkbox is kept visible
-           because a labeled checkbox is a clearer affordance than a custom
-           icon in a panel header full of game text. */
-        .mapp__pin {
+        /* Header-control strip holds the pin + book icons. Each is a
+           flat icon button (no text label) so the Panel header stays
+           uncluttered; tooltips carry the long-form hint. */
+        .mapp__header-controls {
           display: inline-flex;
           align-items: center;
-          gap: 4px;
+          gap: 6px;
+        }
+        .mapp__pin,
+        .mapp__book {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 26px;
+          height: 26px;
+          padding: 0;
+          background: transparent;
+          border: 1px solid var(--line-2);
+          color: var(--fg-3);
+          cursor: pointer;
+          transition: border-color var(--dur-fast) var(--ease-crt),
+                      color var(--dur-fast) var(--ease-crt),
+                      box-shadow var(--dur-fast) var(--ease-crt);
+        }
+        .mapp__pin:hover,
+        .mapp__book:hover {
+          color: var(--fg-1);
+          border-color: var(--line-3);
+        }
+        .mapp__pin:focus-visible,
+        .mapp__book:focus-visible {
+          outline: none;
+          border-color: var(--line-3);
+          box-shadow: 0 0 0 1px var(--accent-hot);
+        }
+        /* Green-lit pin is the "pinned" signal — currentColor picks up
+           --good, so the inline SVG's stroke/fill glow green with a matching
+           border + halo. */
+        .mapp__pin--on {
+          color: var(--good);
+          border-color: var(--good);
+          box-shadow: 0 0 8px color-mix(in srgb, var(--good) 55%, transparent);
+        }
+        .mapp__pin--on:hover { color: var(--good); }
+        .mapp__book--on {
+          color: var(--accent-hot);
+          border-color: var(--accent-hot);
+        }
+
+        /* Book dialog — full-screen modal that opens over the game when
+           the book button is tapped. Replaces the former corner popover,
+           which cramped the room descriptions into a sidebar. Same visual
+           pattern as ConfirmDialog / HistoryDialog so the dialog style
+           reads as consistent across the app. Layout is two-pane: a
+           scrollable room list on the left, a detail view on the right
+           carrying description + origin metadata. */
+        .mapp__book-modal {
+          position: fixed;
+          inset: 0;
+          z-index: 1000;
+          background: rgba(0, 0, 0, 0.78);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: var(--sp-4);
+        }
+        .mapp__book-card {
+          position: relative;
+          width: 100%;
+          max-width: 960px;
+          max-height: 85vh;
+          background: var(--bg-1);
+          border: 1px solid var(--line-3);
+          padding: var(--sp-5) var(--sp-5) var(--sp-4);
+          display: flex;
+          flex-direction: column;
+          gap: var(--sp-3);
+          font-family: var(--font-mono);
+        }
+        .mapp__book-card > .mapp__book-corner {
+          position: absolute;
+          font-family: var(--font-mono);
+          font-size: var(--text-md);
+          line-height: 1;
+          color: var(--line-3);
+          pointer-events: none;
+          user-select: none;
+        }
+        .mapp__book-corner--tl { top: -6px; left: -4px; }
+        .mapp__book-corner--tr { top: -6px; right: -4px; }
+        .mapp__book-corner--bl { bottom: -6px; left: -4px; }
+        .mapp__book-corner--br { bottom: -6px; right: -4px; }
+        .mapp__book-head {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: var(--sp-3);
+          border-bottom: 1px solid var(--line-1);
+          padding-bottom: var(--sp-2);
+        }
+        .mapp__book-title {
+          font-family: var(--font-display);
+          font-size: var(--text-xl);
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: var(--accent-hot);
+          text-shadow: var(--glow-md);
+        }
+        .mapp__book-count {
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          color: var(--fg-3);
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+        }
+        .mapp__book-close {
+          background: transparent;
+          border: none;
+          color: var(--fg-3);
+          cursor: pointer;
+          font-family: inherit;
+          font-size: var(--text-lg);
+          padding: 2px 8px;
+          line-height: 1;
+        }
+        .mapp__book-close:hover,
+        .mapp__book-close:focus-visible {
+          color: var(--accent-hot);
+          outline: none;
+        }
+        /* Two-pane body: list left (fixed narrow), detail right (fluid).
+           Collapses to a single-column stack below 640px so the room
+           detail isn't squeezed on narrow viewports. */
+        .mapp__book-body {
+          display: grid;
+          grid-template-columns: minmax(220px, 300px) 1fr;
+          gap: var(--sp-4);
+          min-height: 0;
+          flex: 1;
+        }
+        @media (max-width: 640px) {
+          .mapp__book-body { grid-template-columns: 1fr; }
+        }
+        .mapp__book-list {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+          overflow-y: auto;
+          border: 1px solid var(--line-1);
+          background: var(--bg-inset);
+          min-height: 0;
+        }
+        .mapp__book-row {
+          width: 100%;
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          gap: var(--sp-2);
+          padding: 6px var(--sp-2);
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid var(--line-1);
+          color: var(--fg-1);
+          font-family: inherit;
+          font-size: var(--text-xs);
+          text-align: left;
+          cursor: pointer;
+        }
+        .mapp__book-row:hover,
+        .mapp__book-row:focus-visible {
+          background: var(--bg-2);
+          outline: none;
+        }
+        .mapp__book-row--active {
+          background: var(--bg-2);
+          color: var(--accent-hot);
+          box-shadow: inset 3px 0 0 var(--accent-hot);
+        }
+        .mapp__book-row-name {
+          flex: 1;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .mapp__book-row-meta {
+          display: inline-flex;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 1px;
+          color: var(--fg-3);
+          font-size: var(--text-xs);
+          letter-spacing: 0.04em;
+          white-space: nowrap;
+        }
+        .mapp__book-row-rarity {
+          font-variant-caps: all-small-caps;
+          letter-spacing: 0.06em;
+          font-size: calc(var(--text-xs) * 0.95);
+        }
+        .mapp__book-row-type {
+          color: var(--fg-3);
+          font-size: calc(var(--text-xs) * 0.9);
+        }
+        /* Detail pane — fills the right column and scrolls independently
+           when the description overflows. Arranged as a stack so
+           title > metadata grid > prose description stays readable at
+           any width. */
+        .mapp__book-detail {
+          display: flex;
+          flex-direction: column;
+          gap: var(--sp-3);
+          padding: var(--sp-3);
+          border: 1px solid var(--line-1);
+          background: var(--bg-inset);
+          overflow-y: auto;
+          min-height: 0;
+        }
+        .mapp__book-detail-placeholder {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: var(--sp-5);
+          color: var(--fg-3);
+          font-family: var(--font-body);
+          font-style: italic;
+          text-align: center;
+        }
+        .mapp__book-detail-title {
+          margin: 0;
+          color: var(--fg-1);
+          font-family: var(--font-display);
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          font-size: var(--text-lg);
+          text-shadow: var(--glow-sm);
+        }
+        .mapp__book-detail-typerow {
+          display: flex;
+          gap: var(--sp-3);
+          flex-wrap: wrap;
+          color: var(--fg-3);
           font-family: var(--font-mono);
           font-size: var(--text-xs);
           letter-spacing: 0.08em;
           text-transform: uppercase;
+        }
+        .mapp__book-detail-desc {
+          color: var(--fg-1);
+          font-family: var(--font-body);
+          font-size: var(--text-sm);
+          line-height: 1.6;
+          white-space: pre-line;
+        }
+        /* Provenance block — stamped once per area from the GenerationMeta
+           when the LLM produced it. Every row in the list shares the same
+           origin because the area itself was generated in one call, but
+           surfacing it in the detail pane reads as "this room came from
+           here." Authored areas (no stamp) render a short fallback.
+           margin-top: auto pins it to the bottom of the detail-pane flex
+           column so the footer sits as a card-footer regardless of
+           description length. */
+        .mapp__book-origin {
+          margin-top: auto;
+          display: grid;
+          grid-template-columns: auto 1fr;
+          gap: 4px var(--sp-3);
+          padding: var(--sp-2);
+          background: var(--bg-2);
+          border: 1px solid var(--line-1);
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          line-height: 1.5;
+        }
+        .mapp__book-origin-label {
           color: var(--fg-3);
-          cursor: pointer;
-          user-select: none;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          font-size: calc(var(--text-xs) * 0.92);
         }
-        .mapp__pin:hover { color: var(--fg-2); }
-        /* Custom checkbox — the native one renders bright white on dark
-           themes and never picks up the theme's phosphor tone. Strip the
-           UA look (appearance: none) and draw a square in --fg-3 that
-           fills with --accent-hot when checked. */
-        .mapp__pin-input {
-          appearance: none;
-          -webkit-appearance: none;
-          margin: 0;
-          width: 12px;
-          height: 12px;
-          border: 1px solid var(--fg-3);
-          background: transparent;
-          cursor: pointer;
-          display: inline-block;
-          vertical-align: middle;
-          transition: border-color var(--dur-fast) var(--ease-crt),
-                      background var(--dur-fast) var(--ease-crt);
+        .mapp__book-origin-value { color: var(--fg-1); }
+        /* Authored fallback — rendered as a standalone footer paragraph,
+           NOT inside the origin box, so it reads as its own element and
+           doesn't visually blur into either the description or the
+           metadata block. Italic body font + muted color + a light
+           top border float it as a caption beneath the room card.
+           margin-top: auto pushes it to the bottom of the flex column
+           for the same card-footer anchoring as .mapp__book-origin. */
+        .mapp__book-authored {
+          margin: auto 0 0;
+          padding-top: var(--sp-2);
+          border-top: 1px solid var(--line-1);
+          color: var(--fg-3);
+          font-family: var(--font-body);
+          font-style: italic;
+          font-size: var(--text-xs);
         }
-        .mapp__pin-input:hover { border-color: var(--fg-2); }
-        .mapp__pin-input:checked {
-          background: var(--accent-hot);
-          border-color: var(--accent-hot);
-          box-shadow: inset 0 0 0 2px var(--bg-1);
+        .mapp__book-empty {
+          padding: var(--sp-5);
+          color: var(--fg-3);
+          font-style: italic;
+          font-family: var(--font-body);
+          text-align: center;
         }
-        .mapp__pin-label { line-height: 1; }
-        .mapp__pin:has(.mapp__pin-input:checked) { color: var(--accent-hot); }
+
+        /* Next-step indicator — ghost highlight on the predicted tile that
+           the character is about to walk into. Paired with the directional
+           variants of the player marker (.mapp__you--travel /
+           --travel-portal) the reader can see "about to walk NE" before
+           the tick fires — useful when portals teleport the player across
+           the map. */
+        .mapp__cell--next {
+          outline: 1px dashed color-mix(in srgb, var(--accent-hot) 75%, transparent);
+          outline-offset: -3px;
+          box-shadow: inset 0 0 10px color-mix(in srgb, var(--accent-hot) 22%, transparent);
+        }
+        .mapp__cell--next-portal {
+          outline-style: dashed;
+          outline-color: color-mix(in srgb, var(--magic) 80%, transparent);
+          box-shadow: inset 0 0 12px color-mix(in srgb, var(--magic) 30%, transparent),
+                      0 0 10px color-mix(in srgb, var(--magic) 30%, transparent);
+        }
+        /* Shared pulse keyframe used by the per-variant .mapp__you--*
+           rules above. Kept here (rather than inline with the player
+           marker) so the legend "You" glyph can reuse it. */
+        @keyframes mapp-activity-pulse {
+          0%, 100% { opacity: 0.95; }
+          50% { opacity: 0.45; }
+        }
+
       `}</style>
     </Panel>
+  )
+}
+
+// Formats a wall-clock timestamp as "YYYY-MM-DD HH:MM" so the origin block
+// in the book dialog can pair it with a relative "3 days ago" line, matching
+// the existing HistoryDialog two-line time treatment.
+function formatOriginTimestamp(ms: number): string {
+  const d = new Date(ms)
+  const yyyy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`
+}
+
+// Fixed attribution + date for hand-authored areas that ship with the
+// game. Renders in the same "when / by whom" footer position as
+// LLM-generated provenance so both kinds of rooms carry parallel
+// metadata. The date is the day the authored area set first landed in
+// the repo (git history anchor point); edits since then are tracked by
+// version control, not per-area.
+const AUTHORED_BY = 'Promptland'
+const AUTHORED_AT_MS = new Date('2026-04-22').getTime()
+
+// Book dialog — centered full-screen modal listing every visited room on
+// the currently displayed floor, alphabetized, with rarity/level. Click a
+// row to reveal the room's description plus its area-level provenance
+// (who triggered the LLM that created it, when, and with which model).
+// Purely read-only — a reference index, not a navigation control, so
+// fog-of-war still governs what can be seen (we drive directly off
+// `visitedInArea`).
+function BookDialog({
+  area,
+  displayedZ,
+  hasMultipleFloors,
+  visitedInArea,
+  selectedKey,
+  onSelect,
+  onClose,
+}: {
+  area: Area
+  displayedZ: number
+  hasMultipleFloors: boolean
+  visitedInArea: Set<string>
+  selectedKey: string | null
+  onSelect: (key: string | null) => void
+  onClose: () => void
+}) {
+  type BookRow = {
+    key: string
+    name: string
+    typeLabel: string
+    room: Room
+  }
+  // Rooms don't carry their own rarity/level; borrow them from the enclosing
+  // area so every row shares the same {rarity · Lx} badge. Pre-compute once
+  // per area render so the row loop stays cheap.
+  const areaRarity = area.rarity ?? 'common'
+  const areaLevel = area.level
+  const rarityBadge =
+    areaLevel != null
+      ? `${rarityLabel(areaRarity)} · Lv ${areaLevel}`
+      : rarityLabel(areaRarity)
+  const rows: BookRow[] = useMemo(() => {
+    const out: BookRow[] = []
+    for (const key of visitedInArea) {
+      const room = area.rooms[key]
+      if (!room) continue
+      if (room.z !== displayedZ) continue
+      out.push({
+        key,
+        name: room.name,
+        typeLabel: ROOM_TYPE_VISUALS[room.type]?.label ?? '',
+        room,
+      })
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name))
+    return out
+  }, [area, displayedZ, visitedInArea])
+
+  const selected = selectedKey
+    ? rows.find((r) => r.key === selectedKey) ?? null
+    : null
+
+  // Close on Escape — matches other modals (ConfirmDialog, HistoryDialog).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  // Title reflects the area (and floor when the area is multi-level) so
+  // the player can tell at a glance which slice of the world this is.
+  const titleText = hasMultipleFloors
+    ? `${area.name} · Floor ${displayedZ + 1}`
+    : area.name
+
+  // Portal to document.body so the modal escapes the MapPanel's ancestor
+  // stacking contexts — inside the panel tree the z-index was competing
+  // with the log column and could open behind it.
+  if (typeof document === 'undefined') return null
+  return createPortal(
+    <div
+      className="mapp__book-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Room index"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="mapp__book-card" role="document">
+        <span className="mapp__book-corner mapp__book-corner--tl" aria-hidden="true">┏</span>
+        <span className="mapp__book-corner mapp__book-corner--tr" aria-hidden="true">┓</span>
+        <span className="mapp__book-corner mapp__book-corner--bl" aria-hidden="true">┗</span>
+        <span className="mapp__book-corner mapp__book-corner--br" aria-hidden="true">┛</span>
+
+        <div className="mapp__book-head">
+          <span className="mapp__book-title">{titleText}</span>
+          <span className="mapp__book-count">
+            {rows.length} room{rows.length === 1 ? '' : 's'}
+          </span>
+          <button
+            type="button"
+            className="mapp__book-close"
+            onClick={onClose}
+            aria-label="Close room index"
+          >
+            ×
+          </button>
+        </div>
+        {rows.length === 0 ? (
+          <div className="mapp__book-empty">No rooms discovered on this floor.</div>
+        ) : (
+          <div className="mapp__book-body">
+            <ul className="mapp__book-list">
+              {rows.map((row) => (
+                <li key={row.key}>
+                  <button
+                    type="button"
+                    className={
+                      'mapp__book-row' +
+                      (row.key === selectedKey ? ' mapp__book-row--active' : '')
+                    }
+                    onClick={() =>
+                      onSelect(row.key === selectedKey ? null : row.key)
+                    }
+                  >
+                    <span className="mapp__book-row-name">{row.name}</span>
+                    {row.typeLabel && (
+                      <span className="mapp__book-row-type">{row.typeLabel}</span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="mapp__book-detail">
+              {selected ? (
+                <BookDetail
+                  area={area}
+                  row={selected}
+                  rarityBadge={rarityBadge}
+                />
+              ) : (
+                <div className="mapp__book-detail-placeholder">
+                  Select a room to see its description and origin.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+// Detail pane — one-row-at-a-time view on the right side of the book.
+// Pulls description from the Room and provenance from the containing Area.
+// Rooms of an LLM-generated area share that area's {generatedAt,
+// createdBy, createdByModel} stamp; authored areas have none of those
+// and render an abbreviated block.
+function BookDetail({
+  area,
+  row,
+  rarityBadge,
+}: {
+  area: Area
+  row: { name: string; typeLabel: string; room: Room }
+  rarityBadge: string
+}) {
+  const { room } = row
+  const origin: Array<{ label: string; value: string }> = []
+  if (area.createdBy) {
+    origin.push({ label: 'Discovered by', value: area.createdBy })
+  }
+  if (area.generatedAt) {
+    const abs = formatOriginTimestamp(area.generatedAt)
+    const rel = formatRelative(area.generatedAt)
+    origin.push({ label: 'Created', value: `${abs} (${rel})` })
+  }
+  if (area.createdByModel) {
+    origin.push({ label: 'Generated by', value: area.createdByModel })
+  }
+  const isAuthored = !area.createdBy && !area.generatedAt
+  return (
+    <>
+      <h3 className="mapp__book-detail-title">{row.name}</h3>
+      {/* Card-style meta row: rarity+level on the left and the room type
+          on the right. Both use the typerow's default muted theme color
+          — the tier is communicated by the word itself (UNCOMMON, EPIC,
+          etc.), not a separate tint, so the line reads as one consistent
+          meta caption instead of two competing colors. */}
+      <div className="mapp__book-detail-typerow">
+        <span className="mapp__book-detail-rarity">{rarityBadge}</span>
+        {row.typeLabel && <span>{row.typeLabel}</span>}
+      </div>
+      <div className="mapp__book-detail-desc">{room.description}</div>
+      {/* Provenance footer, anchored to the bottom of the detail pane so
+          it always reads as a card footer even when the description is
+          short. Generated areas get the boxed key/value metadata;
+          authored areas get a parallel "by whom + when" caption outside
+          the box so it reads as its own element distinct from the
+          description above it. */}
+      {origin.length > 0 && (
+        <div className="mapp__book-origin">
+          {origin.map(({ label, value }) => (
+            <span key={label} style={{ display: 'contents' }}>
+              <span className="mapp__book-origin-label">{label}</span>
+              <span className="mapp__book-origin-value">{value}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {isAuthored && (
+        <p className="mapp__book-authored">
+          Authored by {AUTHORED_BY} · {formatOriginTimestamp(AUTHORED_AT_MS)}{' '}
+          ({formatRelative(AUTHORED_AT_MS)})
+        </p>
+      )}
+    </>
   )
 }

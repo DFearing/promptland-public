@@ -1,0 +1,46 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`logMeta: title-arc snapshot > produces stable display names + log lines across the arc 1`] = `
+[
+  {
+    "display": "Wayfarer",
+    "gold": "Wayfarer pockets 7 gold.",
+    "greeting": "Wayfarer",
+    "label": "birth",
+    "level": 1,
+    "meditate": "Wayfarer's meditation ends, focused sharply, feeling measurably restored. (+3 MP · +4 HP)",
+    "milestone": "Wayfarer Hiro",
+    "rest": "Wayfarer finishes resting, feeling measurably restored. (+4 HP)",
+  },
+  {
+    "display": "Hiro",
+    "gold": "Hiro pockets 7 gold.",
+    "greeting": "Swordhand Hiro",
+    "label": "introduced",
+    "level": 6,
+    "meditate": "Hiro's meditation ends, focused sharply, feeling measurably restored. (+3 MP · +4 HP)",
+    "milestone": "Swordhand Hiro",
+    "rest": "Hiro finishes resting, feeling measurably restored. (+4 HP)",
+  },
+  {
+    "display": "Hearthguard Hiro",
+    "gold": "Hearthguard Hiro pockets 7 gold.",
+    "greeting": "Hearthguard Hiro",
+    "label": "known",
+    "level": 16,
+    "meditate": "Hearthguard Hiro's meditation ends, focused sharply, feeling measurably restored. (+3 MP · +4 HP)",
+    "milestone": "Hearthguard Hiro",
+    "rest": "Hearthguard Hiro finishes resting, feeling measurably restored. (+4 HP)",
+  },
+  {
+    "display": "Hiro the Knight-Commander",
+    "gold": "Hiro the Knight-Commander pockets 7 gold.",
+    "greeting": "Hiro the Knight-Commander",
+    "label": "legendary",
+    "level": 30,
+    "meditate": "Hiro the Knight-Commander's meditation ends, focused sharply, feeling measurably restored. (+3 MP · +4 HP)",
+    "milestone": "Hiro the Knight-Commander",
+    "rest": "Hiro the Knight-Commander finishes resting, feeling measurably restored. (+4 HP)",
+  },
+]
+`;

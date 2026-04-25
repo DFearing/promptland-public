@@ -1,6 +1,5 @@
 export type {
   ClassOption,
-  GenderOption,
   SpeciesOption,
   WorldContent,
   WorldManifest,

@@ -7,6 +7,11 @@ import {
   isTickSpeedId,
 } from './catalog'
 import {
+  applyCustomThemeTokens,
+  clearCustomThemeTokens,
+  loadCustomTheme,
+} from './customTheme'
+import {
   FIELD_DURATION_MAX_MS,
   FIELD_DURATION_MIN_MS,
   type Effects,
@@ -28,7 +33,6 @@ export const DEFAULT_EFFECTS: Effects = {
     damage: true,
     heal: true,
     levelUpBanner: true,
-    levelUpConfetti: true,
     death: true,
     newArea: true,
   },
@@ -47,6 +51,7 @@ export const DEFAULT_EFFECTS: Effects = {
     gold: true,
     durationMs: 1000,
   },
+  sheetNumbers: true,
 }
 
 export function loadTheme(): ThemeId {
@@ -68,6 +73,14 @@ export function saveTheme(id: ThemeId): void {
 
 export function applyTheme(id: ThemeId): void {
   document.documentElement.setAttribute('data-theme', id)
+  // Custom theme paints its tokens inline on the root element so they
+  // override the stylesheet-authored defaults. Non-custom themes strip
+  // those inline vars so switching away doesn't leave old color bleed.
+  if (id === 'custom') {
+    applyCustomThemeTokens(loadCustomTheme())
+  } else {
+    clearCustomThemeTokens()
+  }
 }
 
 export function loadScale(): ScaleId {
@@ -161,7 +174,6 @@ export function loadEffects(): Effects {
         damage: pickBool(fs.damage ?? fs.damageFlash, DEFAULT_EFFECTS.fullscreen.damage),
         heal: pickBool(fs.heal, DEFAULT_EFFECTS.fullscreen.heal),
         levelUpBanner: pickBool(fs.levelUpBanner, DEFAULT_EFFECTS.fullscreen.levelUpBanner),
-        levelUpConfetti: pickBool(fs.levelUpConfetti, DEFAULT_EFFECTS.fullscreen.levelUpConfetti),
         death: pickBool(fs.death ?? fs.deathBanner, DEFAULT_EFFECTS.fullscreen.death),
         newArea: pickBool(fs.newArea ?? fs.portal, DEFAULT_EFFECTS.fullscreen.newArea),
       },
@@ -183,6 +195,7 @@ export function loadEffects(): Effects {
             ? clampDuration(f.durationMs)
             : DEFAULT_EFFECTS.fields.durationMs,
       },
+      sheetNumbers: pickBool(parsed.sheetNumbers, DEFAULT_EFFECTS.sheetNumbers),
     }
   } catch {
     return {

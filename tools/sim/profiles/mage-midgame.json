@@ -1,0 +1,15 @@
+{
+  "startingCharacter": {
+    "world": "fantasy",
+    "species": "elf",
+    "class": "mage",
+    "name": "Mage Midgame"
+  },
+  "goals": [
+    { "level": 3, "medianMinutes": 4, "toleranceMinutes": 1 },
+    { "level": 5, "medianMinutes": 12, "toleranceMinutes": 3 },
+    { "level": 7, "medianMinutes": 25, "toleranceMinutes": 6 }
+  ],
+  "seeds": 50,
+  "maxTicks": 8000
+}

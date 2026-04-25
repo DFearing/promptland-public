@@ -17,6 +17,8 @@ export {
 } from './config'
 export { KEYLESS_HOSTS, LLM_PRESETS, type LLMPreset } from './presets'
 export {
+  AREA_LEVEL_OFFSET_MIN,
+  AREA_LEVEL_OFFSET_RANGE,
   TEMPLATES,
   areaFlavorTemplate,
   areaGenTemplate,
@@ -79,6 +81,13 @@ export {
   rehydrateBespokeItems,
   storeBespokeItem,
 } from './bespokeItems'
+export {
+  CURATED_ITEM_FLAVOR_TEMPLATE_ID,
+  getCuratedItemFlavor,
+  requestCuratedItemFlavor,
+  storeCuratedItemFlavor,
+  type CuratedItemFlavor,
+} from './curatedItemFlavor'
 export { deriveCacheKey, type CacheKeyInputs } from './cacheKey'
 export {
   generate,

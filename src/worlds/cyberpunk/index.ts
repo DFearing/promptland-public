@@ -13,4 +13,10 @@ export const CYBERPUNK_CONTENT: WorldContent = {
   startingArea: CYBERPUNK_START_AREA,
   conditions: CYBERPUNK_CONDITIONS,
   context: CYBERPUNK_CONTEXT,
+  shopInventory: [
+    { itemId: 'stim_patch', price: 16, maxStock: 4 },
+    { itemId: 'neural_cap', price: 20, maxStock: 3 },
+    { itemId: 'nutrichip_implant', price: 130, maxStock: 1 },
+    { itemId: 'neural_relaxant_dose', price: 150, maxStock: 1 },
+  ],
 }

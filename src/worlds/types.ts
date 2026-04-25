@@ -33,6 +33,11 @@ export interface ItemTemplate {
   quantity?: number
 }
 
+/** Short stat code used by class primary/secondary declarations. Matches the
+ *  three-letter abbreviations surfaced in the SheetPanel (STR / DEX / CON /
+ *  INT / WIS / CHA). */
+export type StatCode = 'STR' | 'DEX' | 'CON' | 'INT' | 'WIS' | 'CHA'
+
 export interface ClassOption {
   id: string
   name: string
@@ -45,16 +50,18 @@ export interface ClassOption {
   startingSpells?: string[]
   /** Growth contribution on every level-up. Stacks with species.growth. */
   growth?: Growth
+  /** The two stats this class leans on most — surfaced on class selection
+   *  cards as a quick readout of what the class is about. Order matters only
+   *  for display (primary reads first). */
+  primaryStats: [StatCode, StatCode]
+  /** One supporting stat the class also cares about, ranked below the
+   *  primaries on the card. */
+  secondaryStat: StatCode
   /** Titles earned by this class, positional: index 0 = level 2, index 1 = 3,
    *  …, index 23 = 25, index 24 = 30, index 25 = 35, …, index 38 = 100. 39
    *  entries total. Level 1 uses the world's birthTitle. Levels past 100 are
    *  LLM-generated on demand. See src/character/titles.ts for the math. */
   titles?: string[]
-}
-
-export interface GenderOption {
-  id: string
-  name: string
 }
 
 export interface WorldManifest {
@@ -64,7 +71,6 @@ export interface WorldManifest {
   description: string
   species: SpeciesOption[]
   classes: ClassOption[]
-  genders: GenderOption[]
   /** Display name for the per-world magic/tech/psionic stat (e.g. "Arcana", "Hack", "Psionics"). */
   magicName: string
   /** Three-letter abbreviation for the magic stat (e.g. "ARC", "HAX", "PSY"). */
@@ -82,6 +88,13 @@ export interface WorldManifest {
   /** Level-1 title shared by every class in this world. Classes diverge from
    *  level 2 onward via their own `titles` ladder. */
   birthTitle?: string
+  /** One-line introduction emitted on character creation that ties the
+   *  player's chosen name to the world's birthTitle. Uses `{name}` as the
+   *  placeholder. The log spends the first tier rendering the character
+   *  as their title alone ("The Wayfarer stands in the Cave…") — this
+   *  line is the only place the reader learns the name behind that
+   *  title early on. Fires only on discovery, not on save reload. */
+  birthIntro?: string
   /** Thematic response to an item-sacrifice. Plugged into the sacrifice log
    *  line as: `{name} sacrifices N item(s). {sacrificePhrase} N {currency}.`
    *  Fantasy: "The gods smile and give". Optional — defaults to that phrase. */

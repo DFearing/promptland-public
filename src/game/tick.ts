@@ -1,21 +1,35 @@
 import {
   manhattan,
   neighborsOf,
-  randomStep,
   roomKey,
   stepTowards,
   visitedKey,
   type Area,
   type Position,
 } from '../areas'
+import { Rng } from '../rng'
 import type { Character, DeathRecord, LevelSegment, LevelUpRecord } from '../character'
-import { resolveTitle, titleIndexForLevel, xpToNextLevel } from '../character'
-import { damageVerb } from '../combat'
-import { applyCondition, clearConditions, tickConditions } from '../conditions'
-import { RARITIES, rollMobRarity, type Rarity } from '../items'
-import type { LogEntry } from '../log'
-import { spawn, type Mob } from '../mobs'
-import { castSpell, getSpell } from '../spells'
+import { formatActorName, resolveTitle, titleIndexForLevel, xpToNextLevel } from '../character'
+import {
+  damageVerb,
+  deathClause,
+  deathSentence,
+  formatAttackLog,
+  levelScaleIncoming,
+  levelScaleOutgoing,
+  type DamageFamily,
+} from '../combat'
+import { applyCondition, applyMobCondition, clearConditions, tickConditions } from '../conditions'
+import { RARITIES, rollMobRarity, type Rarity, type ScrollLevel } from '../items'
+import type { DamageSeverity, LogEntry } from '../log'
+import { mobResistMultiplier, spawn, type Mob } from '../mobs'
+import {
+  castSpell,
+  getSpell,
+  registerGeneratedSpell,
+  spellUnlocksAt,
+  type SpellDef,
+} from '../spells'
 import { getWorldManifest, type WorldContent, type WorldManifest } from '../worlds'
 import {
   DRIVE_THRESHOLD,
@@ -26,15 +40,42 @@ import {
   type Drives,
 } from './drives'
 import { maybeAutoConsume } from './consume'
+import { driveShiftLine } from './driveFlavor'
+import { deriveJournalEntries } from './journal'
 import { applyDeathPenalty } from './death'
-import { applyAutoEquip, combatBonuses, equipLogEntry, isRedundantEquip } from './equip'
-import { applyDrops, rollCuratedLoot, rollLoot, type Drops, type RewardContext } from './loot'
+import {
+  applyAutoEquip,
+  buffMultipliers,
+  combatBonuses,
+  equipLogEntry,
+  isRedundantEquip,
+} from './equip'
+import {
+  formatCombinedKillLog,
+  formatGoldPickupLog,
+  formatMeditateSummaryLog,
+  formatMobDefeatLog,
+  formatMobSelfHealLog,
+  formatRestSummaryLog,
+} from './logLines'
+import {
+  applyChestEntries,
+  applyDrops,
+  combatRewardMult,
+  resolveChestDrops,
+  rollCuratedLoot,
+  rollDropRarity,
+  rollLoot,
+  type Drops,
+  type RewardContext,
+} from './loot'
+import { pickItemsToSacrifice } from './sacrifice'
 import { pickItemsToSell } from './sell'
 import type { GameState } from './state'
 import type { TickSpeedId } from '../themes/types'
 import { weightDriveValue } from './weight'
 
-const LOG_CAP = 200
+export const LOG_CAP = 200
 
 function getArea(world: WorldContent, areaId: string): Area {
   return world.areas?.find((a) => a.id === areaId) ?? world.startingArea
@@ -55,8 +96,26 @@ const LEVEL_UP_VERBS = [
   'breaks through',
 ]
 
-function pickLevelUpVerb(): string {
-  return LEVEL_UP_VERBS[Math.floor(Math.random() * LEVEL_UP_VERBS.length)]
+function pickLevelUpVerb(rng: Rng): string {
+  return rng.pick(LEVEL_UP_VERBS)
+}
+
+// Funny rotations for the title-earned chapter line. All take bare name
+// + bare title text — the line announces a fresh title, so it shouldn't
+// route through formatActorName (which would try to pre-apply that very
+// title). Tone is wry / understated, matching the dry game voice.
+const TITLE_EARNED_LINES: Array<(name: string, title: string) => string> = [
+  (n, t) => `Now everyone's gotta call ${n} the ${t}.`,
+  (n, t) => `${n}'s a ${t} now, apparently.`,
+  (n, t) => `Word's getting around. They're calling ${n} the ${t}.`,
+  (n, t) => `The archive scratches in another line: ${n}, the ${t}.`,
+  (n, t) => `Add another line to the books — ${n}, the ${t}.`,
+  (n, t) => `${n} has earned a new title: ${t}. Whether ${n} wanted one or not.`,
+]
+
+function pickTitleEarnedLine(name: string, title: string, rng: Rng): string {
+  const fn = rng.pick(TITLE_EARNED_LINES)
+  return fn(name, title)
 }
 
 function rarityRank(r: Rarity): number {
@@ -91,7 +150,7 @@ const REST_CHANCE = 0.12
 const REST_DURATION = 6
 const REST_HEAL = 2
 const REST_FATIGUE_RELIEF = 15
-const ENCOUNTER_CHANCE = 0.18
+const ENCOUNTER_CHANCE = 0.30
 /** Minimum INT *or* WIS the character needs before they're willing to sit
  *  and meditate. Keeps the behaviour plausible for spellcasters and wise
  *  classes, without accidentally gating fighter-type characters. */
@@ -114,7 +173,18 @@ const MEDITATE_FORCE_MP_RATIO = 0.5
  *  cloud starts. If the LLM responds sooner the .then() callback in
  *  App.tsx transitions out immediately regardless of ticksLeft, so this
  *  is purely a network-failure bail-out. */
-const AREA_GEN_TIMEOUT_TICKS = 120
+export const AREA_GEN_TIMEOUT_TICKS = 120
+/** Locked-chest pacing constants. Drops accumulate in `character.lockedChest`
+ *  for `BASE + items.length × PER_ITEM` ticks (capped at MAX) before the
+ *  chest unlatches and the items merge into inventory. The wait is the
+ *  diegetic surface that hides any post-combat asynchrony — issue #75
+ *  per-descriptor sprite generation runs invisibly inside this window
+ *  when that lands. Values tuned so a typical kill (1–2 items) waits ~6–10s
+ *  at 1× tick speed (TICK_MS.exploring = 2s) — long enough for the player
+ *  to register the chest, short enough to avoid feeling padded. */
+const CHEST_BASE_TICKS = 3
+const CHEST_PER_ITEM_TICKS = 1
+const CHEST_MAX_TICKS = 12
 /** Ticks the character refuses to re-enter rest / meditate after exiting one
  *  of them. Stops the meditate → rest chain in the same room and forces them
  *  to take at least one exploration tick before sitting back down. */
@@ -132,11 +202,75 @@ const EXPLORE_GROWTH: Partial<Drives> = {
   curiosity: 4,
 }
 
-// Resting and meditating pause hunger intentionally — the character is
-// sitting/eating/praying, not actively burning through food.
+// Resting and meditating slow hunger relative to EXPLORE_GROWTH's rate
+// (3/tick). Resting is an active-rest breather — the body still burns
+// calories, just at 40%. Meditating is a mind discipline with almost no
+// physical exertion — 25%. Fractional deltas are fine: `grow()` clamps
+// to DRIVE_MAX and every UI readout rounds before display.
+const REST_HUNGER_PER_TICK = 3 * 0.40
+const MEDITATE_HUNGER_PER_TICK = 3 * 0.25
+
 const REST_GROWTH: Partial<Drives> = {
+  hunger: REST_HUNGER_PER_TICK,
   greed: 1,
   curiosity: 1,
+}
+
+const MEDITATE_GROWTH: Partial<Drives> = {
+  hunger: MEDITATE_HUNGER_PER_TICK,
+  greed: 1,
+  curiosity: 1,
+}
+
+/** Rest / meditate restorative gains accelerate the longer the character
+ *  stays in the state. Multiplier is `1 + STREAK_GROWTH_PER_TICK *
+ *  ticksElapsed`, capped at STREAK_MAX_MULT. Tuned so a long sit-down in
+ *  a safe room pays off roughly 2-3× the first tick's restore around
+ *  the 15-tick mark, with diminishing returns beyond. */
+const STREAK_GROWTH_PER_TICK = 0.05
+const STREAK_MAX_MULT = 3
+
+function streakMultiplier(ticksElapsed: number): number {
+  return Math.min(STREAK_MAX_MULT, 1 + STREAK_GROWTH_PER_TICK * Math.max(0, ticksElapsed))
+}
+
+/** Filler lines used by the cadenced "nothing much happens" beat. Split
+ *  by kind — rest gets physical filler, meditate gets mental filler —
+ *  so the voice matches the action. "…" is a valid line; a silent beat
+ *  reads as thinking / breathing without spelling it out. */
+const REST_FILLER_LINES: readonly string[] = [
+  '…',
+  '{name} breathes steadily.',
+  '{name} shifts position.',
+  '{name} stretches, slowly.',
+  'A moment passes.',
+  'The room is still.',
+  'Soft flicker of firelight.',
+  "{name}'s pulse slows.",
+]
+
+const MEDITATE_FILLER_LINES: readonly string[] = [
+  '…',
+  '{name} breathes in, out.',
+  'Meditation deepens.',
+  '{name} follows a distant thought.',
+  'A moment passes.',
+  'The room is still.',
+  "{name}'s thoughts quiet.",
+  'Awareness drifts, then settles.',
+]
+
+function pickFillerLine(kind: 'resting' | 'meditating', name: string, rng: Rng): string {
+  const pool = kind === 'resting' ? REST_FILLER_LINES : MEDITATE_FILLER_LINES
+  const tmpl = rng.pick(pool)
+  return tmpl.replace(/\{name\}/g, name)
+}
+
+/** Re-rolls the next-filler trigger tick. Filler lines fire every 3-5
+ *  ticks (inclusive of both bounds). Offsets from the current elapsed
+ *  count so each line is 3-5 ticks *after* the previous one. */
+function rollNextFillerAt(ticksElapsed: number, rng: Rng): number {
+  return ticksElapsed + 3 + rng.nextInt(3)
 }
 
 function stampWeight(drives: Drives, character: Character, world: WorldContent): Drives {
@@ -153,12 +287,6 @@ function append(log: LogEntry[], entry: LogEntry): LogEntry[] {
   return [...log, entry].slice(-LOG_CAP)
 }
 
-function rand(max: number): number {
-  return Math.floor(Math.random() * max)
-}
-function roll(sides: number): number {
-  return 1 + rand(sides)
-}
 function mod(stat: number): number {
   return Math.floor((stat - 10) / 2)
 }
@@ -168,24 +296,61 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
+/** Class ids that open combat with a stealth check — rogues and rangers
+ *  (and world equivalents) get the first-round advantage if the roll hits.
+ *  Keyed by class id so any world whose class shares an id benefits. */
+const STEALTH_CLASS_IDS: readonly string[] = ['rogue', 'ranger']
+
+/**
+ * Rolls a DEX-based stealth check for rogue/ranger classes. Returns true
+ * when the character surprises the mob, which callers fold into a
+ * character-side ambush (first round free + bonus damage).
+ *
+ *   success_chance = 0.25 + (DEX - 10) * 0.05, clamped to [0.1, 0.8]
+ *
+ * So a mid-game DEX 14 rogue ambushes ~45 % of the time, a DEX 18 endgame
+ * rogue creeps up to ~65 %, and a low-DEX character bottoms out at 10 %.
+ */
+function rollStealthCheck(character: Character, rng: Rng): boolean {
+  if (!STEALTH_CLASS_IDS.includes(character.classId)) return false
+  const dex = character.stats.dexterity
+  const chance = Math.max(0.1, Math.min(0.8, 0.25 + (dex - 10) * 0.05))
+  return rng.chance(chance)
+}
+
 /**
  * Determines whether a fresh encounter starts with an ambush.
- *   - |level delta| ≥ 5 → the higher-level side auto-ambushes for 2 rounds.
+ *   - |level delta| ≥ 5 → the higher-level side auto-ambushes.
+ *   - Rogue/ranger classes roll a DEX stealth check that can force a
+ *     character-side ambush regardless of level delta.
  *   - Smaller gaps roll a flat 15 % chance of an ambush, with the advantaged
  *     side biased toward being the ambusher.
+ *
+ * An ambush is a single tick where only the ambusher acts and their strike
+ * deals 2× damage (stealth-class openers add an extra 1.5× on top). The
+ * `ticksLeft: 1` budget reflects "one free strike" — after this tick
+ * fades, the fight resumes normal turn-taking.
  */
-function rollAmbush(
-  charLevel: number,
+export function rollAmbush(
+  character: Character,
   mobLevel: number,
-): { side: 'character' | 'mob'; ticksLeft: number } | null {
-  const delta = charLevel - mobLevel
-  if (delta >= 5) return { side: 'character', ticksLeft: 2 }
-  if (delta <= -5) return { side: 'mob', ticksLeft: 2 }
-  if (Math.random() < 0.15) {
+  rng: Rng,
+): { side: 'character' | 'mob'; ticksLeft: number; reason?: 'stealth' } | null {
+  const delta = character.level - mobLevel
+  if (delta >= 5) return { side: 'character', ticksLeft: 1 }
+  if (delta <= -5) return { side: 'mob', ticksLeft: 1 }
+  // Stealth classes get the first-round jump if their DEX roll lands.
+  // Checked before the generic 15 % roll so the stealth narrative wins.
+  if (rollStealthCheck(character, rng)) {
+    return { side: 'character', ticksLeft: 1, reason: 'stealth' }
+  }
+  const ambushRoll = rng.chance(0.15)
+  if (ambushRoll) {
     // Coin flip, weighted toward the higher-level side.
     const charFavor = 0.5 + 0.05 * delta
-    const side: 'character' | 'mob' = Math.random() < charFavor ? 'character' : 'mob'
-    return { side, ticksLeft: 2 }
+    const charSide = rng.chance(charFavor)
+    const side: 'character' | 'mob' = charSide ? 'character' : 'mob'
+    return { side, ticksLeft: 1 }
   }
   return null
 }
@@ -202,42 +367,21 @@ function xpScaleByDelta(delta: number): number {
   return Math.max(0.1, 1 + clamped * 0.12)
 }
 
-/**
- * Damage-out multiplier based on (player level − mob level). Each level of
- * advantage adds ~15 % damage; disadvantage subtracts the same. Saturates
- * so a 10-level gap maxes at +150 % / −75 %: fights stay decisive at
- * extremes but neither side one-shots in a single roll.
- */
-function levelScaleOutgoing(delta: number): number {
-  const clamped = Math.max(-10, Math.min(10, delta))
-  if (clamped >= 0) return 1 + clamped * 0.15
-  // Negative delta: shrinks damage dealt, floor at 25 %.
-  return Math.max(0.25, 1 + clamped * 0.075)
-}
-
-/**
- * Damage-in multiplier from the defender's perspective. Mirror image of
- * `levelScaleOutgoing`: a higher-level attacker hits harder, a lower-level
- * one bounces off.
- */
-function levelScaleIncoming(delta: number): number {
-  return levelScaleOutgoing(-delta)
-}
-
 function rollEncounterFor(
   world: WorldContent,
   type: string,
   areaLevel: number = 1,
+  rng: Rng,
 ): Mob | null {
   const ids = world.encounters[type as keyof WorldContent['encounters']]
   if (!ids || ids.length === 0) return null
-  const id = ids[rand(ids.length)]
+  const id = rng.pick(ids)
   const template = world.mobs.find((m) => m.id === id)
   if (!template) return null
   // Rarity roll is biased toward rare+ in higher-level areas, which
   // feeds both loot quality and (via the rarity bump in `mobLevel`)
   // additional combat level for the spawned mob.
-  const mob = spawn(template, rollMobRarity(areaLevel))
+  const mob = spawn(template, rollMobRarity(areaLevel, rng))
   // Flat level offset from the area itself — stats stay at template ×
   // rarity, but the bumped `level` feeds the combat level-delta math
   // (higher mob level → bigger outgoing damage, smaller incoming,
@@ -271,45 +415,151 @@ function appendDropLogs(
   character: Character,
   world: WorldContent,
   drops: Drops,
-  mobRarity: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' = 'common',
+  rng: Rng,
 ): LogEntry[] {
   let out = log
   if (drops.gold > 0) {
     const manifest = getWorldManifest(character.worldId)
     const currency = (manifest?.currencyName ?? 'gold').toLowerCase()
-    const goldText = `${drops.gold} ${currency}`
-    out = append(out, {
-      kind: 'loot',
-      text: `${character.name} pockets ${goldText}.`,
-      meta: { name: character.name, goldAmount: drops.gold, goldText },
-    })
+    out = append(out, formatGoldPickupLog(formatActorName(character, 'log'), drops.gold, currency, rng))
   }
+  // Batch all item pickups from this drop event into one line. Resolves
+  // each drop against the world item catalog, picks a display rarity,
+  // and emits a single "X picks up A, B, and C" entry with an `items`
+  // payload so LogPanel can render each name as a clickable [Bracket]
+  // and journal derivation can still gate first-finds per-item.
+  type Resolved = {
+    id: string
+    name: string
+    qty: number
+    rarity: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
+  }
+  const resolved: Resolved[] = []
   for (const drop of drops.items) {
     const def = world.items.find((i) => i.id === drop.itemId)
     if (!def) continue
-    // Mirror loot.ts: rolls the same rarity distribution so the log colors
-    // the item by the tier that will actually land in the inventory.
-    // Non-equipment/scroll types always log as common.
-    const rarity =
-      def.kind === 'equipment' || def.kind === 'scroll'
-        ? // Best-effort snapshot: the actual roll happens inside applyDrops,
-          // so we can't promise a match. Keep log coloring simple: mob's
-          // rarity as a proxy — stronger mobs tend to drop rarer gear.
-          mobRarity
-        : 'common'
-    const qtySuffix = drop.qty > 1 ? ` ×${drop.qty}` : ''
-    out = append(out, {
+    // Rarity is pre-rolled in the caller (see the loop right before
+    // `appendDropLogs` in `resolveMobDefeat`) so the log and the
+    // inventory agree on tier. Curated drops also carry rarity. Non-
+    // equipment / scroll drops have no rarity and log as common.
+    // Curated items pin to `'legendary'` regardless of pre-roll so the
+    // rare+ discovery banner fires reliably on first drop.
+    const rarity: Rarity = def.curated ? 'legendary' : drop.rarity ?? 'common'
+    resolved.push({ id: def.id, name: def.name, qty: drop.qty, rarity })
+  }
+  if (resolved.length === 0) return out
+  const phrases = resolved.map((r) => (r.qty > 1 ? `${r.qty}× ${r.name}` : r.name))
+  const list = joinList(phrases)
+  // First item's fields double as the top-level fallback so legacy
+  // readers (anything that hasn't learned about `items[]` yet) still
+  // see one item. journal.ts iterates `items` when present.
+  const first = resolved[0]
+  out = append(out, {
+    kind: 'loot',
+    text: `${formatActorName(character, 'log')} picks up ${list}.`,
+    meta: {
+      name: formatActorName(character, 'log'),
+      itemId: first.id,
+      itemName: first.name,
+      itemRarity: first.rarity,
+      items: resolved.map((r) => ({
+        id: r.id,
+        name: r.name,
+        rarity: r.rarity,
+        qty: r.qty,
+      })),
+      // areaId threaded so journal derivation can scope first-find
+      // entries without reading the character's post-tick position
+      // (which is correct here but brittle for future refactors).
+      areaId: character.position.areaId,
+    },
+  })
+  return out
+}
+
+// Oxford-comma list join: ["A"] → "A", ["A","B"] → "A and B",
+// ["A","B","C"] → "A, B, and C". Used by the batched pickup line so a
+// single drop reads as one readable sentence instead of N bullet lines.
+function joinList(parts: string[]): string {
+  if (parts.length === 0) return ''
+  if (parts.length === 1) return parts[0]
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`
+  return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`
+}
+
+/** Decrements the locked chest's countdown and, when it hits zero,
+ *  unlatches: items merge into inventory, gold credits, auto-equip
+ *  fires, and a `kind: 'loot'` line emits with the items[] payload so
+ *  journal first-find lights up at the moment the player actually
+ *  sees the items. Called at the top of every `runTick` regardless of
+ *  state — the chest is wall-clock, not state-bound, so a long fight
+ *  can't pin it shut. No-op when no chest is set. */
+function tickLockedChest(p: Playing, world: WorldContent, rng: Rng): Playing {
+  const chest = p.character.lockedChest
+  if (!chest) return p
+  if (chest.ticksLeft > 1) {
+    return {
+      ...p,
+      character: {
+        ...p.character,
+        lockedChest: { ...chest, ticksLeft: chest.ticksLeft - 1 },
+      },
+    }
+  }
+  // Unlock now. Build the reveal log first so it appears before any
+  // auto-equip lines that follow.
+  let log = p.log
+  let character = p.character
+  if (chest.gold > 0) {
+    const manifest = getWorldManifest(character.worldId)
+    const currency = (manifest?.currencyName ?? 'gold').toLowerCase()
+    log = append(
+      log,
+      formatGoldPickupLog(formatActorName(character, 'log'), chest.gold, currency, rng),
+    )
+  }
+  if (chest.items.length > 0) {
+    const phrases = chest.items.map((it) => {
+      const qty = it.quantity ?? 1
+      return qty > 1 ? `${qty}× ${it.name}` : it.name
+    })
+    const list = joinList(phrases)
+    const first = chest.items[0]
+    log = append(log, {
       kind: 'loot',
-      text: `${character.name} gathers ${def.name}${qtySuffix}.`,
+      text: `The chest unlatches — ${formatActorName(character, 'log')} takes ${list}.`,
       meta: {
         name: character.name,
-        itemId: def.id,
-        itemName: def.name,
-        itemRarity: rarity,
+        // Top-level item fields mirror the first item for legacy
+        // readers; `items[]` is the canonical batched payload.
+        itemId: first.archetypeId,
+        itemName: first.name,
+        itemRarity: first.rarity ?? 'common',
+        items: chest.items.map((it) => ({
+          id: it.archetypeId ?? '',
+          name: it.name,
+          rarity: it.rarity ?? 'common',
+          qty: it.quantity ?? 1,
+        })),
+        // areaId from the source meta — falls back to the character's
+        // current area if the chest predates this field on a save.
+        areaId: chest.source?.areaId ?? character.position.areaId,
       },
     })
   }
-  return out
+  const withItems = applyChestEntries(character, world, chest.items)
+  const withGold: Character = { ...withItems, gold: withItems.gold + chest.gold }
+  const equipResult = applyAutoEquip(withGold, world)
+  for (const ev of equipResult.events) {
+    if (isRedundantEquip(ev)) continue
+    log = append(log, equipLogEntry(equipResult.character, ev))
+  }
+  character = {
+    ...equipResult.character,
+    drives: stampWeight(equipResult.character.drives, equipResult.character, world),
+    lockedChest: undefined,
+  }
+  return { ...p, log, character }
 }
 
 function directionName(dx: number, dy: number): string {
@@ -418,11 +668,17 @@ function findPortalToExplore(area: Area, character: Character, world: WorldConte
 function moveByGoal(
   area: Area,
   character: Character,
+  rng: Rng,
   goal: Drive | null,
   world: WorldContent,
 ): Position | null {
   const pos = character.position
-  if (!goal) return randomStep(area, pos)
+  const rngStep = (): Position | null => {
+    const options = neighborsOf(area, pos)
+    if (options.length === 0) return null
+    return rng.pick(options)
+  }
+  if (!goal) return rngStep()
 
   if (goal === 'curiosity') {
     const visited = new Set(character.visitedRooms)
@@ -440,13 +696,13 @@ function moveByGoal(
     // the moment they see a door.
     const unvisitedNonGateway = unvisited.filter((o) => !isGateway(o))
     if (unvisitedNonGateway.length > 0) {
-      return unvisitedNonGateway[rand(unvisitedNonGateway.length)]
+      return rng.pick(unvisitedNonGateway)
     }
     const target = bfsNearestUnvisited(area, pos, visited, { skipGateways: true })
     if (target) return stepTowards(area, pos, target)
     // Only unvisited rooms left are gateways — take the adjacent one if any,
     // otherwise BFS for the nearest gateway tile.
-    if (unvisited.length > 0) return unvisited[rand(unvisited.length)]
+    if (unvisited.length > 0) return rng.pick(unvisited)
     const gateway = bfsNearestUnvisited(area, pos, visited)
     if (gateway) return stepTowards(area, pos, gateway)
     // Area fully mapped — push outward to a portal, preferring destinations
@@ -454,11 +710,11 @@ function moveByGoal(
     const portal = findPortalToExplore(area, character, world)
     if (portal) {
       if (portal.x === pos.x && portal.y === pos.y && portal.z === pos.z) {
-        return randomStep(area, pos)
+        return rngStep()
       }
       return stepTowards(area, pos, portal)
     }
-    return randomStep(area, pos)
+    return rngStep()
   }
 
   if (goal === 'greed') {
@@ -467,29 +723,73 @@ function moveByGoal(
       const r = area.rooms[roomKey(o.x, o.y, o.z)]
       return r && r.type !== 'safe'
     })
-    if (dangerous.length > 0) return dangerous[rand(dangerous.length)]
-    return randomStep(area, pos)
+    if (dangerous.length > 0) return rng.pick(dangerous)
+    return rngStep()
   }
 
   // hunger, fatigue, weight all navigate to the nearest room whose
   // `satisfies` array includes the drive.
   const target = nearestRoomSatisfying(area, pos, goal)
-  if (!target) return randomStep(area, pos)
+  if (!target) return rngStep()
   if (target.x === pos.x && target.y === pos.y && target.z === pos.z) {
-    return randomStep(area, pos)
+    return rngStep()
   }
   return stepTowards(area, pos, target)
 }
 
-function explore(p: Playing, world: WorldContent): Playing {
-  const cond = tickConditions(p.character, world)
+// Buff-aware variant of EXPLORE_GROWTH used by the explore tick. Pulled out
+// of explore() so `predictNextStep` can mirror it without duplicating the
+// hunger-slow conditional — divergence here would let the prediction land on
+// a different goal than the live tick once the character equips a slow item.
+function exploreGrowthFor(c: Character, world: WorldContent): Partial<Drives> {
+  const buffs = buffMultipliers(c, world)
+  return buffs.hungerSlow > 0
+    ? {
+        ...EXPLORE_GROWTH,
+        hunger: Math.round((EXPLORE_GROWTH.hunger ?? 0) * (1 - buffs.hungerSlow)),
+      }
+    : EXPLORE_GROWTH
+}
+
+/**
+ * Best-guess "where will the character step next?" — runs the same
+ * `moveByGoal` projection used by the live tick, but as a pure function
+ * callers can use to render a directional indicator on the map. Returns
+ * the next neighbor position the character would walk to, or null if
+ * there's nothing to project (no drive, no reachable neighbor).
+ *
+ * Does **not** advance drives or simulate satisfaction — it's a snapshot,
+ * not a partial tick. Used read-only by MapPanel for follow-cam hints.
+ *
+ * Clones the character's rng state so the prediction draws from the same
+ * stream the live tick will — without consuming the real state. Can still
+ * disagree when auto-consume or conditions fire first (they burn rng draws
+ * before movement), but that's a known limitation.
+ */
+export function predictNextStep(
+  character: Character,
+  world: WorldContent,
+): Position | null {
+  const area = getArea(world, character.position.areaId)
+  const predRng = Rng.fromState(character.rngState).clone()
+  const grownDrives = stampWeight(
+    grow(character.drives, exploreGrowthFor(character, world)),
+    character,
+    world,
+  )
+  const goal = topDrive(grownDrives)
+  return moveByGoal(area, { ...character, drives: grownDrives }, predRng, goal, world)
+}
+
+function explore(p: Playing, world: WorldContent, rng: Rng): Playing {
+  const cond = tickConditions(p.character, world, rng)
   let log = p.log
   for (const e of cond.entries) log = append(log, e)
   if (cond.skipTurn) {
     log = append(log, {
       kind: 'narrative',
-      text: `${cond.character.name} cannot move.`,
-      meta: { name: cond.character.name },
+      text: `${formatActorName(cond.character, 'log')} cannot move.`,
+      meta: { name: formatActorName(cond.character, 'log') },
     })
     return { character: cond.character, log, state: p.state }
   }
@@ -535,18 +835,18 @@ function explore(p: Playing, world: WorldContent): Playing {
     wounded &&
     isSafeFamily &&
     restAllowed &&
-    (hpRatio < REST_FORCE_HP_RATIO || Math.random() < REST_CHANCE)
+    (hpRatio < REST_FORCE_HP_RATIO || rng.chance(REST_CHANCE))
   if (wantsRest) {
     const text = currentRoom
-      ? `${c.name} pauses to catch their breath in the ${currentRoom.name}.`
-      : `${c.name} pauses to rest.`
+      ? `${formatActorName(c, 'log')} pauses to catch their breath in the ${currentRoom.name}.`
+      : `${formatActorName(c, 'log')} pauses to rest.`
     return {
       character: c,
       log: append(log, {
         kind: 'narrative',
         text,
         meta: {
-          name: c.name,
+          name: formatActorName(c, 'log'),
           areaId: area.id,
           roomKey: currentRoom ? roomKey(currentRoom.x, currentRoom.y, currentRoom.z) : undefined,
           roomName: currentRoom?.name,
@@ -568,18 +868,18 @@ function explore(p: Playing, world: WorldContent): Playing {
     minded &&
     isSafeFamily &&
     restAllowed &&
-    (mpRatio < MEDITATE_FORCE_MP_RATIO || Math.random() < MEDITATE_CHANCE)
+    (mpRatio < MEDITATE_FORCE_MP_RATIO || rng.chance(MEDITATE_CHANCE))
   if (wantsMeditate) {
     const text = currentRoom
-      ? `${c.name} settles into meditation in the ${currentRoom.name}.`
-      : `${c.name} settles into meditation.`
+      ? `${formatActorName(c, 'log')} settles into meditation in the ${currentRoom.name}.`
+      : `${formatActorName(c, 'log')} settles into meditation.`
     return {
       character: c,
       log: append(log, {
         kind: 'narrative',
         text,
         meta: {
-          name: c.name,
+          name: formatActorName(c, 'log'),
           areaId: area.id,
           roomKey: currentRoom ? roomKey(currentRoom.x, currentRoom.y, currentRoom.z) : undefined,
           roomName: currentRoom?.name,
@@ -589,9 +889,36 @@ function explore(p: Playing, world: WorldContent): Playing {
     }
   }
 
-  const grownDrives = stampWeight(grow(c.drives, EXPLORE_GROWTH), c, world)
+  // Hunger slow from equipped buff items (Pendant of the Sated Wanderer,
+  // NutriChip Implant, Ration Synth Module). The buff-scaled growth is
+  // computed by `exploreGrowthFor` so `predictNextStep` can mirror it; if
+  // the two ever diverge the map arrow lands on a different goal than the
+  // live tick.
+  const grownDrives = stampWeight(
+    grow(c.drives, exploreGrowthFor(c, world)),
+    c,
+    world,
+  )
   const goal = topDrive(grownDrives)
-  const next = moveByGoal(area, { ...c, drives: grownDrives }, goal, world)
+  // Emit a flavor line when the character's primary drive shifts.
+  // Fires on null → drive and on drive-A → drive-B transitions (the
+  // interesting ones — the character changed what they're chasing).
+  // Not on drive → null (that's just satisfaction, already narrated).
+  if (goal !== null && goal !== c.lastTopDrive) {
+    const line = driveShiftLine(goal, formatActorName(c, 'log'), rng)
+    if (line) {
+      // Drive-shift reads as the character's interior life pivoting —
+      // a thought, not an action. Renders as italic + soft accent +
+      // leading glyph in LogPanel so it stands apart from the
+      // surrounding action stream without dominating it.
+      log = append(log, {
+        kind: 'thought',
+        text: line,
+        meta: { name: formatActorName(c, 'log') },
+      })
+    }
+  }
+  const next = moveByGoal(area, { ...c, drives: grownDrives }, rng, goal, world)
 
   if (!next) {
     return {
@@ -609,12 +936,12 @@ function explore(p: Playing, world: WorldContent): Playing {
 
   const moveText = room
     ? wasVisited
-      ? `${c.name} heads ${dir} to the ${room.name}.`
-      : `${c.name} explores ${dir} to the ${room.name}. ${room.description}`
+      ? `${formatActorName(c, 'log')} heads ${dir} to the ${room.name}.`
+      : `${formatActorName(c, 'log')} explores ${dir} to the ${room.name}. ${room.description}`
     : null
   const moveMeta = room
     ? {
-        name: c.name,
+        name: formatActorName(c, 'log'),
         direction: dir,
         areaId: next.areaId,
         roomKey: roomKey(room.x, room.y, room.z),
@@ -638,6 +965,14 @@ function explore(p: Playing, world: WorldContent): Playing {
   // 'satisfy' flow, so separate it from the normal narratable set.
   const wantsSell =
     satisfied.includes('weight') && grownDrives.weight >= DRIVE_THRESHOLD
+  // Sacrifice at a shrine is the fallback offload for overloaded
+  // characters who haven't reached a shop. Fires only at shrine rooms
+  // (narrative fit) when weight is above threshold. Shops always win
+  // priority via wantsSell, so this never steals from a shop visit.
+  const wantsSacrifice =
+    !wantsSell &&
+    room?.type === 'shrine' &&
+    grownDrives.weight >= DRIVE_THRESHOLD
   const narratable = satisfied.filter(
     (d) => d !== 'weight' && grownDrives[d] >= DRIVE_THRESHOLD && !!room?.satisfyText?.[d],
   )
@@ -653,12 +988,13 @@ function explore(p: Playing, world: WorldContent): Playing {
     lastSafePosition = next
   }
 
-  const character: Character = {
+  let character: Character = {
     ...c,
     position: next,
     visitedRooms,
     drives,
     lastSafePosition,
+    lastTopDrive: goal,
   }
 
   // Gateways (portals, wired exits, pending exits) only auto-traverse once
@@ -678,6 +1014,20 @@ function explore(p: Playing, world: WorldContent): Playing {
     return true
   })()
 
+  // Portal Hub takes priority over the type-based dispatch so it can render
+  // as a `type: 'portal'` tile on the map while still gating the action
+  // behind the multi-destination selection dialog (forge a new path or
+  // travel to a previously generated world).
+  if (room?.portalHub && areaFullyExplored) {
+    const rk = roomKey(next.x, next.y, next.z)
+
+    return {
+      character,
+      log,
+      state: { kind: 'using-room', action: { kind: 'portal-hub-select', roomKey: rk } },
+    }
+  }
+
   if (room?.type === 'portal' && room.destination && areaFullyExplored) {
     return {
       character,
@@ -688,15 +1038,34 @@ function explore(p: Playing, world: WorldContent): Playing {
 
   // Exit rooms at the edge of the known world. If the exit already has a
   // wired destination (set by the LLM area generation callback), traverse
-  // like a portal. If pending and LLM is not configured, bounce back.
-  // If pending and LLM is available, transition to 'generating-area'.
+  // like a portal. If flagged skipGeneration, treat as a dead end. If
+  // pending and LLM is available, transition to 'generating-area'.
+  //
+  // Permanent frontiers always re-trigger generation regardless of whether
+  // a destination was previously wired — each visit rolls a fresh area so
+  // the player has an escape hatch when the last generation was too hard.
   if (room?.type === 'exit' && areaFullyExplored) {
+    if (room.permanentFrontier) {
+      const rk = roomKey(next.x, next.y, next.z)
+
+      return {
+        character,
+        log,
+        state: { kind: 'generating-area', exitRoomKey: `${area.id}::${rk}`, ticksLeft: AREA_GEN_TIMEOUT_TICKS },
+      }
+    }
     if (room.destination) {
       return {
         character,
         log,
         state: { kind: 'using-room', action: { kind: 'traverse-portal', destination: room.destination } },
       }
+    }
+    // Tile previously flagged to skip generation (player chose "continue
+    // without generation" or generation timed out). No dialog, no fight,
+    // just stay exploring — the exit is a dead end.
+    if (room.skipGeneration) {
+      return { character, log, state: p.state }
     }
     if (room.pendingAreaGeneration) {
       const rk = roomKey(next.x, next.y, next.z)
@@ -711,8 +1080,8 @@ function explore(p: Playing, world: WorldContent): Playing {
       character,
       log: append(log, {
         kind: 'narrative',
-        text: `${c.name} senses the path ahead has not yet taken shape.`,
-        meta: { name: c.name },
+        text: `${formatActorName(c, 'log')} senses the path ahead has not yet taken shape.`,
+        meta: { name: formatActorName(c, 'log') },
       }),
       state: p.state,
     }
@@ -736,32 +1105,85 @@ function explore(p: Playing, world: WorldContent): Playing {
     let mob: Mob | null = null
     if (curatedActive && curated && curated.firstOnly) {
       mob = spawnCuratedEncounter(world, curated.mobId, curated.rarity, area.level ?? 1)
-    } else if (Math.random() < ENCOUNTER_CHANCE) {
+    } else if (rng.chance(ENCOUNTER_CHANCE)) {
       if (curatedActive && curated) {
         mob = spawnCuratedEncounter(world, curated.mobId, curated.rarity, area.level ?? 1)
       }
       // Fallback: curated mob missing from the pool (stale gen, renamed
       // mob) or no curated entry at all — use the normal random roll so
       // the room isn't silently empty just because a curated id went bad.
-      if (!mob) mob = rollEncounterFor(world, room.type, area.level ?? 1)
+      if (!mob) mob = rollEncounterFor(world, room.type, area.level ?? 1, rng)
+    }
+
+    // Ranger trap-laying: when no encounter fires and no trap is already
+    // set, a small chance the ranger plants one. Damage scales with level
+    // so traps stay relevant in late game. One trap at a time; it primes
+    // the next mob on entry in this or a later room.
+    // TODO: bind traps to a specific roomKey so a trap set in room A
+    //       doesn't fire on an encounter rolled in room B. For now the
+    //       trap lives on the character and fires on the next encounter
+    //       anywhere — good enough for the feature to exist, needs
+    //       tightening before 1.0.
+    if (!mob && character.classId === 'ranger' && !character.trap && rng.chance(0.15)) {
+      const dmg = 3 + Math.floor(character.level / 2) + mod(character.stats.dexterity)
+      character = { ...character, trap: { damage: Math.max(2, dmg) } }
+      log = append(log, {
+        kind: 'narrative',
+        text: `${formatActorName(character, 'log')} lays a trap in the ${room.name}.`,
+        meta: { name: formatActorName(character, 'log'), roomName: room.name, trap: true },
+      })
     }
 
     if (mob) {
+      // Organic encounter setup. We don't reuse `beginFight` here
+      // because this path also fires the ranger-trap (consumes
+      // `character.trap`) and emits stealth-flavor narrative on a
+      // class-driven ambush — both behaviors that dev-spawned fights
+      // (which call `beginFight` directly) intentionally skip.
       log = append(log, {
         kind: 'narrative',
         text: `A ${mob.name} bars the way. ${mob.description}`,
         meta: { mobName: mob.name },
       })
-      const ambush = rollAmbush(character.level, mob.level) ?? undefined
+      // Ranger trap: if the character has laid a trap, it fires on the
+      // mob's entry. Consumes the trap. Can outright defeat weaker mobs.
+      let activeChar: Character = character
+      let activeMob: Mob = mob
+      if (activeChar.trap && activeChar.trap.damage > 0) {
+        const trapDmg = activeChar.trap.damage
+        const hpAfter = Math.max(0, activeMob.hp - trapDmg)
+        const dealt = activeMob.hp - hpAfter
+        log = append(log, {
+          kind: 'damage',
+          text: `The ${activeMob.name} springs ${formatActorName(activeChar, 'log')}'s trap! (−${dealt} HP)`,
+          amount: dealt,
+          meta: { name: formatActorName(activeChar, 'log'), mobName: activeMob.name, trap: true },
+        })
+        activeMob = { ...activeMob, hp: hpAfter }
+        activeChar = { ...activeChar, trap: undefined }
+        if (hpAfter === 0) {
+          return resolveMobDefeat(activeChar, activeMob, world, log, undefined, undefined, rng)
+        }
+      }
+      const ambush = rollAmbush(activeChar, activeMob.level, rng) ?? undefined
       if (ambush) {
-        const attackerName = ambush.side === 'character' ? character.name : `the ${mob.name}`
+        const greetingName = formatActorName(activeChar, 'npc-greeting')
+        const attackerName = ambush.side === 'character' ? greetingName : `the ${activeMob.name}`
+        const flavor =
+          ambush.reason === 'stealth'
+            ? `${greetingName} slips from shadow and strikes the ${activeMob.name} first! (Stealth — 3× damage)`
+            : `${capitalize(attackerName)} catches ${ambush.side === 'character' ? `the ${activeMob.name}` : greetingName} off guard! (Ambush — 2× damage)`
         log = append(log, {
           kind: 'narrative',
-          text: `${capitalize(attackerName)} catches ${ambush.side === 'character' ? `the ${mob.name}` : character.name} off guard! (Ambush — 2 attacks)`,
-          meta: { name: character.name, mobName: mob.name },
+          text: flavor,
+          meta: {
+            name: formatActorName(activeChar, 'log'),
+            mobName: activeMob.name,
+            stealth: ambush.reason === 'stealth' ? true : undefined,
+          },
         })
       }
-      return { character, log, state: { kind: 'fighting', mob, ambush } }
+      return { character: activeChar, log, state: { kind: 'fighting', mob: activeMob, ambush } }
     }
   }
 
@@ -771,6 +1193,15 @@ function explore(p: Playing, world: WorldContent): Playing {
       character,
       log,
       state: { kind: 'using-room', action: { kind: 'sell' } },
+    }
+  }
+
+  // Shrine sacrifice — fallback weight offload when no shop's available.
+  if (wantsSacrifice) {
+    return {
+      character,
+      log,
+      state: { kind: 'using-room', action: { kind: 'sacrifice' } },
     }
   }
 
@@ -794,6 +1225,7 @@ function tryShopPurchase(
   character: Character,
   world: WorldContent,
   manifest: WorldManifest | undefined,
+  rng: Rng,
 ): { character: Character; log: LogEntry[] } | null {
   const stock = world.shopInventory
   if (!stock || stock.length === 0) return null
@@ -827,7 +1259,7 @@ function tryShopPurchase(
 
     // Purchase one.
     const newItem = {
-      id: `shop-${slot.itemId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      id: `shop-${slot.itemId}-${Date.now()}-${rng.next().toString(36).slice(2, 7)}`,
       archetypeId: slot.itemId,
       name: def.name,
       quantity: 1,
@@ -839,11 +1271,14 @@ function tryShopPurchase(
     }
     entries.push({
       kind: 'loot',
-      text: `${c.name} buys a ${def.name} for ${slot.price} ${currency}.`,
+      text: `${formatActorName(c, 'log')} buys a ${def.name} for ${slot.price} ${currency}.`,
       meta: {
-        name: c.name,
+        name: formatActorName(c, 'log'),
         itemId: slot.itemId,
         itemName: def.name,
+        // Paint bought potions in their HP/MP color. Non-consumables
+        // fall back to the default token styling.
+        potionEffect: def.kind === 'consumable' ? def.effect.kind : undefined,
         goldAmount: -slot.price,
         goldText: `${slot.price} ${currency}`,
       },
@@ -856,11 +1291,17 @@ function tryShopPurchase(
 
 // One tick of the `using-room` state — 'satisfy' drains drives from the
 // current room's amenities; 'traverse-portal' moves the character to a linked area.
-function handleRoomAction(p: Playing, world: WorldContent): Playing {
+function handleRoomAction(p: Playing, world: WorldContent, rng: Rng): Playing {
   if (p.state.kind !== 'using-room') return p
   const action = p.state.action
   const c = p.character
   let log = p.log
+
+  // Portal Hub selection is handled entirely by the App-level dialog —
+  // the tick loop just holds the state until the player makes a choice.
+  if (action.kind === 'portal-hub-select') {
+    return p
+  }
 
   if (action.kind === 'traverse-portal') {
     const dest = action.destination
@@ -869,13 +1310,22 @@ function handleRoomAction(p: Playing, world: WorldContent): Playing {
     const vk = visitedKey(dest.areaId, dest.x, dest.y, dest.z)
     const visitedRooms = c.visitedRooms.includes(vk) ? c.visitedRooms : [...c.visitedRooms, vk]
     const isNewArea = !c.visitedRooms.some((k) => k.startsWith(`${dest.areaId}:`))
-    if (isNewArea) log = append(log, { kind: 'area', text: destArea.name, rarity: destArea.rarity })
+    if (isNewArea) {
+      log = append(log, {
+        kind: 'area',
+        text: destArea.name,
+        rarity: destArea.rarity,
+        // areaId threaded so journal derivation can scope the
+        // area-discovered entry without re-deriving from visitedRooms.
+        areaId: destArea.id,
+      })
+    }
     if (destRoom) {
       log = append(log, {
         kind: 'narrative',
-        text: `${c.name} steps through and emerges in the ${destRoom.name}. ${destRoom.description}`,
+        text: `${formatActorName(c, 'log')} steps through and emerges in the ${destRoom.name}. ${destRoom.description}`,
         meta: {
-          name: c.name,
+          name: formatActorName(c, 'log'),
           areaId: dest.areaId,
           roomKey: roomKey(dest.x, dest.y, dest.z),
           roomName: destRoom.name,
@@ -901,9 +1351,9 @@ function handleRoomAction(p: Playing, world: WorldContent): Playing {
         if (!tmpl) continue
         log = append(log, {
           kind: 'narrative',
-          text: tmpl.replace('{name}', c.name),
+          text: tmpl.replace('{name}', formatActorName(c, 'log')),
           meta: {
-            name: c.name,
+            name: formatActorName(c, 'log'),
             areaId: area.id,
             roomKey: rk,
             roomName: room?.name,
@@ -925,18 +1375,18 @@ function handleRoomAction(p: Playing, world: WorldContent): Playing {
       )
       log = append(log, {
         kind: 'loot',
-        text: `${c.name} sells ${itemCount} item${itemCount !== 1 ? 's' : ''} for ${result.totalGold} ${currency}.`,
+        text: `${formatActorName(c, 'log')} sells ${itemCount} item${itemCount !== 1 ? 's' : ''} for ${result.totalGold} ${currency}.`,
         meta: {
-          name: c.name,
+          name: formatActorName(c, 'log'),
           goldAmount: result.totalGold,
           goldText: `${result.totalGold} ${currency}`,
         },
       })
       log = append(log, {
         kind: 'narrative',
-        text: `${c.name} offloads ${itemCount} item${itemCount !== 1 ? 's' : ''} at ${roomName} for ${result.totalGold} ${currency}.`,
+        text: `${formatActorName(c, 'log')} offloads ${itemCount} item${itemCount !== 1 ? 's' : ''} at ${roomName} for ${result.totalGold} ${currency}.`,
         meta: {
-          name: c.name,
+          name: formatActorName(c, 'log'),
           areaId: area.id,
           roomKey: rk,
           roomName: room?.name,
@@ -948,7 +1398,7 @@ function handleRoomAction(p: Playing, world: WorldContent): Playing {
         gold: c.gold + result.totalGold,
       }
       // Auto-purchase consumables from shop inventory after selling.
-      const purchased = tryShopPurchase(afterSell, world, manifest)
+      const purchased = tryShopPurchase(afterSell, world, manifest, rng)
       if (purchased) {
         afterSell = purchased.character
         log = purchased.log.reduce<LogEntry[]>((l, e) => append(l, e), log)
@@ -956,6 +1406,48 @@ function handleRoomAction(p: Playing, world: WorldContent): Playing {
       drives = stampWeight(satisfy(c.drives, ['weight']), afterSell, world)
       return {
         character: { ...afterSell, drives },
+        log,
+        state: { kind: 'exploring' },
+      }
+    }
+    case 'sacrifice': {
+      const result = pickItemsToSacrifice(c, world.items)
+      if (result.sacrificed.length === 0) break
+      const manifest = getWorldManifest(c.worldId)
+      const currency = (manifest?.currencyName ?? 'gold').toLowerCase()
+      const phrase = manifest?.sacrificePhrase ?? 'offers up'
+      const roomName = room?.name ?? 'the shrine'
+      const itemCount = result.sacrificed.reduce(
+        (n, s) => n + (s.item.quantity ?? 1),
+        0,
+      )
+      log = append(log, {
+        kind: 'loot',
+        text: `${phrase} ${result.totalGold} ${currency}.`,
+        meta: {
+          name: formatActorName(c, 'log'),
+          goldAmount: result.totalGold,
+          goldText: `${result.totalGold} ${currency}`,
+        },
+      })
+      log = append(log, {
+        kind: 'narrative',
+        text: `${formatActorName(c, 'log')} sacrifices ${itemCount} item${itemCount !== 1 ? 's' : ''} at ${roomName}.`,
+        meta: {
+          name: formatActorName(c, 'log'),
+          areaId: area.id,
+          roomKey: rk,
+          roomName: room?.name,
+        },
+      })
+      const afterSacrifice: Character = {
+        ...c,
+        inventory: result.remainingInventory,
+        gold: c.gold + result.totalGold,
+      }
+      drives = stampWeight(satisfy(c.drives, ['weight']), afterSacrifice, world)
+      return {
+        character: { ...afterSacrifice, drives },
         log,
         state: { kind: 'exploring' },
       }
@@ -971,31 +1463,39 @@ function handleRoomAction(p: Playing, world: WorldContent): Playing {
 
 /**
  * Per-tick HP gain while resting. Scales with level (a veteran recovers
- * faster) and CON mod (a tougher body does too). Minimum 1.
+ * faster) and CON mod (a tougher body does too). Minimum 1. Equipped
+ * rest-boost items (Stone of Deep Rest, Neural Relaxant Dose, Circadian
+ * Regulator) multiply the final number by (1 + restBoost).
  */
-function restHealAmount(c: Character): number {
+function restHealAmount(c: Character, world: WorldContent): number {
   const conMod = Math.max(0, Math.floor((c.stats.constitution - 10) / 2))
-  return Math.max(1, REST_HEAL + conMod + Math.floor(c.level / 3))
+  const base = Math.max(1, REST_HEAL + conMod + Math.floor(c.level / 3))
+  const boost = buffMultipliers(c, world).restBoost
+  return Math.max(1, Math.round(base * (1 + boost)))
 }
 
 /**
  * Per-tick MP gain while meditating. Scales with level and whichever of
- * INT/WIS is higher. Minimum 1.
+ * INT/WIS is higher. Minimum 1. Rest-boost items multiply the result.
  */
-function meditateMpAmount(c: Character): number {
+function meditateMpAmount(c: Character, world: WorldContent): number {
   const mindMod = Math.max(
     0,
     Math.floor(
       (Math.max(c.stats.intelligence, c.stats.wisdom) - 10) / 2,
     ),
   )
-  return Math.max(1, MEDITATE_MP + mindMod + Math.floor(c.level / 3))
+  const base = Math.max(1, MEDITATE_MP + mindMod + Math.floor(c.level / 3))
+  const boost = buffMultipliers(c, world).restBoost
+  return Math.max(1, Math.round(base * (1 + boost)))
 }
 
 /** Meditating recovers some HP too — roughly half the flat rest rate,
  *  with no CON bonus (this is a mind discipline, not a body one). */
-function meditateHpAmount(c: Character): number {
-  return Math.max(1, MEDITATE_HP + Math.floor(c.level / 4))
+function meditateHpAmount(c: Character, world: WorldContent): number {
+  const base = Math.max(1, MEDITATE_HP + Math.floor(c.level / 4))
+  const boost = buffMultipliers(c, world).restBoost
+  return Math.max(1, Math.round(base * (1 + boost)))
 }
 
 /**
@@ -1006,26 +1506,27 @@ function meditateHpAmount(c: Character): number {
 function tryRestAmbush(
   p: Playing,
   world: WorldContent,
+  rng: Rng,
 ): Mob | null {
   const area = getArea(world, p.character.position.areaId)
   const room = area.rooms[roomKey(p.character.position.x, p.character.position.y, p.character.position.z)]
   const safeFamily = room && (room.type === 'safe' || room.type === 'inn' || room.type === 'shrine')
   const chance = safeFamily ? REST_AMBUSH_CHANCE / 2 : REST_AMBUSH_CHANCE
-  if (Math.random() >= chance) return null
+  if (!rng.chance(chance)) return null
   const type = room?.type ?? 'corridor'
-  return rollEncounterFor(world, type, area.level ?? 1)
+  return rollEncounterFor(world, type, area.level ?? 1, rng)
 }
 
-function rest(p: Playing, world: WorldContent): Playing {
+function rest(p: Playing, world: WorldContent, rng: Rng): Playing {
   if (p.state.kind !== 'resting') return p
   // Ambush roll first — if interrupted, transition to fighting with
   // mob-side ambush regardless of level.
-  const ambushMob = tryRestAmbush(p, world)
+  const ambushMob = tryRestAmbush(p, world, rng)
   if (ambushMob) {
     const log = append(p.log, {
       kind: 'narrative',
       text: `${p.character.name}'s rest is shattered — a ${ambushMob.name} is on them!`,
-      meta: { name: p.character.name, mobName: ambushMob.name },
+      meta: { name: p.character.name, mobName: ambushMob.name, mobRarity: ambushMob.rarity },
     })
     return {
       character: p.character,
@@ -1033,13 +1534,18 @@ function rest(p: Playing, world: WorldContent): Playing {
       state: {
         kind: 'fighting',
         mob: ambushMob,
-        ambush: { side: 'mob', ticksLeft: 2 },
+        ambush: { side: 'mob', ticksLeft: 1 },
       },
     }
   }
 
-  const healAmount = restHealAmount(p.character)
-  const healed = Math.min(p.character.maxHp, p.character.hp + healAmount)
+  // Streak bookkeeping — scales restore up with consecutive ticks in the
+  // same state and accumulates totals for the end-of-session summary.
+  const ticksElapsed = p.state.ticksElapsed ?? 0
+  const mult = streakMultiplier(ticksElapsed)
+  const baseHeal = restHealAmount(p.character, world)
+  const scaledHeal = Math.max(1, Math.round(baseHeal * mult))
+  const healed = Math.min(p.character.maxHp, p.character.hp + scaledHeal)
   const actualHeal = healed - p.character.hp
   const ticksLeft = p.state.ticksLeft - 1
   const done = healed >= p.character.maxHp || ticksLeft <= 0
@@ -1048,21 +1554,30 @@ function rest(p: Playing, world: WorldContent): Playing {
   const newFatigue = Math.max(0, grownDrives.fatigue - REST_FATIGUE_RELIEF)
   const drives: Drives = { ...grownDrives, fatigue: newFatigue }
 
+  const totalHp = (p.state.hpRestored ?? 0) + actualHeal
+  const nextTicksElapsed = ticksElapsed + 1
+  let nextFillerAt = p.state.nextFillerAt ?? rollNextFillerAt(0, rng)
+
   let log = p.log
-  if (actualHeal > 0) {
-    log = append(log, {
-      kind: 'heal',
-      text: `${p.character.name} catches their breath.`,
-      amount: actualHeal,
-      meta: { name: p.character.name },
-    })
-  }
-  if (done) {
+  // Cadenced filler replaces the old per-tick adverb line. Fires when the
+  // streak crosses the pre-rolled trigger; re-rolls the trigger to keep
+  // the cadence irregular (3-5 ticks between lines).
+  if (!done && nextTicksElapsed >= nextFillerAt) {
     log = append(log, {
       kind: 'narrative',
-      text: `${p.character.name} rises, ready to press on.`,
+      text: pickFillerLine('resting', p.character.name, rng),
       meta: { name: p.character.name },
     })
+    nextFillerAt = rollNextFillerAt(nextTicksElapsed, rng)
+  }
+
+  if (done) {
+    // End-of-session summary — qualitative adverb in the main text so
+    // it reads cleanly with log numbers off, plus the hard count in a
+    // trailing parenthetical that LogPanel strips via
+    // INLINE_NUMERIC_PAREN when `logNumbers` is disabled. Tick count
+    // is deliberately omitted — it's implementation detail.
+    log = append(log, formatRestSummaryLog(formatActorName(p.character, 'log'), totalHp, p.character.maxHp))
     const cleared = clearConditions({
       ...p.character,
       hp: healed,
@@ -1079,18 +1594,25 @@ function rest(p: Playing, world: WorldContent): Playing {
   return {
     character: { ...p.character, hp: healed, drives },
     log,
-    state: { kind: 'resting', ticksLeft },
+    state: {
+      kind: 'resting',
+      ticksLeft,
+      ticksElapsed: nextTicksElapsed,
+      hpRestored: totalHp,
+      mpRestored: p.state.mpRestored ?? 0,
+      nextFillerAt,
+    },
   }
 }
 
-function meditate(p: Playing, world: WorldContent): Playing {
+function meditate(p: Playing, world: WorldContent, rng: Rng): Playing {
   if (p.state.kind !== 'meditating') return p
-  const ambushMob = tryRestAmbush(p, world)
+  const ambushMob = tryRestAmbush(p, world, rng)
   if (ambushMob) {
     const log = append(p.log, {
       kind: 'narrative',
       text: `${p.character.name}'s meditation breaks — a ${ambushMob.name} strikes!`,
-      meta: { name: p.character.name, mobName: ambushMob.name },
+      meta: { name: p.character.name, mobName: ambushMob.name, mobRarity: ambushMob.rarity },
     })
     return {
       character: p.character,
@@ -1098,13 +1620,17 @@ function meditate(p: Playing, world: WorldContent): Playing {
       state: {
         kind: 'fighting',
         mob: ambushMob,
-        ambush: { side: 'mob', ticksLeft: 2 },
+        ambush: { side: 'mob', ticksLeft: 1 },
       },
     }
   }
 
-  const mpGain = meditateMpAmount(p.character)
-  const hpGain = meditateHpAmount(p.character)
+  const ticksElapsed = p.state.ticksElapsed ?? 0
+  const mult = streakMultiplier(ticksElapsed)
+  const baseMp = meditateMpAmount(p.character, world)
+  const baseHp = meditateHpAmount(p.character, world)
+  const mpGain = Math.max(1, Math.round(baseMp * mult))
+  const hpGain = Math.max(1, Math.round(baseHp * mult))
   const newMagic = Math.min(p.character.maxMagic, p.character.magic + mpGain)
   const newHp = Math.min(p.character.maxHp, p.character.hp + hpGain)
   const actualMp = newMagic - p.character.magic
@@ -1114,27 +1640,42 @@ function meditate(p: Playing, world: WorldContent): Playing {
     (newMagic >= p.character.maxMagic && newHp >= p.character.maxHp) ||
     ticksLeft <= 0
 
-  const grownDrives = stampWeight(grow(p.character.drives, REST_GROWTH), p.character, world)
+  const grownDrives = stampWeight(grow(p.character.drives, MEDITATE_GROWTH), p.character, world)
   const newFatigue = Math.max(0, grownDrives.fatigue - Math.round(REST_FATIGUE_RELIEF / 2))
   const drives: Drives = { ...grownDrives, fatigue: newFatigue }
 
+  const totalHp = (p.state.hpRestored ?? 0) + actualHp
+  const totalMp = (p.state.mpRestored ?? 0) + actualMp
+  const nextTicksElapsed = ticksElapsed + 1
+  let nextFillerAt = p.state.nextFillerAt ?? rollNextFillerAt(0, rng)
+
   let log = p.log
-  if (actualMp > 0 || actualHp > 0) {
-    const parts: string[] = []
-    if (actualMp > 0) parts.push(`+${actualMp} MP`)
-    if (actualHp > 0) parts.push(`+${actualHp} HP`)
-    log = append(log, {
-      kind: 'heal',
-      text: `${p.character.name} centers their breathing. (${parts.join(' · ')})`,
-      meta: { name: p.character.name },
-    })
-  }
-  if (done) {
+  if (!done && nextTicksElapsed >= nextFillerAt) {
     log = append(log, {
       kind: 'narrative',
-      text: `${p.character.name} opens their eyes, clear-headed.`,
+      text: pickFillerLine('meditating', p.character.name, rng),
       meta: { name: p.character.name },
     })
+    nextFillerAt = rollNextFillerAt(nextTicksElapsed, rng)
+  }
+
+  if (done) {
+    // Qualitative adverb in the main clause, numeric totals in a
+    // trailing parenthetical that LogPanel's INLINE_NUMERIC_PAREN
+    // regex strips when log numbers are disabled. Tick count is
+    // never surfaced — it's implementation detail. MP first when it
+    // was the primary draw, HP second. Falls back to the
+    // clear-headed line when nothing actually restored.
+    log = append(
+      log,
+      formatMeditateSummaryLog(
+        formatActorName(p.character, 'log'),
+        totalMp,
+        p.character.maxMagic,
+        totalHp,
+        p.character.maxHp,
+      ),
+    )
     return {
       character: {
         ...p.character,
@@ -1150,7 +1691,14 @@ function meditate(p: Playing, world: WorldContent): Playing {
   return {
     character: { ...p.character, hp: newHp, magic: newMagic, drives },
     log,
-    state: { kind: 'meditating', ticksLeft },
+    state: {
+      kind: 'meditating',
+      ticksLeft,
+      ticksElapsed: nextTicksElapsed,
+      hpRestored: totalHp,
+      mpRestored: totalMp,
+      nextFillerAt,
+    },
   }
 }
 
@@ -1164,6 +1712,8 @@ export interface ApplyOneLevelOptions {
   logPrefix?: string
   /** Clock injection for determinism in tests. */
   now?: number
+  /** Per-character PRNG for deterministic verb/title picks. */
+  rng: Rng
 }
 
 /** Applies a single level-up's worth of gains (HP, MP, periodic stat bumps)
@@ -1172,7 +1722,7 @@ export interface ApplyOneLevelOptions {
  *  character identically. */
 export function applyOneLevel(
   character: Character,
-  options: ApplyOneLevelOptions = {},
+  options: ApplyOneLevelOptions,
 ): { character: Character; logEntries: LogEntry[] } {
   const now = options.now ?? Date.now()
   const from = character.level
@@ -1182,6 +1732,33 @@ export function applyOneLevel(
     startedAt: character.createdAt,
     startGold: character.gold,
   }
+  // Deaths this segment = death timestamps after the segment started.
+  // Falls back to the previous level-up time (or createdAt) for characters
+  // saved before `segment` was tracked, so old saves still get a sensible
+  // count on their next level-up.
+  const previousLevelUpAt =
+    character.levelUps[character.levelUps.length - 1]?.at ?? character.createdAt
+  const segmentStart = character.segment?.startedAt ?? previousLevelUpAt
+  const deathsThisLevel = character.deaths.filter((d) => d.at > segmentStart).length
+  // Resolve spell unlocks before constructing the record so the record
+  // can snapshot them. `spellUnlocksAt` only reads `character.spells` and
+  // `character.worldId`, so passing the pre-level-up character (with the
+  // post-level number as the second arg) gives the same result as the
+  // previous `baseUpdated`-based call.
+  const unlockResult = spellUnlocksAt(character, to)
+  const spellsKnown = new Set(character.spells ?? [])
+  const learnedSpells: SpellDef[] = []
+  for (const spell of unlockResult.unlocked) {
+    if (spellsKnown.has(spell.id)) continue
+    spellsKnown.add(spell.id)
+    learnedSpells.push(spell)
+    if (unlockResult.includesGenerated) {
+      // Only generated entries need runtime registration; curated ones are
+      // already in WORLD_SPELLS.
+      registerGeneratedSpell(spell)
+    }
+  }
+
   const record: LevelUpRecord = {
     at: now,
     from,
@@ -1193,8 +1770,12 @@ export function applyOneLevel(
       : undefined,
     baddestEnemy: segment.baddestEnemy,
     gains: { hp: gains.hp, mp: gains.mp, statText: gains.statText },
+    deathsThisLevel,
+    learnedSpells: learnedSpells.length > 0
+      ? learnedSpells.map((s) => ({ id: s.id, name: s.name, level: s.level }))
+      : undefined,
   }
-  const updated: Character = {
+  const baseUpdated: Character = {
     ...character,
     level: to,
     maxHp: character.maxHp + gains.hp,
@@ -1202,16 +1783,19 @@ export function applyOneLevel(
     maxMagic: character.maxMagic + gains.mp,
     magic: character.magic + gains.mp,
     stats: gains.nextStats,
+    spells: learnedSpells.length > 0
+      ? [...(character.spells ?? []), ...learnedSpells.map((s) => s.id)]
+      : character.spells,
     levelUps: [...character.levelUps, record],
     segment: { startedAt: now, startGold: character.gold },
   }
   const prefix = options.logPrefix ?? ''
-  const verb = pickLevelUpVerb()
+  const verb = pickLevelUpVerb(options.rng)
   const logEntries: LogEntry[] = [
     {
       kind: 'chapter',
-      text: `${prefix}🎉✨⭐ ${character.name} ${verb} to level ${to}! ⭐✨🎉`,
-      meta: { name: character.name, levelTo: to },
+      text: `${prefix}🎉✨⭐ ${formatActorName(character, 'log-milestone')} ${verb} to level ${to}! ⭐✨🎉`,
+      meta: { name: formatActorName(character, 'log-milestone'), levelTo: to },
     },
   ]
   const parts: string[] = []
@@ -1221,17 +1805,34 @@ export function applyOneLevel(
   if (parts.length > 0) {
     logEntries.push({
       kind: 'narrative',
-      text: `${prefix}${character.name} feels stronger. (${parts.join(' · ')})`,
-      meta: { name: character.name },
+      text: `${prefix}${formatActorName(character, 'log-milestone')} feels stronger. (${parts.join(' · ')})`,
+      meta: { name: formatActorName(character, 'log-milestone') },
     })
   }
-  return { character: updated, logEntries }
+
+  for (const spell of learnedSpells) {
+    logEntries.push({
+      kind: 'chapter',
+      text: `${prefix}${formatActorName(character, 'log-milestone')} unlocks a new spell: ${spell.name}!`,
+      meta: { name: formatActorName(character, 'log-milestone'), spellName: spell.name },
+    })
+    if (spell.description) {
+      logEntries.push({
+        kind: 'narrative',
+        text: `${prefix}${spell.description}`,
+        meta: { name: formatActorName(character, 'log-milestone'), spellName: spell.name },
+      })
+    }
+  }
+
+  return { character: baseUpdated, logEntries }
 }
 
 function applyXp(
   character: Character,
   gained: number,
   log: LogEntry[],
+  rng: Rng,
 ): { character: Character; log: LogEntry[] } {
   let working = { ...character, xp: character.xp + gained }
   let updatedLog = log
@@ -1239,6 +1840,7 @@ function applyXp(
     const needed = xpToNextLevel(working.level)
     const { character: leveled, logEntries } = applyOneLevel(working, {
       xpGained: needed,
+      rng,
     })
     working = { ...leveled, xp: working.xp - needed }
     for (const entry of logEntries) updatedLog = append(updatedLog, entry)
@@ -1250,9 +1852,13 @@ function applyXp(
       const earned = resolveTitle(working, titleIdx)
       if (earned.text) {
         updatedLog = append(updatedLog, {
-          kind: 'narrative',
-          text: `${character.name} is now known as the ${earned.text}.`,
-          meta: { name: character.name },
+          kind: 'chapter',
+          text: `🎉✨⭐ ${pickTitleEarnedLine(character.name, earned.text, rng)} ⭐✨🎉`,
+          meta: {
+            name: character.name,
+            titleEarned: true,
+            titleText: earned.text,
+          },
         })
       }
     }
@@ -1345,6 +1951,11 @@ function levelGainsFor(
 interface MobTickResult {
   mob: Mob
   entries: LogEntry[]
+  /** Family of the DoT that landed the final tick before hp hit 0 —
+   *  used by resolveMobDefeat to pick a flavored "X is reduced to ash"
+   *  line instead of the generic "X falls". Undefined when no DoT
+   *  killed the mob (either no DoTs fired this tick or none zeroed hp). */
+  killFamily?: DamageFamily | 'poison'
 }
 
 // Mirrors tickConditions() for characters: applies DoT damage to a mob (capped
@@ -1354,6 +1965,7 @@ function tickMobConditions(
   mob: Mob,
   world: WorldContent,
   worldId: string,
+  rng: Rng,
 ): MobTickResult {
   if (!mob.conditions || mob.conditions.length === 0) {
     return { mob, entries: [] }
@@ -1361,6 +1973,7 @@ function tickMobConditions(
   const defs = new Map(world.conditions.map((d) => [d.id, d]))
   const entries: LogEntry[] = []
   let hp = mob.hp
+  let killFamily: DamageFamily | 'poison' | undefined
   const next: typeof mob.conditions = []
 
   for (const active of mob.conditions) {
@@ -1368,11 +1981,27 @@ function tickMobConditions(
     if (!def) continue
 
     if (def.kind === 'dot') {
-      const dmg = def.params.damagePerTick ?? 0
+      // Snapshot override (set at application by a high-INT caster) wins
+      // over the condition def's base — same rule as the character-side
+      // tickConditions in conditions/engine.ts.
+      const baseTickDmg = active.damagePerTickOverride ?? def.params.damagePerTick ?? 0
+      // Element resist applies per tick — a fire elemental's resist makes
+      // burning ticks fizzle even though the condition snapshot doesn't
+      // know about the target. Floor at 1 when the base damage was
+      // non-zero so a "barely resisted" tick still pings instead of
+      // silently no-op'ing — matches how a fully-blocked physical hit
+      // still draws the 1-DMG floor.
+      const resistMult = mobResistMultiplier(mob, def.element)
+      const scaled = Math.round(baseTickDmg * resistMult)
+      const dmg = baseTickDmg > 0 && resistMult > 0 ? Math.max(1, scaled) : scaled
       if (dmg > 0 && hp > 0) {
         const taken = Math.min(dmg, hp)
         hp -= taken
-        const { verb } = damageVerb(taken, mob.maxHp, worldId)
+        // Condition element (fire / ice / electric / earth / hack)
+        // maps 1:1 to a damage family — a burning condition "scorches",
+        // a freezing one "chills". Fall back to the world verb set
+        // for conditions without an element (generic poison, bleed).
+        const { verb } = damageVerb(taken, mob.maxHp, worldId, def.element, rng)
         const noun = def.noun ?? def.name.toLowerCase()
         const capNoun = noun.charAt(0).toUpperCase() + noun.slice(1)
         entries.push({
@@ -1382,10 +2011,23 @@ function tickMobConditions(
           conditionId: def.id,
           meta: {
             mobName: mob.name,
+            mobRarity: mob.rarity,
             conditionName: def.name,
             element: def.element,
           },
         })
+        // Track the kill family so resolveMobDefeat can flavor the
+        // defeat line. "poison" gets its own flavor pool; anything
+        // else routes by condition element (fire/ice/electric/…).
+        // Poison conditions typically lack an element — use the
+        // condition id as a last-resort signal.
+        if (hp === 0) {
+          if (def.element) {
+            killFamily = def.element
+          } else if (def.id.includes('poison') || def.id.includes('bleed')) {
+            killFamily = 'poison'
+          }
+        }
       }
     }
 
@@ -1397,12 +2039,12 @@ function tickMobConditions(
         kind: 'condition-end',
         text: `The ${mob.name} shakes off ${def.name}.`,
         conditionId: def.id,
-        meta: { mobName: mob.name, conditionName: def.name },
+        meta: { mobName: mob.name, mobRarity: mob.rarity, conditionName: def.name },
       })
     }
   }
 
-  return { mob: { ...mob, hp, conditions: next }, entries }
+  return { mob: { ...mob, hp, conditions: next }, entries, killFamily }
 }
 
 type AttackDecision =
@@ -1430,6 +2072,7 @@ function knowsAnyDamageSpell(character: Character): boolean {
 function chooseCharacterAction(
   character: Character,
   world: WorldContent,
+  rng: Rng,
 ): AttackDecision {
   const hpRatio = character.maxHp > 0 ? character.hp / character.maxHp : 1
 
@@ -1498,9 +2141,9 @@ function chooseCharacterAction(
   // Magic users always cast when castable; non-magic-users keep the old
   // ~40% spell preference to add flavor without making fighters look like
   // wizards.
-  const casterPrefers = isMagicUser ? damageSpells.length > 0 : Math.random() < 0.4
+  const casterPrefers = isMagicUser ? damageSpells.length > 0 : rng.chance(0.4)
   if (casterPrefers && damageSpells.length > 0) {
-    const chosen = damageSpells[rand(damageSpells.length)]
+    const chosen = rng.pick(damageSpells)
     return { kind: 'spell', spellId: chosen.id }
   }
 
@@ -1549,27 +2192,76 @@ function removeInventoryEntry(
 
 // Unified mob-defeat handling: award XP, log the kill, roll loot, satisfy
 // greed, auto-equip, re-stamp weight, return to exploring. Called from both
-// DoT-kill and melee-kill paths in fight().
+// DoT-kill and melee-kill paths in fight(). The optional `killFamily`
+// tunes the defeat flavor — a sword kill reads "is cleaved in two", a
+// fireball kill reads "is reduced to ash", etc. — via the shared
+// death-phrase rotation. Roughly 50% of the time we still print the
+// compact "The X falls." line so the log isn't uniformly florid.
+//
+// `gatewayExitKey`: when present, this was a gateway-guardian fight
+// masking LLM area generation. On defeat, we check whether the target
+// exit room now has a destination (gen completed). If so, explore
+// normally; if not, transition to 'generating-area' so the finding-path
+// countdown can take over.
+/** When the killing strike was severe / critical AND came from a real
+ *  attack path (melee swing, damage spell), the caller fills in this
+ *  context so `resolveMobDefeat` emits a single combined kill line
+ *  ("Hiro cleaves the Goblin in half. (+12 XP)") instead of the
+ *  standard separate damage + defeat pair. DoT / condition kill paths
+ *  leave it undefined and keep the standard "The X falls." line. */
+interface CombinedKillOption {
+  severity: DamageSeverity
+  attackPower?: number
+  defense?: number
+  scaleMult?: number
+  weaponName?: string
+}
+
 function resolveMobDefeat(
   character: Character,
   mob: Mob,
   world: WorldContent,
   log: LogEntry[],
+  killFamily: DamageFamily | 'poison' | undefined,
+  gatewayExitKey: string | undefined,
+  rng: Rng,
+  combinedKill?: CombinedKillOption,
 ): Playing {
   const awardedXp = Math.max(
     1,
     Math.round(mob.xpReward * xpScaleByDelta(mob.level - character.level)),
   )
-  let out = append(log, {
-    kind: 'loot',
-    text: `The ${mob.name} falls. (+${awardedXp} XP)`,
-    meta: { mobName: mob.name, xpText: `+${awardedXp} XP`, mobDefeat: true },
-  })
   const area = getArea(world, character.position.areaId)
   const dropRoom =
     area.rooms[
       roomKey(character.position.x, character.position.y, character.position.z)
     ]
+  let out = append(
+    log,
+    combinedKill
+      ? formatCombinedKillLog({
+          characterName: character.name,
+          mob,
+          awardedXp,
+          // 'poison' isn't a kill-line family — falls back to generic.
+          killFamily: killFamily === 'poison' ? 'generic' : killFamily,
+          severity: combinedKill.severity,
+          attackPower: combinedKill.attackPower,
+          defense: combinedKill.defense,
+          scaleMult: combinedKill.scaleMult,
+          weaponName: combinedKill.weaponName,
+          areaId: area.id,
+          roomName: dropRoom?.name,
+        })
+      : formatMobDefeatLog({
+          mob,
+          awardedXp,
+          killFamily,
+          areaId: area.id,
+          roomName: dropRoom?.name,
+          rng,
+        }),
+  )
   const rewardCtx: RewardContext = {
     mobRarity: mob.rarity,
     mobLevel: mob.level,
@@ -1586,33 +2278,151 @@ function resolveMobDefeat(
   // the same curated entry in a level-1 area.
   const curatedLoot =
     mob.curated && dropRoom?.encounter?.loot ? dropRoom.encounter.loot : null
+  // Drop-bias context — lets `rollLoot` swap ordinary equipment/scroll
+  // drops for class- or room-appropriate alternatives. Curated loot is
+  // authored intent and bypasses the bias entirely (see rollCuratedLoot).
+  const biasCtx = {
+    classId: character.classId,
+    roomName: dropRoom?.name,
+    roomType: dropRoom?.type,
+    worldItems: world.items,
+  }
   const drops = curatedLoot
-    ? rollCuratedLoot(curatedLoot, rewardCtx)
-    : rollLoot(mob, rewardCtx)
-  out = appendDropLogs(out, character, world, drops, mob.rarity)
+    ? rollCuratedLoot(curatedLoot, rewardCtx, rng)
+    : rollLoot(mob, rewardCtx, biasCtx, world, rng)
+  // Pre-roll the rarity for each non-curated drop so the log line and
+  // the inventory stay in lockstep. Curated drops already carry
+  // `rarity` on the drop entry. Plain drops are normally rolled inside
+  // `applyDrops`, which fires AFTER this log; stamping the value here
+  // means the log paints the token with the actual drop tier instead
+  // of falling back to mob-rarity-as-proxy (which made rare drops from
+  // common mobs render gray).
+  const rewardMult = rewardCtx ? combatRewardMult(rewardCtx) : 1
+  for (const drop of drops.items) {
+    if (drop.rarity != null) continue
+    const def = world.items.find((i) => i.id === drop.itemId)
+    if (!def) continue
+    drop.rarity = rollDropRarity(def, mob.rarity, rewardMult, rng)
+  }
+  // Items go into a locked chest; pure gold drops bypass the chest and
+  // credit immediately so a mob that drops only coin stays a clean
+  // one-line beat. Auto-equip is deferred to chest-unlock so the player
+  // sees new gear get picked up and equipped together at the reveal.
   const greedEased = satisfy(character.drives, ['greed'])
   const trackedForBaddest = trackBaddest(
     { ...character, drives: greedEased },
     mob,
   )
-  const looted = applyDrops(
-    trackedForBaddest,
-    world,
-    drops,
-    mob,
-    { areaId: area.id, roomName: dropRoom?.name },
-    rewardCtx,
-  )
-  const equipResult = applyAutoEquip(looted, world)
-  for (const ev of equipResult.events) {
-    if (isRedundantEquip(ev)) continue
-    out = append(out, equipLogEntry(equipResult.character, ev))
+  // Resolve drops to chest-ready entries up-front. When every item is
+  // abandoned (encumbrance overflow), `entries` is empty and there's no
+  // chest to create — gold from the same kill still credits via the
+  // gold-only path below. When the character already has a chest, fresh
+  // items merge in and gold rides along into the existing chest.
+  const resolved = drops.items.length > 0
+    ? resolveChestDrops(
+        trackedForBaddest,
+        world,
+        drops.items,
+        mob,
+        { areaId: area.id, roomName: dropRoom?.name },
+        rewardCtx,
+        rng,
+      )
+    : { entries: [], abandoned: [] }
+  if (resolved.abandoned.length > 0) {
+    const names = resolved.abandoned.map((d) => d.name)
+    const count = names.length
+    const listText = names.join(', ')
+    out = append(out, {
+      kind: 'narrative',
+      text: `${formatActorName(trackedForBaddest, 'log')} sacrifices ${count} item${count !== 1 ? 's' : ''} — ${listText} — to the weight of the road.`,
+      meta: {
+        name: formatActorName(trackedForBaddest, 'log'),
+        // No itemId / itemName on the summary — it references
+        // multiple items, and the bracketed popover pattern assumes a
+        // single subject. Surface only the character name so the
+        // journal / log coloring still picks up the actor.
+      },
+    })
   }
-  const postLoot = {
-    ...equipResult.character,
-    drives: stampWeight(equipResult.character.drives, equipResult.character, world),
+  const existingChest = trackedForBaddest.lockedChest
+  let postLoot: Character
+  if (resolved.entries.length > 0 || existingChest) {
+    // Chest path — either creating a new chest with these entries, or
+    // merging into an existing chest (even if the merge is gold-only,
+    // because the player should see the running coin tally on the
+    // chest UI rather than getting it credited mid-cycle).
+    const mergedItems = existingChest
+      ? [...existingChest.items, ...resolved.entries]
+      : resolved.entries
+    const mergedGold = (existingChest?.gold ?? 0) + drops.gold
+    const targetTicks = Math.min(
+      CHEST_MAX_TICKS,
+      CHEST_BASE_TICKS + mergedItems.length * CHEST_PER_ITEM_TICKS,
+    )
+    // Subsequent kills extend the timer to the new target if it's
+    // longer than the remaining countdown — never shortens, so a chest
+    // about to open doesn't stall on a fresh kill.
+    const ticksLeft = existingChest
+      ? Math.max(existingChest.ticksLeft, targetTicks)
+      : targetTicks
+    // The "stows the spoils" line fires only on the kill that *opens*
+    // a fresh chest. Subsequent merges happen quietly — the chest UI
+    // surfaces the running count, and a per-kill log line would just
+    // be noise during a combat streak.
+    if (!existingChest) {
+      out = append(out, {
+        kind: 'narrative',
+        text: `${formatActorName(trackedForBaddest, 'log')} stows the spoils in a strange chest. It clicks shut.`,
+        meta: { name: trackedForBaddest.name },
+      })
+    }
+    const withChest: Character = {
+      ...trackedForBaddest,
+      lockedChest: {
+        items: mergedItems,
+        gold: mergedGold,
+        ticksLeft,
+        source: {
+          mobName: mob.name,
+          areaId: area.id,
+          roomName: dropRoom?.name,
+        },
+      },
+    }
+    postLoot = {
+      ...withChest,
+      drives: stampWeight(withChest.drives, withChest, world),
+    }
+  } else if (drops.gold > 0) {
+    // No items locked in (or every drop was abandoned with no existing
+    // chest to absorb them), but gold still drops — credit it via the
+    // legacy path so the gold pickup line and currency name come from
+    // the same helpers that all other gold credits use.
+    out = appendDropLogs(out, trackedForBaddest, world, drops, rng)
+    const goldOnly = applyDrops(
+      trackedForBaddest,
+      world,
+      drops,
+      mob,
+      { areaId: area.id, roomName: dropRoom?.name },
+      rewardCtx,
+      rng,
+    )
+    postLoot = {
+      ...goldOnly.character,
+      drives: stampWeight(goldOnly.character.drives, goldOnly.character, world),
+    }
+  } else {
+    // Nothing dropped (or all drops were abandoned and the kill yielded
+    // no gold) — re-stamp drives in case greed satisfaction shifted
+    // anything, otherwise leave the character unchanged.
+    postLoot = {
+      ...trackedForBaddest,
+      drives: stampWeight(trackedForBaddest.drives, trackedForBaddest, world),
+    }
   }
-  const xpResult = applyXp(postLoot, awardedXp, out)
+  const xpResult = applyXp(postLoot, awardedXp, out, rng)
   // firstOnly curated encounter defeated? Stamp the room key so the
   // spawn logic on subsequent entries skips the curated encounter and
   // falls back to the random pool. Only fires when the defeat happened
@@ -1622,6 +2432,30 @@ function resolveMobDefeat(
     dropRoom?.encounter?.firstOnly
       ? recordFirstOnlyDefeat(xpResult.character, area.id, dropRoom.x, dropRoom.y, dropRoom.z)
       : xpResult.character
+
+  // Gateway-guardian fight: check whether LLM gen finished during combat.
+  // If the exit room now has a destination, gen completed — just explore.
+  // Otherwise, transition to 'generating-area' so the finding-path
+  // countdown takes over.
+  if (gatewayExitKey) {
+    const [srcAreaId, coords] = gatewayExitKey.split('::')
+    const srcArea = srcAreaId
+      ? world.areas?.find((a) => a.id === srcAreaId)
+      : undefined
+    const exitRoom = srcArea && coords ? srcArea.rooms[coords] : undefined
+    if (!exitRoom?.destination) {
+      return {
+        character: finalCharacter,
+        log: xpResult.log,
+        state: {
+          kind: 'generating-area',
+          exitRoomKey: gatewayExitKey,
+          ticksLeft: AREA_GEN_TIMEOUT_TICKS,
+        },
+      }
+    }
+  }
+
   return { character: finalCharacter, log: xpResult.log, state: { kind: 'exploring' } }
 }
 
@@ -1646,17 +2480,31 @@ function resolveCharacterDeath(
   mob: Mob,
   world: WorldContent,
   log: LogEntry[],
+  rng: Rng,
 ): Playing {
   const area = getArea(world, character.position.areaId)
   const rk = roomKey(character.position.x, character.position.y, character.position.z)
   const room = area.rooms[rk]
+  // Rotating death verb — "falls to", "is slain by", "is cut down by",
+  // etc. — so a character with a long death log doesn't read like the
+  // same tragedy on repeat. When the mob has an `attackFamily` (fire,
+  // slash, pierce, …) we pass it through so the rotation can pick a
+  // family-flavored framing ("is reduced to ash", "is cleaved in two",
+  // "shatters before …") ~60% of the time. The record's `cause`
+  // field stores the predicate form ("Cut down by the X") suitable
+  // for stamping into the death log display directly.
+  const deathFamily = mob.attackFamily
+  const causeClause = deathClause(mob.name, deathFamily, rng)
+  const narrativeLine = deathSentence(formatActorName(character, 'log-milestone'), mob.name, deathFamily, rng)
   const record: DeathRecord = {
     at: Date.now(),
-    cause: `Fell to the ${mob.name}`,
+    cause: capitalize(causeClause),
     areaId: area.id,
     roomName: room?.name,
     roomKey: rk,
     mobName: mob.name,
+    mobRemainingHp: mob.hp,
+    mobMaxHp: mob.maxHp,
   }
   const respawn: Position = character.lastSafePosition ?? {
     areaId: area.id,
@@ -1671,16 +2519,18 @@ function resolveCharacterDeath(
     : "They wake again where it's safe."
   let out = append(log, {
     kind: 'narrative',
-    text: `${character.name} falls to the ${mob.name}. ${respawnText}`,
+    text: `${narrativeLine}. ${respawnText}`,
     meta: {
-      name: character.name,
+      name: formatActorName(character, 'log-milestone'),
       mobName: mob.name,
+      mobRarity: mob.rarity,
       areaId: area.id,
       roomKey: roomKey(respawn.x, respawn.y, respawn.z),
       roomName: respawnRoom?.name,
+      isDeath: true,
     },
   })
-  const penalty = applyDeathPenalty(character)
+  const penalty = applyDeathPenalty(character, rng)
   for (const entry of penalty.entries) out = append(out, entry)
   return {
     character: {
@@ -1695,22 +2545,26 @@ function resolveCharacterDeath(
   }
 }
 
-function fight(p: Playing, world: WorldContent): Playing {
+function fight(p: Playing, world: WorldContent, rng: Rng): Playing {
   if (p.state.kind !== 'fighting') return p
   const ambush = p.state.ambush
-  const condResult = tickConditions(p.character, world)
+  const gatewayExitKey = p.state.gatewayExitKey
+  const condResult = tickConditions(p.character, world, rng)
   let log = p.log
   for (const e of condResult.entries) log = append(log, e)
 
   // Apply any DoTs on the mob (e.g. poison spell last turn).
   let mob = p.state.mob
-  const mobCond = tickMobConditions(mob, world, p.character.worldId)
+  const mobCond = tickMobConditions(mob, world, p.character.worldId, rng)
   mob = mobCond.mob
   for (const e of mobCond.entries) log = append(log, e)
 
-  // If DoT finished the mob, award XP and exit.
+  // If DoT finished the mob, award XP and exit. Thread through the
+  // killing DoT's element (fire → "is reduced to ash", poison →
+  // "chokes and collapses", …) so the defeat flavor matches what
+  // actually landed the final tick.
   if (mob.hp === 0) {
-    return resolveMobDefeat(condResult.character, mob, world, log)
+    return resolveMobDefeat(condResult.character, mob, world, log, mobCond.killFamily, gatewayExitKey, rng)
   }
 
   const consumed = maybeAutoConsume(condResult.character, world)
@@ -1718,7 +2572,7 @@ function fight(p: Playing, world: WorldContent): Playing {
     return {
       character: consumed.character,
       log: append(log, consumed.entry),
-      state: { kind: 'fighting', mob, ambush },
+      state: { kind: 'fighting', mob, ambush, gatewayExitKey },
     }
   }
 
@@ -1741,12 +2595,17 @@ function fight(p: Playing, world: WorldContent): Playing {
   // retaliation window. We still check mob-self-heal first because the mob
   // may be damaged enough to heal instead of strike.
   if (mobAmbushing) {
+    // Mob ambush: single tick at 2× damage. Pass the multiplier
+    // through so runMobAttack picks it up after its own level-delta
+    // scaling — same shape as the character-side ambush above.
     const mobAttackResult = runMobAttack(
       character,
       mob,
       world,
       defenseBonus,
       log,
+      rng,
+      2,
     )
     if (mobAttackResult.kind === 'died') {
       return mobAttackResult.playing
@@ -1759,25 +2618,49 @@ function fight(p: Playing, world: WorldContent): Playing {
     return {
       character: mobAttackResult.character,
       log: mobAttackResult.log,
-      state: { kind: 'fighting', mob: mobAttackResult.mob, ambush: nextAmbush },
+      state: { kind: 'fighting', mob: mobAttackResult.mob, ambush: nextAmbush, gatewayExitKey },
     }
   }
 
   // Decide: melee, cast spell, or read a scroll?
-  const decision: AttackDecision = skipAttack ? { kind: 'melee' } : chooseCharacterAction(character, world)
+  const decision: AttackDecision = skipAttack ? { kind: 'melee' } : chooseCharacterAction(character, world, rng)
 
   let mobHpAfter = mob.hp
+  // Track the damage family of the strike that lands this tick so that
+  // if it zeros the mob, resolveMobDefeat can flavor the defeat line
+  // ("The Goblin is reduced to ash." on a fireball kill). Stays
+  // undefined on skipped turns — falls through to the generic
+  // "X falls." line then.
+  let killFamily: DamageFamily | 'poison' | undefined
+  // When the killing strike is severe / critical the standard
+  // damage-line + defeat-line pair gets replaced by a single combined
+  // entry. Filled in by the melee / spell branches below; passed into
+  // `resolveMobDefeat` which consumes it instead of the standard
+  // defeat line.
+  let combinedKill: CombinedKillOption | undefined
 
   if (skipAttack) {
     log = append(log, {
       kind: 'narrative',
-      text: `${character.name} cannot strike.`,
-      meta: { name: character.name, mobName: mob.name },
+      text: `${formatActorName(character, 'log')} cannot strike.`,
+      meta: { name: formatActorName(character, 'log'), mobName: mob.name, mobRarity: mob.rarity },
     })
   } else if (decision.kind === 'spell' || decision.kind === 'scroll') {
     const spell = getSpell(character.worldId, decision.spellId)!
     let workingChar = character
+    let scrollLevel: ScrollLevel | undefined
     if (decision.kind === 'scroll') {
+      // Capture the scroll's level BEFORE consuming it so castSpell can
+      // scale the spell amount. Falls back to Level I when the archetype
+      // somehow lacks a level (legacy data); the multiplier becomes 1×
+      // and behavior matches the pre-feature baseline.
+      const scrollItem = character.inventory[decision.inventoryIdx]
+      const scrollDef = scrollItem?.archetypeId
+        ? world.items.find((d) => d.id === scrollItem.archetypeId)
+        : undefined
+      if (scrollDef && scrollDef.kind === 'scroll') {
+        scrollLevel = scrollDef.level
+      }
       workingChar = removeInventoryEntry(character, decision.inventoryIdx)
     }
     const result = castSpell({
@@ -1787,11 +2670,23 @@ function fight(p: Playing, world: WorldContent): Playing {
       spell,
       free: decision.kind === 'scroll',
       source: decision.kind === 'scroll' ? 'scroll' : 'cast',
+      scrollLevel,
+      rng,
     })
     for (const e of result.entries) log = append(log, e)
     character = result.character
     if (result.mob) mob = result.mob
     mobHpAfter = mob.hp
+    // Spell element is the DamageFamily (fire/ice/electric/…) — used
+    // only when THIS spell lands the kill. Cases without an element
+    // (heal / buff spells) leave killFamily undefined.
+    if (spell.element) killFamily = spell.element
+    // Severe / critical kill from a damage spell: castSpell suppressed
+    // its standard damage entry and handed back the strike's
+    // breakdown so resolveMobDefeat can emit one combined kill line.
+    if (result.combinedKillCandidate) {
+      combinedKill = result.combinedKillCandidate
+    }
 
     // Teleport escape exits combat.
     if (result.teleported) {
@@ -1804,34 +2699,120 @@ function fight(p: Playing, world: WorldContent): Playing {
     // never turn into one-shots at extreme mismatches.
     const levelDelta = character.level - mob.level
     const outgoingMult = levelScaleOutgoing(levelDelta)
-    const attackRoll = roll(4) + mod(character.stats.strength) + attackBonus
+    const attackRoll = rng.roll(4) + mod(character.stats.strength) + attackBonus
     const baseCharDmg = attackRoll - mob.defense
-    const charDmg = Math.max(1, Math.round(baseCharDmg * outgoingMult))
+    // Pull the weapon's damage family (slash/crush/pierce) up front so
+    // it can feed both the log verb and the mob resist lookup. Falls
+    // through to the world's generic verb set / no resist when unarmed.
+    const weaponArchetype = character.equipped.weapon?.archetypeId
+      ? (world.items.find((i) => i.id === character.equipped.weapon!.archetypeId) ??
+          null)
+      : null
+    const weaponFamily =
+      weaponArchetype && weaponArchetype.kind === 'equipment'
+        ? weaponArchetype.damageFamily
+        : undefined
+    killFamily = weaponFamily
+    // Element / family resist applies after the level scale so an iron
+    // golem ('crush' resistant) shrugs off a sword swing the same way a
+    // fire elemental shrugs off a fireball. No family on a fist-fight
+    // → multiplier of 1.
+    const resistMult = mobResistMultiplier(mob, weaponFamily)
+    // Ambush strike: a single tick where the ambusher's blow lands
+    // for 2× damage. Stealth (rogue/ranger opener) stacks an extra
+    // 1.5× on top — 3× total — so class-driven ambushes still hit
+    // harder than a generic level-delta auto-ambush.
+    const charAmbushHit = ambush?.side === 'character' && ambush.ticksLeft === 1
+    const ambushMult = charAmbushHit ? 2 : 1
+    const stealthMult = charAmbushHit && ambush.reason === 'stealth' ? 1.5 : 1
+    const stealthFirstHit = charAmbushHit && ambush.reason === 'stealth'
+    const charDmg = Math.max(
+      1,
+      Math.round(baseCharDmg * outgoingMult * ambushMult * stealthMult * resistMult),
+    )
     mobHpAfter = Math.max(0, mob.hp - charDmg)
-    const { severity, verb } = damageVerb(charDmg, mob.maxHp, character.worldId)
+    const { severity, verb } = damageVerb(
+      charDmg,
+      mob.maxHp,
+      character.worldId,
+      weaponFamily,
+      rng,
+    )
     const weaponName = character.equipped.weapon?.name
+    // Stealth-opener prefix and meta flag are PR-side additions; main's
+    // formatAttackLog helper doesn't carry them, so this site stays
+    // inline. `scaleMult` is threaded through to keep the swing tag
+    // working alongside the stealth flavor.
+    const stealthPrefix = stealthFirstHit ? 'From the shadows, ' : ''
     const withSuffix = weaponName
-      ? `${character.name} ${verb} the ${mob.name} with ${weaponName}.`
-      : `${character.name} ${verb} the ${mob.name}.`
-    log = append(log, {
-      kind: 'damage',
-      text: withSuffix,
-      amount: charDmg,
-      severity,
-      meta: {
-        name: character.name,
-        mobName: mob.name,
-        verb,
+      ? `${stealthPrefix}${formatActorName(character, 'log')} ${verb} the ${mob.name} with ${weaponName}.`
+      : `${stealthPrefix}${formatActorName(character, 'log')} ${verb} the ${mob.name}.`
+    // Severe / critical kills collapse into a single combined entry
+    // emitted by `resolveMobDefeat`. Skip the standard damage line
+    // here so the log doesn't read "Hiro slashes the Goblin." then
+    // "Hiro cleaves the Goblin in half." back-to-back. Lighter-tier
+    // kills keep the original two-line cadence.
+    const kills = mobHpAfter === 0
+    const isFinisher = kills && (severity === 'severe' || severity === 'critical')
+    if (isFinisher) {
+      combinedKill = {
         severity,
-        itemName: weaponName,
         attackPower: attackRoll,
         defense: mob.defense,
-      },
-    })
+        scaleMult: outgoingMult,
+        weaponName,
+      }
+    } else {
+      log = append(log, {
+        kind: 'damage',
+        text: withSuffix,
+        amount: charDmg,
+        severity,
+        meta: {
+          name: formatActorName(character, 'log'),
+          mobName: mob.name,
+          verb,
+          severity,
+          itemName: weaponName,
+          attackPower: attackRoll,
+          defense: mob.defense,
+          scaleMult: outgoingMult,
+          mobRarity: mob.rarity,
+          stealth: stealthFirstHit ? true : undefined,
+        },
+      })
+    }
+
+    // Rogue signature: stealth-opener hits always coat the blade. Silently
+    // no-ops when the world doesn't define a 'poisoned' condition — other
+    // worlds can add their own rogue-equivalent DoT under that id.
+    if (stealthFirstHit && character.classId === 'rogue' && mobHpAfter > 0) {
+      const applied = applyMobCondition(mob, world, 'poisoned', {
+        name: character.name,
+        weaponName: character.equipped.weapon?.name,
+      })
+      mob = applied.mob
+      if (applied.entry) log = append(log, applied.entry)
+    }
   }
 
   if (mobHpAfter === 0) {
-    return resolveMobDefeat(character, mob, world, log)
+    // Pass through the killing family so the defeat line can flavor
+    // by kill type: spell → spell.element, melee → weaponFamily (or
+    // unarmed claw). Sits at local scope so both branches fill it
+    // before reaching this check. `combinedKill`, when set, swaps the
+    // standard "X falls." defeat line for a single combined entry that
+    // already encodes the killing strike.
+    return resolveMobDefeat(
+      character,
+      mob,
+      world,
+      log,
+      killFamily,
+      gatewayExitKey,
+      rng,
+      combinedKill,
+    )
   }
 
   // Character-ambush active → mob doesn't retaliate this tick. Decrement and
@@ -1847,6 +2828,7 @@ function fight(p: Playing, world: WorldContent): Playing {
         kind: 'fighting',
         mob: { ...mob, hp: mobHpAfter },
         ambush: nextAmbush,
+        gatewayExitKey,
       },
     }
   }
@@ -1863,12 +2845,7 @@ function fight(p: Playing, world: WorldContent): Playing {
     const heal = mobWorking.healAmount ?? Math.max(3, Math.round(mobWorking.maxHp * 0.35))
     const healed = Math.min(mobWorking.maxHp, mobWorking.hp + heal)
     const actual = healed - mobWorking.hp
-    log = append(log, {
-      kind: 'heal',
-      text: `The ${mobWorking.name} patches itself up.`,
-      amount: actual,
-      meta: { mobName: mobWorking.name },
-    })
+    log = append(log, formatMobSelfHealLog(mobWorking.name, actual, mobWorking.rarity))
     const healedMob: Mob = {
       ...mobWorking,
       hp: healed,
@@ -1877,36 +2854,42 @@ function fight(p: Playing, world: WorldContent): Playing {
     return {
       character,
       log,
-      state: { kind: 'fighting', mob: healedMob, ambush },
+      state: { kind: 'fighting', mob: healedMob, ambush, gatewayExitKey },
     }
   }
 
   const levelDelta = character.level - mob.level
   const incomingMult = levelScaleIncoming(levelDelta)
-  const mobAttackRoll = mob.attack + roll(3) - 2
+  const mobAttackRoll = mob.attack + rng.roll(3) - 2
   const totalDefense = mod(character.stats.dexterity) + defenseBonus
   const baseMobDmg = mobAttackRoll - totalDefense
   const mobDmg = Math.max(1, Math.round(baseMobDmg * incomingMult))
   const charHpAfter = Math.max(0, character.hp - mobDmg)
-  const mobAttack = damageVerb(mobDmg, character.maxHp, character.worldId)
+  // Mob's natural-weapon family — beasts claw, constructs crush, etc.
+  // Default 'claw' reads as a generic animal-style attack.
+  const mobAttack = damageVerb(
+    mobDmg,
+    character.maxHp,
+    character.worldId,
+    mob.attackFamily ?? 'claw',
+    rng,
+  )
 
-  log = append(log, {
-    kind: 'damage',
-    text: `The ${mob.name} ${mobAttack.verb} ${character.name}.`,
-    amount: mobDmg,
+  log = append(log, formatAttackLog({
+    direction: 'mob-to-char',
+    characterName: formatActorName(character, 'log'),
+    mobName: mob.name,
+    verb: mobAttack.verb,
     severity: mobAttack.severity,
-    meta: {
-      name: character.name,
-      mobName: mob.name,
-      verb: mobAttack.verb,
-      severity: mobAttack.severity,
-      attackPower: mobAttackRoll,
-      defense: totalDefense,
-    },
-  })
+    amount: mobDmg,
+    attackPower: mobAttackRoll,
+    defense: totalDefense,
+    scaleMult: incomingMult,
+    mobRarity: mob.rarity,
+  }))
 
   let postHitChar = character
-  if (charHpAfter > 0 && mob.applyOnHit && Math.random() < mob.applyOnHit.chance) {
+  if (charHpAfter > 0 && mob.applyOnHit && rng.chance(mob.applyOnHit.chance)) {
     const applied = applyCondition(
       postHitChar,
       world,
@@ -1918,7 +2901,7 @@ function fight(p: Playing, world: WorldContent): Playing {
   }
 
   if (charHpAfter === 0) {
-    return resolveCharacterDeath(character, mob, world, log)
+    return resolveCharacterDeath(character, mob, world, log, rng)
   }
 
   // Ambush counter was only consumed by the char-only / mob-only branches
@@ -1927,7 +2910,7 @@ function fight(p: Playing, world: WorldContent): Playing {
   return {
     character: { ...postHitChar, hp: charHpAfter },
     log,
-    state: { kind: 'fighting', mob: { ...mob, hp: mobHpAfter }, ambush },
+    state: { kind: 'fighting', mob: { ...mob, hp: mobHpAfter }, ambush, gatewayExitKey },
   }
 }
 
@@ -1947,18 +2930,15 @@ function runMobAttack(
   world: WorldContent,
   defenseBonus: number,
   log: LogEntry[],
+  rng: Rng,
+  damageMult: number = 1,
 ): MobAttackOutcome {
   // Self-heal first — an ambushing mob that's somehow already hurt still
   // prefers survival over damage.
   if (mob.hp < mob.maxHp * 0.35 && mob.healChargesLeft > 0) {
     const heal = mob.healAmount ?? Math.max(3, Math.round(mob.maxHp * 0.35))
     const healed = Math.min(mob.maxHp, mob.hp + heal)
-    log = append(log, {
-      kind: 'heal',
-      text: `The ${mob.name} patches itself up.`,
-      amount: healed - mob.hp,
-      meta: { mobName: mob.name },
-    })
+    log = append(log, formatMobSelfHealLog(mob.name, healed - mob.hp, mob.rarity))
     return {
       kind: 'alive',
       character,
@@ -1969,29 +2949,27 @@ function runMobAttack(
 
   const levelDelta = character.level - mob.level
   const incomingMult = levelScaleIncoming(levelDelta)
-  const mobAttackRoll = mob.attack + roll(3) - 2
+  const mobAttackRoll = mob.attack + rng.roll(3) - 2
   const totalDefense = mod(character.stats.dexterity) + defenseBonus
   const base = mobAttackRoll - totalDefense
-  const dmg = Math.max(1, Math.round(base * incomingMult))
+  const dmg = Math.max(1, Math.round(base * incomingMult * damageMult))
   const hpAfter = Math.max(0, character.hp - dmg)
-  const verb = damageVerb(dmg, character.maxHp, character.worldId)
-  log = append(log, {
-    kind: 'damage',
-    text: `The ${mob.name} ${verb.verb} ${character.name}.`,
-    amount: dmg,
+  const verb = damageVerb(dmg, character.maxHp, character.worldId, mob.attackFamily ?? 'claw', rng)
+  log = append(log, formatAttackLog({
+    direction: 'mob-to-char',
+    characterName: formatActorName(character, 'log'),
+    mobName: mob.name,
+    verb: verb.verb,
     severity: verb.severity,
-    meta: {
-      name: character.name,
-      mobName: mob.name,
-      verb: verb.verb,
-      severity: verb.severity,
-      attackPower: mobAttackRoll,
-      defense: totalDefense,
-    },
-  })
+    amount: dmg,
+    attackPower: mobAttackRoll,
+    defense: totalDefense,
+    scaleMult: incomingMult,
+    mobRarity: mob.rarity,
+  }))
 
   if (hpAfter === 0) {
-    return { kind: 'died', playing: resolveCharacterDeath(character, mob, world, log) }
+    return { kind: 'died', playing: resolveCharacterDeath(character, mob, world, log, rng) }
   }
 
   return { kind: 'alive', character: { ...character, hp: hpAfter }, mob, log }
@@ -2024,7 +3002,7 @@ function maybeRampTickSpeed(p: Playing): Playing {
       ...p,
       character: { ...p.character, tickSpeed: to },
       log: append(p.log, {
-        kind: 'narrative',
+        kind: 'meta',
         text: `The world seems to move by faster now…`,
         meta: { name: p.character.name },
       }),
@@ -2033,7 +3011,7 @@ function maybeRampTickSpeed(p: Playing): Playing {
   return p
 }
 
-function generatingArea(p: Playing): Playing {
+function generatingArea(p: Playing, world: WorldContent): Playing {
   if (p.state.kind !== 'generating-area') return p
   const ticksLeft = p.state.ticksLeft - 1
   if (ticksLeft > 0) {
@@ -2042,21 +3020,39 @@ function generatingArea(p: Playing): Playing {
       state: { ...p.state, ticksLeft },
     }
   }
-  // Timer expired — if an LLM response hasn't wired in the new area yet,
-  // just resume exploring. The async callback in App.tsx will handle the
-  // transition when the LLM response arrives.
+  // Timer expired — flag the exit tile as skipGeneration so future
+  // visits don't re-attempt, emit a meta log entry, and bail to
+  // exploring. The primary timeout path is FindingPathOverlay in
+  // App.tsx (120s real-time); this tick-based fallback is the safety
+  // net for edge cases where the overlay isn't rendered.
+  const [srcAreaId, coords] = p.state.exitRoomKey.split('::')
+  if (srcAreaId && coords) {
+    const srcArea = world.areas?.find((a) => a.id === srcAreaId)
+    if (srcArea) {
+      const exitRoom = srcArea.rooms[coords]
+      if (exitRoom) {
+        exitRoom.skipGeneration = true
+      }
+    }
+  }
+
   return {
     ...p,
     log: append(p.log, {
-      kind: 'narrative',
-      text: `${p.character.name} senses the path ahead has not yet taken shape.`,
-      meta: { name: p.character.name },
+      kind: 'meta',
+      text: 'The path ahead did not take shape. Perhaps another time.',
     }),
     state: { kind: 'exploring' },
   }
 }
 
 export function runTick(p: Playing, world: WorldContent): Playing {
+  // Restore per-character PRNG. All game-state randomness draws from
+  // this stream so (character state, seed, tick sequence) replays
+  // identically. The state is stamped back onto the character after
+  // the tick completes.
+  const rng = Rng.fromState(p.character.rngState)
+
   // Bump the character's lifetime tick counter at the top of every tick so
   // every downstream update (and the roster card) sees the fresh value.
   const bumped: Playing = {
@@ -2067,19 +3063,63 @@ export function runTick(p: Playing, world: WorldContent): Playing {
   // milestone. The narrative log entry it appends carries the speed-up
   // beat so the player notices the cadence change.
   const withTick = maybeRampTickSpeed(bumped)
-  switch (withTick.state.kind) {
-    case 'exploring':
-      return explore(withTick, world)
-    case 'resting':
-      return rest(withTick, world)
-    case 'meditating':
-      return meditate(withTick, world)
-    case 'fighting':
-      return fight(withTick, world)
-    case 'using-room':
-      return handleRoomAction(withTick, world)
-    case 'generating-area':
-      return generatingArea(withTick)
+  // Locked-chest countdown ticks down here, before the state handler
+  // dispatches, so the chest is wall-clock-driven regardless of which
+  // state the character is in. An unlock fires its own log + auto-equip
+  // lines into the running `log` array via `tickLockedChest`; the state
+  // handler then runs against the post-unlock character so any new gear
+  // shows up in the same tick's combat / explore math.
+  const chested = tickLockedChest(withTick, world, rng)
+  const after: Playing = (() => {
+    switch (chested.state.kind) {
+      case 'exploring':
+        return explore(chested, world, rng)
+      case 'resting':
+        return rest(chested, world, rng)
+      case 'meditating':
+        return meditate(chested, world, rng)
+      case 'fighting':
+        return fight(chested, world, rng)
+      case 'using-room':
+        return handleRoomAction(chested, world, rng)
+      case 'generating-area':
+        return generatingArea(chested, world)
+    }
+  })()
+  // Stamp the post-tick PRNG state back onto the character so the next
+  // tick resumes from the same stream position.
+  const stamped: Playing = {
+    ...after,
+    character: { ...after.character, rngState: rng.save() },
+  }
+
+  // Journal derivation — single chokepoint, mirrors the effects
+  // pipeline. Compares pre-tick state to post-tick state + the new log
+  // entries and emits journal entries for milestones. Writes land on
+  // the returned character so every tick transition is fully captured
+  // without threading journal state through every sub-handler.
+  //
+  // `newLogEntries` is computed by Set-identity difference rather than
+  // a length-based slice. Length diff breaks once the log hits cap:
+  // every append past cap evicts an old entry, so
+  // `after.log.length === withTick.log.length` even though new entries
+  // were added. Identity diff is robust to that eviction — we only
+  // look for entries present in `after` but not in `withTick`.
+  const beforeSet = new Set(withTick.log)
+  const newLogEntries = stamped.log.filter((e) => !beforeSet.has(e))
+  const journalAdds = deriveJournalEntries(
+    withTick.character,
+    stamped.character,
+    newLogEntries,
+    world,
+  )
+  if (journalAdds.length === 0) return stamped
+  return {
+    ...stamped,
+    character: {
+      ...stamped.character,
+      journal: [...(stamped.character.journal ?? []), ...journalAdds],
+    },
   }
 }
 
@@ -2095,17 +3135,32 @@ export function seedLog(
   // pass `discovery: true` only when the character is being freshly
   // created; load paths leave it off so the banner doesn't re-fire.
   const entries: LogEntry[] = [
-    { kind: 'chapter', text: `${character.name} stirs.`, meta: { name: character.name } },
+    { kind: 'chapter', text: `${formatActorName(character, 'log')} stirs.`, meta: { name: formatActorName(character, 'log') } },
   ]
+  // Intro line — only on true character creation, not save reloads. Ties
+  // the player's chosen name to the world's birth title, so the reader
+  // learns who's behind "the Wayfarer" / "the Nobody" / "the Cadet"
+  // before the routine log spends the first tier in title-only mode.
   if (options.discovery) {
-    entries.push({ kind: 'area', text: area.name, rarity: area.rarity })
+    const manifest = getWorldManifest(character.worldId)
+    const introTemplate = manifest?.birthIntro
+    if (introTemplate) {
+      entries.push({
+        kind: 'narrative',
+        text: introTemplate.replace('{name}', character.name),
+        // Birth-intro template substitutes the bare {name}, so the
+        // highlight target is the bare name (not the title-aware form).
+        meta: { name: character.name },
+      })
+    }
+    entries.push({ kind: 'area', text: area.name, rarity: area.rarity, areaId: area.id })
   }
   if (room) {
     entries.push({
       kind: 'narrative',
-      text: `${character.name} stands in the ${room.name}. ${room.description}`,
+      text: `${formatActorName(character, 'log')} stands in the ${room.name}. ${room.description}`,
       meta: {
-        name: character.name,
+        name: formatActorName(character, 'log'),
         areaId: area.id,
         roomKey: roomKey(room.x, room.y, room.z),
         roomName: room.name,

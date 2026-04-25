@@ -52,6 +52,35 @@ export interface RoomArchetype {
   destination?: Position
   /** Only on 'exit' rooms. True when no generated area has been linked yet. */
   pendingAreaGeneration?: boolean
+  /** When true, this exit always re-triggers LLM generation on entry —
+   *  the previous destination (if any) is ignored. Each visit produces a
+   *  fresh generated area, giving the player a reliable escape hatch to
+   *  roll new content when the last generation was too hard or stale. */
+  permanentFrontier?: boolean
+  /** When true, this tile has been permanently flagged to skip LLM area
+   *  generation — either because the player chose "Continue without
+   *  generation" or because the generation timed out. Future visits
+   *  bypass dialogs/fights and reveal the tile as empty content. */
+  skipGeneration?: boolean
+  /** When true, this exit is a Portal Hub — a single tile that offers a
+   *  dialog for choosing between generating a fresh area or revisiting
+   *  any area previously generated through this same portal. Stepping
+   *  on it opens the portal-selection dialog instead of auto-triggering
+   *  generation the way a plain permanentFrontier would. */
+  portalHub?: boolean
+  /** Areas generated through this Portal Hub, displayed as revisitable
+   *  destinations in the portal-selection dialog. Grows unbounded —
+   *  every generation through this hub appends an entry. */
+  portalDestinations?: PortalDestination[]
+}
+
+export interface PortalDestination {
+  /** Generated area id — used to traverse the portal. */
+  areaId: string
+  /** Display name shown in the portal dialog (the area's generated name). */
+  name: string
+  /** Epoch ms when the area was generated — used for sorting by recency. */
+  generatedAt: number
 }
 
 // Flavor of a room: name, description, and per-drive action narration.
@@ -123,6 +152,26 @@ export interface Area {
    *  level at creation time. Absent = unknown tier (sorts last in UIs
    *  like the dev Area tab). */
   level?: number
+  /** Canonical area kind — settlement / wilderness / dungeon / ruin.
+   *  Authored areas assert this at definition time; generated areas
+   *  stamp it from `pickAreaKind` at generation time and persist the
+   *  value through the cache. Surfaced in the map panel header as a
+   *  room-type-style chip. Optional for back-compat with pre-field
+   *  cache entries. */
+  kind?: AreaKind
+  /** Epoch ms when this area was first generated (LLM pass). Absent on
+   *  authored areas and on older cached areas that predate the stamp.
+   *  Surfaced in the dev Area tab (as "3h ago") and in the Map's room
+   *  index (paired with the creator fields below for a full provenance
+   *  line). */
+  generatedAt?: number
+  /** Character name whose session triggered the LLM call that
+   *  generated this area. Absent for authored areas and for cache
+   *  entries that predate the stamp. */
+  createdBy?: string
+  /** Model id (e.g. "claude-opus-4-7") that produced the flavor pass.
+   *  Absent for authored areas. */
+  createdByModel?: string
   startX: number
   startY: number
   startZ: number

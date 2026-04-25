@@ -61,6 +61,10 @@ export function payloadToArea(
       name,
       description,
       ...(encounter ? { encounter } : {}),
+      // Exit rooms in generated areas are frontier exits — mark them as
+      // pending so the tick loop triggers a fresh generation when the
+      // player reaches them, enabling recursive exploration.
+      ...(s.type === 'exit' ? { pendingAreaGeneration: true } : {}),
     }
   }
   const start = shape[0] ?? { x: 0, y: 0, z: 0 }
@@ -73,8 +77,8 @@ export function payloadToArea(
     rooms,
   }
   // Shape-first generation already respects the caps (one-level grid,
-  // no exit-type rooms), but run the enforcers anyway so the pipeline
-  // stays robust if a shape template is extended later.
+  // ≤ 2 exit rooms), but run the enforcers anyway so the pipeline stays
+  // robust if a shape template is extended later.
   return enforceAreaCaps(pruneDisconnectedRooms(area))
 }
 
@@ -102,18 +106,29 @@ export function countGeneratedAreas(
   return new Set(Object.values(graph)).size
 }
 
-/** Stores a generated area in the entity cache with metadata. */
+/** Stores a generated area in the entity cache with metadata.
+ *  Also stamps the provenance (`generatedAt`, `createdBy`, `createdByModel`)
+ *  directly onto the Area payload. Duplicates the entry-level `meta` by
+ *  design: surfaces like the map's room index read straight from the Area
+ *  (which is the object passed around the running session) and would
+ *  otherwise have to plumb the cache `meta` everywhere. */
 export async function storeGeneratedArea(
   cache: EntityCache,
   area: Area,
   worldId: string,
   meta: GenerationMeta,
 ): Promise<void> {
+  const stamped: Area = {
+    ...area,
+    generatedAt: area.generatedAt ?? meta.generatedAt,
+    createdBy: area.createdBy ?? meta.characterName,
+    createdByModel: area.createdByModel ?? meta.modelId,
+  }
   const entry: EntityCacheEntry = {
-    hash: `${AREA_GEN_TEMPLATE_ID}:${worldId}:${area.id}`,
+    hash: `${AREA_GEN_TEMPLATE_ID}:${worldId}:${stamped.id}`,
     kind: 'location',
     createdAt: Date.now(),
-    payload: area,
+    payload: stamped,
     meta,
   }
   await cache.put(entry)

@@ -1,6 +1,6 @@
 import type { Area } from '../areas'
 import { enforceAreaCaps, pruneDisconnectedRooms } from '../areas'
-import type { EntityCache } from '../storage/types'
+import type { EntityCache, GenerationMeta } from '../storage/types'
 import type { WorldContent } from '../worlds'
 import { AREA_GEN_TEMPLATE_ID } from './areaGen'
 
@@ -76,22 +76,37 @@ export async function rehydrateGeneratedAreas(
   // pruneDisconnectedRooms fixes older cached areas where the LLM left
   // orphan rooms (e.g. a "Dark Caverns" island inside Forsaken Hollow)
   // that the map would otherwise render as unreachable clutter.
-  const intake = (raw: Area, metaLevel: number | undefined, hash: string) => {
+  const intake = (
+    raw: Area,
+    meta: GenerationMeta | undefined,
+    hash: string,
+  ) => {
     if (!raw.id) return
-    const level = typeof raw.level === 'number' ? raw.level : metaLevel
+    const level = typeof raw.level === 'number' ? raw.level : meta?.characterLevel
     if (typeof level !== 'number') {
       toDelete.push(hash)
       return
     }
     const pruned = enforceAreaCaps(pruneDisconnectedRooms(raw))
-    byId[raw.id] =
-      typeof pruned.level === 'number' ? pruned : { ...pruned, level }
+    // Backfill provenance on older cached payloads that predate the
+    // Area-level fields. `meta` is still authoritative in that case, so
+    // the dev Area tab and the map's room index can always attribute a
+    // generated area. Each field only fills in when the payload doesn't
+    // already carry it, so new-format payloads keep their own stamp.
+    const withProvenance: Area = {
+      ...pruned,
+      level: typeof pruned.level === 'number' ? pruned.level : level,
+      generatedAt: pruned.generatedAt ?? meta?.generatedAt,
+      createdBy: pruned.createdBy ?? meta?.characterName,
+      createdByModel: pruned.createdByModel ?? meta?.modelId,
+    }
+    byId[raw.id] = withProvenance
   }
   try {
     const entries = await cache.listByPrefix(prefix)
     for (const entry of entries) {
       if (!entry.payload) continue
-      intake(entry.payload as Area, entry.meta?.characterLevel, entry.hash)
+      intake(entry.payload as Area, entry.meta, entry.hash)
     }
   } catch {
     // Cache may not support listByPrefix in every impl — fall through to
@@ -104,7 +119,7 @@ export async function rehydrateGeneratedAreas(
     const hash = `${prefix}${areaId}`
     const entry = await cache.get(hash)
     if (!entry || !entry.payload) continue
-    intake(entry.payload as Area, entry.meta?.characterLevel, hash)
+    intake(entry.payload as Area, entry.meta, hash)
   }
 
   // Fire-and-forget the actual cache deletes; they can't fail the boot.
@@ -153,7 +168,9 @@ export async function rehydrateGeneratedAreas(
     const srcArea = world.areas.find((a) => a.id === srcAreaId)
     if (!srcArea) continue
     const exitRoom = srcArea.rooms[coords]
-    if (exitRoom) {
+    // Skip destination wiring for permanent frontier exits — they must
+    // stay un-wired so each visit triggers a fresh LLM generation.
+    if (exitRoom && !exitRoom.permanentFrontier) {
       exitRoom.destination = {
         areaId: area.id,
         x: area.startX,

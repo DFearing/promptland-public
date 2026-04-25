@@ -1,1 +1,1 @@
-export type { LogEntry, LogMeta } from './types'
+export type { DamageSeverity, LogEntry, LogMeta } from './types'

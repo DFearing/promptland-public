@@ -278,7 +278,7 @@ export default function CharacterViewport({ stateKind, events, elementEvents, vi
   }, [events])
 
   return (
-    <div className="viewport scanlines">
+    <div className="viewport">
       <div ref={hostRef} className="viewport__canvas" />
       {elementEvents && <ElementOverlay events={elementEvents} target="character" />}
 

@@ -49,11 +49,27 @@ export function deriveEvents(ctx: EffectContext): EffectEvent[] {
     events.push({ id: nextId(), kind: 'generating-area' })
   }
 
-  const newEntries = ctx.nextLog.slice(ctx.prevLogLength)
-  for (const entry of newEntries) {
+  for (const entry of ctx.newLogEntries) {
+    // Death check is cross-kind: tick.ts emits the death line as
+    // `kind: 'narrative'` with `meta.isDeath: true`, not as a chapter.
+    // Keeping this outside the switch means the death event fires
+    // regardless of which log kind the narrative line picks up.
+    const meta = 'meta' in entry ? entry.meta : undefined
+    if (meta?.isDeath) {
+      const deaths = ctx.character.deaths
+      events.push({
+        id: nextId(),
+        kind: 'death',
+        deathCount: deaths.length,
+        // The death event fires on the same tick the record is
+        // appended, so the last entry in the array is this death.
+        record: deaths[deaths.length - 1],
+      })
+      continue
+    }
     switch (entry.kind) {
       case 'chapter': {
-        const chMeta = 'meta' in entry ? entry.meta : undefined
+        const chMeta = entry.meta
         if (chMeta?.levelTo !== undefined) {
           // Find the matching record for this level. Fall back to the last one.
           const levelTo = chMeta.levelTo
@@ -72,11 +88,6 @@ export function deriveEvents(ctx: EffectContext): EffectEvent[] {
               previousGold,
             })
           }
-        } else if (
-          entry.text.includes(' falls to the ') ||
-          entry.text.includes(' falls. ')
-        ) {
-          events.push({ id: nextId(), kind: 'death' })
         }
         break
       }
@@ -145,11 +156,33 @@ export function deriveEvents(ctx: EffectContext): EffectEvent[] {
         // New item discovery — only banner for rare+ so common/uncommon
         // pickups don't spam the overlay. Still mark the item as seen so
         // later upgrades at higher rarity don't double-fire.
-        const itemName = entry.meta?.itemName
-        if (itemName && isFirstItem(ctx.character.id, itemName)) {
-          const rarity = entry.meta?.itemRarity
+        //
+        // Batched pickup lines carry an `items` array; iterate it so each
+        // rare+ item in a multi-drop event gets its own first-find
+        // banner. Legacy single-item entries fall back to the top-level
+        // itemName/itemRarity fields.
+        type DiscoveryCandidate = {
+          name: string | undefined
+          rarity:
+            | 'common'
+            | 'uncommon'
+            | 'rare'
+            | 'epic'
+            | 'legendary'
+            | undefined
+        }
+        const itemsMeta = entry.meta?.items
+        const discoveryCandidates: DiscoveryCandidate[] =
+          itemsMeta && itemsMeta.length > 0
+            ? itemsMeta.map((it) => ({ name: it.name, rarity: it.rarity }))
+            : [{ name: entry.meta?.itemName, rarity: entry.meta?.itemRarity }]
+        for (const cand of discoveryCandidates) {
+          const candName = cand.name
+          if (!candName) continue
+          if (!isFirstItem(ctx.character.id, candName)) continue
+          const rarity = cand.rarity
           if (rarity === 'rare' || rarity === 'epic' || rarity === 'legendary') {
-            events.push({ id: nextId(), kind: 'new-item', name: itemName })
+            events.push({ id: nextId(), kind: 'new-item', name: candName })
           }
         }
         break
@@ -201,13 +234,16 @@ export function deriveFieldEvents(prev: Character, next: Character): FieldFxEven
 // entry with `meta.element` fires one ElementFxEvent routed to the affected
 // actor (character vs. mob). Used to drive the ElementOverlay component on
 // the character viewport and the combat target panel.
+//
+// Takes the pre-sliced `newLogEntries` (not a length index) for the same
+// cap-safety reason as `deriveEvents`: a length-based diff drops entries
+// once the log reaches its 200-entry cap because every append then evicts
+// an older entry.
 export function deriveElementEvents(
-  prevLogLength: number,
-  nextLog: LogEntry[],
+  newLogEntries: readonly LogEntry[],
 ): ElementFxEvent[] {
   const out: ElementFxEvent[] = []
-  const newEntries = nextLog.slice(prevLogLength)
-  for (const entry of newEntries) {
+  for (const entry of newLogEntries) {
     const meta = 'meta' in entry ? entry.meta : undefined
     if (!meta?.element) continue
 

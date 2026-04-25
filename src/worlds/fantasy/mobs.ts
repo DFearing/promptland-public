@@ -8,7 +8,8 @@ const ARCHETYPES: MobArchetype[] = [
     maxHp: 4,
     attack: 2,
     defense: 0,
-    xpReward: 3,
+    xpReward: 21,
+    attackFamily: 'claw',
     loot: [
       { kind: 'gold', chance: 0.5, min: 1, max: 3 },
       { kind: 'item', itemId: 'rat_tail', chance: 0.45 },
@@ -20,7 +21,8 @@ const ARCHETYPES: MobArchetype[] = [
     maxHp: 3,
     attack: 2,
     defense: 0,
-    xpReward: 3,
+    xpReward: 21,
+    attackFamily: 'pierce',
     applyOnHit: { conditionId: 'poisoned', chance: 0.3 },
     loot: [
       { kind: 'gold', chance: 0.25, min: 1, max: 2 },
@@ -32,7 +34,8 @@ const ARCHETYPES: MobArchetype[] = [
     maxHp: 3,
     attack: 2,
     defense: 0,
-    xpReward: 3,
+    xpReward: 21,
+    attackFamily: 'claw',
     loot: [
       { kind: 'gold', chance: 0.2, min: 1, max: 2 },
       { kind: 'item', itemId: 'crow_feather', chance: 0.65 },
@@ -44,7 +47,8 @@ const ARCHETYPES: MobArchetype[] = [
     maxHp: 5,
     attack: 3,
     defense: 0,
-    xpReward: 5,
+    xpReward: 35,
+    attackFamily: 'pierce',
     applyOnHit: { conditionId: 'poisoned', chance: 0.25 },
     loot: [
       { kind: 'gold', chance: 0.2, min: 1, max: 3 },
@@ -57,7 +61,8 @@ const ARCHETYPES: MobArchetype[] = [
     maxHp: 6,
     attack: 3,
     defense: 0,
-    xpReward: 5,
+    xpReward: 35,
+    attackFamily: 'ice',
     applyOnHit: { conditionId: 'slept', chance: 0.2 },
     // Shades siphon life from the shadows when cornered — one hefty refill
     // per encounter, enough to feel like a second chance but not a stall.
@@ -79,8 +84,9 @@ const ARCHETYPES: MobArchetype[] = [
     maxHp: 9,
     attack: 4,
     defense: 1,
-    xpReward: 8,
+    xpReward: 56,
     level: 3,
+    attackFamily: 'claw',
     loot: [
       { kind: 'gold', chance: 0.5, min: 2, max: 8 },
       { kind: 'item', itemId: 'wolf_pelt', chance: 0.65 },
@@ -94,7 +100,8 @@ const ARCHETYPES: MobArchetype[] = [
     maxHp: 8,
     attack: 3,
     defense: 1,
-    xpReward: 6,
+    xpReward: 42,
+    attackFamily: 'slash',
     loot: [
       { kind: 'gold', chance: 0.7, min: 2, max: 6 },
       { kind: 'item', itemId: 'bone_shard', chance: 0.7, min: 1, max: 2 },
@@ -120,8 +127,9 @@ const ARCHETYPES: MobArchetype[] = [
     maxHp: 16,
     attack: 5,
     defense: 3,
-    xpReward: 14,
+    xpReward: 98,
     level: 5,
+    attackFamily: 'crush',
     loot: [
       { kind: 'gold', chance: 0.85, min: 8, max: 20 },
       { kind: 'item', itemId: 'bone_shard', chance: 0.5, min: 1, max: 2 },

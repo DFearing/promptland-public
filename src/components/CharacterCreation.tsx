@@ -1,26 +1,24 @@
 import { useMemo, useState } from 'react'
-import type { Character, InventoryItem } from '../character'
+import type { Character, InventoryItem, StatBlock } from '../character'
 import { makeDefaults, maxHpFor } from '../character'
 import { uuid } from '../util/uuid'
 import { WORLD_MANIFESTS, getWorldManifest, hasWorldContent } from '../worlds'
-import type { WorldManifest } from '../worlds'
+import type { SpeciesOption, WorldManifest } from '../worlds'
 
-type Step = 'world' | 'species' | 'gender' | 'class' | 'name'
+type Step = 'world' | 'species' | 'class' | 'name'
 
 interface Draft {
   worldId?: string
   speciesId?: string
-  genderId?: string
   classId?: string
   name: string
 }
 
-const STEPS: Step[] = ['world', 'species', 'gender', 'class', 'name']
+const STEPS: Step[] = ['world', 'species', 'class', 'name']
 
 const STEP_LABEL: Record<Step, string> = {
   world: 'World',
   species: 'Species',
-  gender: 'Gender',
   class: 'Class',
   name: 'Name',
 }
@@ -28,13 +26,49 @@ const STEP_LABEL: Record<Step, string> = {
 const STEP_TITLE: Record<Step, string> = {
   world: 'Choose a world',
   species: 'Choose a species',
-  gender: 'Choose a gender',
   class: 'Choose a class',
   name: 'Name them',
 }
 
+// Order in which stat bonus chips render on the species card so the line
+// reads STR → CHA consistently regardless of object-key insertion order.
+const STAT_BUMP_ORDER: Array<{
+  key: keyof StatBlock
+  abbr: 'STR' | 'DEX' | 'CON' | 'INT' | 'WIS' | 'CHA'
+}> = [
+  { key: 'strength', abbr: 'STR' },
+  { key: 'dexterity', abbr: 'DEX' },
+  { key: 'constitution', abbr: 'CON' },
+  { key: 'intelligence', abbr: 'INT' },
+  { key: 'wisdom', abbr: 'WIS' },
+  { key: 'charisma', abbr: 'CHA' },
+]
+
+// Build the quick-look bonus list shown on species cards. Pulls from the
+// species' per-interval statBumps (every N levels) plus the flat HP/MP-per-
+// level contributions. Empty entries are filtered so cards only show what
+// the species actually grants.
+function speciesBonusTokens(species: SpeciesOption): string[] {
+  const tokens: string[] = []
+  const hpPer = species.growth?.hpPerLevel ?? 0
+  const mpPer = species.growth?.mpPerLevel ?? 0
+  if (hpPer) tokens.push(`${hpPer >= 0 ? '+' : ''}${hpPer} HP/lv`)
+  if (mpPer) tokens.push(`${mpPer >= 0 ? '+' : ''}${mpPer} MP/lv`)
+  const bumps = species.growth?.statBumps
+  if (bumps) {
+    for (const { key, abbr } of STAT_BUMP_ORDER) {
+      const v = bumps[key]
+      if (v) tokens.push(`${v >= 0 ? '+' : ''}${v} ${abbr}`)
+    }
+  }
+  return tokens
+}
+
 interface Props {
-  onComplete: (character: Character) => void
+  onComplete: (
+    character: Character,
+    options?: { simulateTicks?: number },
+  ) => void
   onCancel?: () => void
 }
 
@@ -53,7 +87,6 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
     switch (step) {
       case 'world': return !!draft.worldId
       case 'species': return !!draft.speciesId
-      case 'gender': return !!draft.genderId
       case 'class': return !!draft.classId
       case 'name': return draft.name.trim().length > 0
     }
@@ -62,9 +95,9 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
   const finalize = (
     targetWorld: WorldManifest,
     speciesId: string,
-    genderId: string,
     classId: string,
     name: string,
+    options: { simulateTicks?: number } = {},
   ) => {
     const classDef = targetWorld.classes.find((c) => c.id === classId)
     if (!classDef) return
@@ -79,52 +112,58 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
     const maxHp = maxHpFor(stats)
     const maxMagic = classDef.startingMaxMagic
     const createdAt = Date.now()
-    onComplete({
-      ...makeDefaults(targetWorld.id),
-      id: uuid(),
-      name: name.trim(),
-      worldId: targetWorld.id,
-      worldVersion: targetWorld.version,
-      speciesId,
-      genderId,
-      classId,
-      createdAt,
-      level: 1,
-      xp: 0,
-      hp: Math.max(1, Math.ceil(maxHp * 0.6)),
-      maxHp,
-      magic: maxMagic,
-      maxMagic,
-      stats,
-      inventory,
-      spells: [...(classDef.startingSpells ?? [])],
-      segment: { startedAt: createdAt, startGold: 0 },
-      // New characters wake into a slowed world (0.5×) and ramp up to 1×
-      // over their first ~150 ticks. The auto-flag lets the runtime
-      // step the speed up; the topbar control flips it off when the
-      // user picks a speed manually.
-      tickSpeed: '50',
-      tickSpeedAuto: true,
-    })
+    onComplete(
+      {
+        ...makeDefaults(targetWorld.id),
+        id: uuid(),
+        name: name.trim(),
+        worldId: targetWorld.id,
+        worldVersion: targetWorld.version,
+        speciesId,
+        classId,
+        createdAt,
+        level: 1,
+        xp: 0,
+        hp: maxHp,
+        maxHp,
+        magic: maxMagic,
+        maxMagic,
+        stats,
+        inventory,
+        spells: [...(classDef.startingSpells ?? [])],
+        segment: { startedAt: createdAt, startGold: 0 },
+        // New characters wake into a slowed world (0.5×) and ramp up to 1×
+        // over their first ~150 ticks. The auto-flag lets the runtime
+        // step the speed up; the topbar control flips it off when the
+        // user picks a speed manually.
+        tickSpeed: '50',
+        tickSpeedAuto: true,
+        rngState: crypto.getRandomValues(new Uint32Array(1))[0],
+      },
+      options,
+    )
   }
 
   // Skip the full creation flow with a randomly-picked fantasy preset.
   // Two presets alternate so successive Quick Starts don't feel identical.
+  // We also hand the new character forward with `simulateTicks: 100` so
+  // they arrive lived-in — already explored a bit, maybe scuffled with a
+  // rat, drives partway up the gauge — instead of a blank slate.
   const quickStart = () => {
     const fantasy = getWorldManifest('fantasy')
     if (!fantasy) return
     const presets = [
-      { speciesId: 'human', genderId: 'man',   classId: 'warrior', name: 'Warrior' },
-      { speciesId: 'elf',   genderId: 'woman', classId: 'mage',    name: 'Mage' },
+      { speciesId: 'human', classId: 'warrior', name: 'Hiro' },
+      { speciesId: 'elf',   classId: 'mage',    name: 'Hiro' },
     ] as const
     const p = presets[Math.floor(Math.random() * presets.length)]
-    finalize(fantasy, p.speciesId, p.genderId, p.classId, p.name)
+    finalize(fantasy, p.speciesId, p.classId, p.name, { simulateTicks: 500 })
   }
 
   const advance = () => {
     if (!canAdvance) return
-    if (step === 'name' && world && draft.speciesId && draft.genderId && draft.classId) {
-      finalize(world, draft.speciesId, draft.genderId, draft.classId, draft.name)
+    if (step === 'name' && world && draft.speciesId && draft.classId) {
+      finalize(world, draft.speciesId, draft.classId, draft.name)
       return
     }
     setStep(STEPS[stepIndex + 1])
@@ -192,7 +231,7 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
                         (!ready ? ' cc__option--disabled' : '')
                       }
                       disabled={!ready}
-                      onClick={() => pickAndNext({ worldId: w.id, speciesId: undefined, genderId: undefined, classId: undefined })}
+                      onClick={() => pickAndNext({ worldId: w.id, speciesId: undefined, classId: undefined })}
                     >
                       <strong>
                         {w.name}
@@ -208,49 +247,66 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
           )}
 
           {step === 'species' && world && (
-            <ul className="cc__options">
-              {world.species.map((s) => (
-                <li key={s.id}>
-                  <button
-                    type="button"
-                    className={'cc__option' + (draft.speciesId === s.id ? ' cc__option--selected' : '')}
-                    onClick={() => pickAndNext({ speciesId: s.id })}
-                  >
-                    <strong>{s.name}</strong>
-                    <span>{s.description}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {step === 'gender' && world && (
-            <ul className="cc__options cc__options--compact">
-              {world.genders.map((g) => (
-                <li key={g.id}>
-                  <button
-                    type="button"
-                    className={'cc__option' + (draft.genderId === g.id ? ' cc__option--selected' : '')}
-                    onClick={() => pickAndNext({ genderId: g.id })}
-                  >
-                    <strong>{g.name}</strong>
-                  </button>
-                </li>
-              ))}
+            <ul className="cc__options cc__options--equal">
+              {world.species.map((s) => {
+                const bonuses = speciesBonusTokens(s)
+                return (
+                  <li key={s.id} className="cc__options-cell">
+                    <button
+                      type="button"
+                      className={
+                        'cc__option cc__option--species' +
+                        (draft.speciesId === s.id ? ' cc__option--selected' : '')
+                      }
+                      onClick={() => pickAndNext({ speciesId: s.id })}
+                    >
+                      <strong>{s.name}</strong>
+                      <span>{s.description}</span>
+                      {bonuses.length > 0 && (
+                        <span
+                          className="cc__bonuses"
+                          data-tip="Bonuses granted by this species on level-up"
+                        >
+                          {bonuses.join(' · ')}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           )}
 
           {step === 'class' && world && (
-            <ul className="cc__options">
+            <ul className="cc__options cc__options--equal">
               {world.classes.map((c) => (
-                <li key={c.id}>
+                <li key={c.id} className="cc__options-cell">
                   <button
                     type="button"
-                    className={'cc__option' + (draft.classId === c.id ? ' cc__option--selected' : '')}
+                    className={
+                      'cc__option cc__option--class' +
+                      (draft.classId === c.id ? ' cc__option--selected' : '')
+                    }
                     onClick={() => pickAndNext({ classId: c.id })}
                   >
                     <strong>{c.name}</strong>
                     <span>{c.description}</span>
+                    <div className="cc__stats">
+                      <div className="cc__stats-row">
+                        <span className="cc__stats-tag">Primary</span>
+                        <span className="cc__stats-values">
+                          {c.primaryStats.map((s) => (
+                            <span key={s} className="cc__stat cc__stat--primary">{s}</span>
+                          ))}
+                        </span>
+                      </div>
+                      <div className="cc__stats-row">
+                        <span className="cc__stats-tag">Secondary</span>
+                        <span className="cc__stats-values">
+                          <span className="cc__stat cc__stat--secondary">{c.secondaryStat}</span>
+                        </span>
+                      </div>
+                    </div>
                   </button>
                 </li>
               ))}
@@ -332,7 +388,11 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
         }
         .cc__quickstart:hover { background: var(--bg-3); text-shadow: var(--glow-lg); }
         .cc__options { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--sp-2); }
-        .cc__options--compact { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+        /* Class-card variant: each cell stretches to row height so the
+           tallest card defines the baseline; shorter cards pad to match
+           via the inner button's flex-grow / min-height. */
+        .cc__options--equal { grid-auto-rows: 1fr; }
+        .cc__options-cell { display: flex; height: 100%; }
         .cc__option { width: 100%; text-align: left; padding: var(--sp-3) var(--sp-4); background: var(--bg-inset); border: 1px solid var(--line-1); color: var(--fg-1); cursor: pointer; display: flex; flex-direction: column; gap: 3px; font: inherit; transition: border-color var(--dur-fast) var(--ease-crt), background var(--dur-fast) var(--ease-crt); }
         .cc__option:hover { border-color: var(--line-3); background: var(--bg-2); }
         .cc__option strong { font-family: var(--font-display); font-weight: 400; font-size: var(--text-lg); letter-spacing: 0.04em; color: var(--fg-1); }
@@ -341,6 +401,21 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
         .cc__option--selected strong { color: var(--accent-hot); text-shadow: var(--glow-sm); }
         .cc__option--disabled { opacity: 0.45; cursor: not-allowed; }
         .cc__option--disabled:hover { border-color: var(--line-1); background: var(--bg-inset); }
+        /* Class + species cards stretch to fill the equal-height row, and
+           their bottom-line chrome (class stats block / species bonus line)
+           sticks to the bottom so cards of every description length still
+           present the same at-a-glance readout. */
+        .cc__option--class, .cc__option--species { flex: 1; height: 100%; }
+        .cc__option--class .cc__stats { margin-top: auto; padding-top: var(--sp-2); }
+        .cc__option--species .cc__bonuses { margin-top: auto; padding-top: var(--sp-2); }
+        .cc__bonuses { margin-top: var(--sp-1); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-2); letter-spacing: 0.04em; }
+        .cc__stats { display: flex; flex-direction: column; gap: 2px; }
+        .cc__stats-row { display: flex; align-items: baseline; gap: var(--sp-2); font-family: var(--font-mono); font-size: var(--text-xs); }
+        .cc__stats-tag { color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.08em; min-width: 7ch; }
+        .cc__stats-values { display: inline-flex; gap: var(--sp-1); }
+        .cc__stat { padding: 0 4px; border: 1px solid var(--line-2); letter-spacing: 0.06em; font-family: var(--font-mono); font-size: var(--text-xs); }
+        .cc__stat--primary { color: var(--accent-hot); border-color: var(--line-3); text-shadow: var(--glow-sm); }
+        .cc__stat--secondary { color: var(--fg-2); border-color: var(--line-2); }
         .cc__pending { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); letter-spacing: 0.06em; text-transform: uppercase; }
         .cc__name { display: flex; justify-content: center; padding: var(--sp-4) 0; }
         .cc__name-input { width: 100%; max-width: 360px; padding: var(--sp-3) var(--sp-3); font-family: var(--font-mono); font-size: var(--text-md); background: var(--bg-inset); color: var(--fg-1); border: 1px solid var(--line-1); box-shadow: var(--shadow-inset); outline: none; }
