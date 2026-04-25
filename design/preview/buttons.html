@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mud">
+<head>
+<meta charset="utf-8">
+<title>Buttons</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 16px; background: var(--bg-0); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .btn {
+    font-family: var(--font-display);
+    font-size: 20px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 6px 18px;
+    background: var(--bg-1);
+    color: var(--fg-1);
+    border: 1px solid var(--line-2);
+    cursor: pointer;
+    text-shadow: var(--glow-sm);
+  }
+  .btn.primary { background: var(--bg-2); color: var(--accent-hot); border-color: var(--line-3); text-shadow: var(--glow-md); }
+  .btn.hover { background: var(--bg-3); border-color: var(--line-3); color: var(--accent-hot); text-shadow: var(--glow-md); }
+  .btn.pressed { background: var(--bg-0); border-color: var(--line-3); color: var(--fg-2); }
+  .btn.ghost { background: transparent; border-color: var(--line-1); color: var(--fg-2); text-shadow: none; }
+  .btn.danger { color: var(--bad); border-color: var(--bad); }
+  .lbl { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); width: 70px; }
+</style>
+</head>
+<body>
+<div class="row"><div class="lbl">default</div><button class="btn">Begin</button><button class="btn primary">Continue</button><button class="btn ghost">Cancel</button><button class="btn danger">Delete save</button></div>
+<div class="row"><div class="lbl">hover</div><button class="btn hover">Begin</button><button class="btn primary hover">Continue</button></div>
+<div class="row"><div class="lbl">pressed</div><button class="btn pressed">Begin</button><button class="btn pressed">Pause</button></div>
+</body>
+</html>

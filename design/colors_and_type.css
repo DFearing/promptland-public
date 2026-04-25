@@ -1,0 +1,345 @@
+/* ============================================================================
+   Understudy — colors_and_type.css
+   Classic MUD green-on-black default. Themes swap via [data-theme="..."].
+   ============================================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=VT323&family=IBM+Plex+Mono:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+/* ----------------------------------------------------------------------------
+   Theme: Classic MUD (default)
+   Phosphor green on deep black. The baseline. Every other theme is a remix.
+   ---------------------------------------------------------------------------- */
+:root,
+:root[data-theme="mud"] {
+  /* Surfaces — layered blacks with a faint green bias */
+  --bg-0:         #050807;   /* page */
+  --bg-1:         #0a110d;   /* panel */
+  --bg-2:         #0f1913;   /* panel raised / hover */
+  --bg-3:         #152219;   /* panel pressed / selected */
+  --bg-inset:     #030504;   /* sunken field */
+
+  /* Phosphor greens — the star of the show */
+  --fg-1:         #a8ffb0;   /* primary text, log body */
+  --fg-2:         #6fd37a;   /* secondary text, stat values */
+  --fg-3:         #3f8c4a;   /* tertiary, metadata, dim */
+  --fg-dim:       #1f4a28;   /* fog-of-war, disabled */
+
+  /* Accents — reserved for semantic moments */
+  --accent:       #7bff88;   /* current location, interactive hover */
+  --accent-hot:   #c4ffcb;   /* selected, focused */
+  --link:         #8af0ff;   /* rare cyan — interactive, tooltips */
+
+  /* Semantic — combat, loot, death, narration */
+  --good:         #9bf57a;   /* heal, xp, loot pickup */
+  --warn:         #ffcc66;   /* caution, low hp */
+  --bad:          #ff6b6b;   /* damage, death, error */
+  --magic:        #c99bff;   /* magic, rare items, dialogue */
+  --speech:       #ffe58a;   /* NPC dialogue in log */
+
+  /* Lines — CRT scanline, panel borders */
+  --line-1:       #1d3a24;   /* subtle divider */
+  --line-2:       #2d5a38;   /* panel border */
+  --line-3:       #4a8655;   /* focus ring, active border */
+
+  /* Glow — phosphor bloom */
+  --glow-sm:      0 0 2px rgba(168, 255, 176, 0.35);
+  --glow-md:      0 0 6px rgba(168, 255, 176, 0.25), 0 0 1px rgba(168, 255, 176, 0.6);
+  --glow-lg:      0 0 12px rgba(123, 255, 136, 0.35), 0 0 2px rgba(123, 255, 136, 0.8);
+
+  /* Shadow — for layered panels; mostly inset/border-driven, minimal drop */
+  --shadow-panel: inset 0 0 0 1px var(--line-2), 0 0 0 1px rgba(0,0,0,0.6);
+  --shadow-inset: inset 0 1px 0 rgba(0,0,0,0.8), inset 0 0 0 1px var(--line-1);
+
+  /* Scanline overlay (applied via ::after on .scanlines) */
+  --scanline:     repeating-linear-gradient(
+                    to bottom,
+                    rgba(0, 0, 0, 0) 0px,
+                    rgba(0, 0, 0, 0) 2px,
+                    rgba(0, 20, 10, 0.35) 3px,
+                    rgba(0, 20, 10, 0.35) 3px
+                  );
+
+  /* Type families */
+  --font-display: 'VT323', ui-monospace, 'Courier New', monospace;
+  --font-body:    'IBM Plex Mono', ui-monospace, 'Menlo', monospace;
+  --font-mono:    'JetBrains Mono', ui-monospace, 'Menlo', monospace;
+
+  /* Type scale — everything is monospace-ish so line-height is tight */
+  --text-xs:      11px;
+  --text-sm:      13px;
+  --text-base:    14px;
+  --text-md:      15px;
+  --text-lg:      18px;
+  --text-xl:      22px;
+  --text-2xl:     28px;
+  --text-3xl:     36px;
+  --text-display: 48px;  /* VT323 reads small; bump it */
+
+  --leading-tight: 1.2;
+  --leading-body:  1.55;
+  --leading-log:   1.65;   /* log needs room to breathe */
+
+  /* Spacing — 4px grid */
+  --sp-0:  0px;
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-7:  32px;
+  --sp-8:  48px;
+  --sp-9:  64px;
+
+  /* Radii — zero by default. This is a CRT/terminal aesthetic, not iOS. */
+  --radius-0: 0px;
+  --radius-1: 0px;       /* kept as a token in case a theme wants soft corners */
+  --radius-2: 0px;
+
+  /* Motion — subtle, CRT-ish */
+  --ease-crt:    cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-fast:    90ms;
+  --dur-base:    160ms;
+  --dur-slow:    320ms;
+
+  /* Layout */
+  --panel-pad:   var(--sp-4);
+  --panel-gap:   var(--sp-3);
+}
+
+/* ----------------------------------------------------------------------------
+   Theme: Amber — alternate CRT palette (PC/3270 terminal lineage)
+   ---------------------------------------------------------------------------- */
+:root[data-theme="amber"] {
+  --bg-0:         #0a0704;
+  --bg-1:         #140d05;
+  --bg-2:         #1c1208;
+  --bg-3:         #28190b;
+  --bg-inset:     #05030200;
+
+  --fg-1:         #ffcc66;
+  --fg-2:         #d99a3d;
+  --fg-3:         #8c6322;
+  --fg-dim:       #3d2d11;
+
+  --accent:       #ffb347;
+  --accent-hot:   #ffe0a8;
+  --link:         #ff8a8a;
+
+  --good:         #ffd97a;
+  --warn:         #ffb347;
+  --bad:          #ff6b6b;
+  --magic:        #e5b0ff;
+  --speech:       #fff1c2;
+
+  --line-1:       #3a2811;
+  --line-2:       #5a3f1c;
+  --line-3:       #8a6128;
+
+  --glow-sm:      0 0 2px rgba(255, 204, 102, 0.35);
+  --glow-md:      0 0 6px rgba(255, 204, 102, 0.25), 0 0 1px rgba(255, 204, 102, 0.6);
+  --glow-lg:      0 0 12px rgba(255, 179, 71, 0.35), 0 0 2px rgba(255, 179, 71, 0.8);
+
+  --scanline:     repeating-linear-gradient(
+                    to bottom,
+                    rgba(0, 0, 0, 0) 0px,
+                    rgba(0, 0, 0, 0) 2px,
+                    rgba(30, 10, 0, 0.35) 3px,
+                    rgba(30, 10, 0, 0.35) 3px
+                  );
+}
+
+/* ----------------------------------------------------------------------------
+   Theme: Phosphor — white-on-black, paper-terminal feel
+   ---------------------------------------------------------------------------- */
+:root[data-theme="phosphor"] {
+  --bg-0:         #08080a;
+  --bg-1:         #10101a;
+  --bg-2:         #181820;
+  --bg-3:         #22222c;
+  --bg-inset:     #04040608;
+
+  --fg-1:         #e8e8ea;
+  --fg-2:         #a8a8b0;
+  --fg-3:         #6e6e78;
+  --fg-dim:       #2a2a34;
+
+  --accent:       #ffffff;
+  --accent-hot:   #ffffff;
+  --link:         #8ab6ff;
+
+  --good:         #9bf57a;
+  --warn:         #ffcc66;
+  --bad:          #ff6b6b;
+  --magic:        #c99bff;
+  --speech:       #ffe58a;
+
+  --line-1:       #23232d;
+  --line-2:       #3a3a46;
+  --line-3:       #55555f;
+
+  --glow-sm:      0 0 2px rgba(255, 255, 255, 0.25);
+  --glow-md:      0 0 4px rgba(255, 255, 255, 0.18);
+  --glow-lg:      0 0 10px rgba(255, 255, 255, 0.22);
+}
+
+/* ============================================================================
+   Base element styles — semantic defaults so headings/p/code "just work"
+   ============================================================================ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-0);
+  color: var(--fg-1);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  color: var(--accent-hot);
+  letter-spacing: 0.02em;
+  margin: 0;
+  line-height: var(--leading-tight);
+  text-shadow: var(--glow-sm);
+}
+
+h1 { font-size: var(--text-display); }
+h2 { font-size: var(--text-3xl); }
+h3 { font-size: var(--text-2xl); }
+h4 { font-size: var(--text-xl); }
+h5 { font-size: var(--text-lg); color: var(--fg-1); }
+h6 {
+  font-size: var(--text-sm);
+  font-family: var(--font-body);
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  font-weight: 600;
+  text-shadow: none;
+}
+
+p {
+  margin: 0 0 var(--sp-3) 0;
+  color: var(--fg-1);
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+  transition: color var(--dur-fast) var(--ease-crt);
+}
+a:hover { color: var(--accent-hot); border-bottom-style: solid; }
+
+code, kbd, samp, pre {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  color: var(--fg-2);
+}
+
+pre {
+  background: var(--bg-inset);
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  overflow-x: auto;
+  line-height: var(--leading-tight);
+}
+
+kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-bottom-width: 2px;
+  color: var(--fg-1);
+  font-size: var(--text-xs);
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--line-1);
+  margin: var(--sp-4) 0;
+}
+
+::selection { background: var(--fg-2); color: var(--bg-0); }
+
+/* ============================================================================
+   Utility classes — the "building blocks" used by components
+   ============================================================================ */
+
+.u-label {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+
+.u-caption {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--fg-3);
+}
+
+.u-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.u-glow { text-shadow: var(--glow-sm); }
+.u-glow-md { text-shadow: var(--glow-md); }
+
+.u-panel {
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  padding: var(--panel-pad);
+}
+
+.u-panel-inset {
+  background: var(--bg-inset);
+  border: 1px solid var(--line-1);
+  box-shadow: var(--shadow-inset);
+}
+
+/* CRT scanlines overlay — add class "scanlines" to any container */
+.scanlines { position: relative; }
+.scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--scanline);
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  opacity: 0.6;
+  z-index: 100;
+}
+
+/* Subtle phosphor flicker — apply sparingly */
+@keyframes phosphor-flicker {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.97; }
+}
+.flicker { animation: phosphor-flicker 4s var(--ease-crt) infinite; }
+
+/* Cursor blink — used after log entries, on fields */
+@keyframes cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.cursor::after {
+  content: '█';
+  display: inline-block;
+  color: var(--accent);
+  animation: cursor-blink 1s steps(1, end) infinite;
+  margin-left: 2px;
+}

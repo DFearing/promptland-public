@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mud">
+<head>
+<meta charset="utf-8">
+<title>Glow & borders</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 16px; background: var(--bg-0); font-family: var(--font-mono); font-size: 11px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .box { background: var(--bg-1); padding: 14px; text-align: center; font-family: var(--font-display); font-size: 22px; letter-spacing: 0.08em; color: var(--accent-hot); }
+  .label { color: var(--fg-3); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; margin-top: 6px; text-align: center; }
+  .l1 { border: 1px solid var(--line-1); }
+  .l2 { border: 1px solid var(--line-2); }
+  .l3 { border: 1px solid var(--line-3); }
+  .g1 { text-shadow: var(--glow-sm); }
+  .g2 { text-shadow: var(--glow-md); }
+  .g3 { text-shadow: var(--glow-lg); }
+  .cell { display: flex; flex-direction: column; }
+</style>
+</head>
+<body>
+<div class="grid">
+  <div class="cell"><div class="box l1 g1">LINE-1</div><div class="label">border + glow-sm</div></div>
+  <div class="cell"><div class="box l2 g2">LINE-2</div><div class="label">border + glow-md</div></div>
+  <div class="cell"><div class="box l3 g3">LINE-3</div><div class="label">border + glow-lg (focus)</div></div>
+</div>
+</body>
+</html>

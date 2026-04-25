@@ -1,0 +1,12 @@
+html,
+body,
+#root {
+  height: 100%;
+}
+
+#root {
+  min-height: 100%;
+}
+
+/* The design system sets html/body to var(--bg-0) and var(--fg-1).
+   This file only handles the root layout the framework needs. */

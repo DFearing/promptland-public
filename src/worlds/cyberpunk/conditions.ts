@@ -1,0 +1,40 @@
+import type { ConditionDef } from '../../conditions'
+
+export const CYBERPUNK_CONDITIONS: ConditionDef[] = [
+  {
+    id: 'hacked',
+    name: 'Hacked',
+    description: "Someone's inside your rig. Reflexes run through a filter that isn't yours.",
+    kind: 'stat-mod',
+    polarity: 'debuff',
+    defaultDuration: 4,
+    params: { attack: -2, defense: -2 },
+  },
+  {
+    id: 'jammed',
+    name: 'Jammed',
+    description: 'Signal floods your HUD with white noise. Nothing fires.',
+    kind: 'skip',
+    polarity: 'debuff',
+    defaultDuration: 2,
+    params: { skipChance: 1 },
+  },
+  {
+    id: 'glitched',
+    name: 'Glitched',
+    description: 'Perception stutters. Every second step lands on a frame that never rendered.',
+    kind: 'skip',
+    polarity: 'debuff',
+    defaultDuration: 5,
+    params: { skipChance: 0.5 },
+  },
+  {
+    id: 'overclocked',
+    name: 'Overclocked',
+    description: 'Stimmed hot. The world slows. You could punch through a wall.',
+    kind: 'stat-mod',
+    polarity: 'buff',
+    defaultDuration: 4,
+    params: { attack: 3 },
+  },
+]

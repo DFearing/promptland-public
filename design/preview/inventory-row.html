@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mud">
+<head>
+<meta charset="utf-8">
+<title>Inventory row</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 16px; background: var(--bg-0); font-family: var(--font-mono); font-size: 13px; color: var(--fg-1);}
+  .row { display: grid; grid-template-columns: 24px 1fr 50px 50px; padding: 5px 8px; border-bottom: 1px solid var(--line-1); align-items: center;}
+  .row:hover { background: var(--bg-2); color: var(--accent-hot); }
+  .row.selected { background: var(--bg-3); color: var(--accent-hot); box-shadow: inset 0 0 0 1px var(--line-3);}
+  .row .k { color: var(--accent); }
+  .row .magic { color: var(--magic); }
+  .row .wt { color: var(--fg-3); text-align: right; }
+  .row .ct { color: var(--fg-3); text-align: right; }
+</style>
+</head>
+<body>
+<div class="row selected"><span class="k">[x]</span><span>Blackroot lantern</span><span class="wt">0.6</span><span class="ct">×1</span></div>
+<div class="row"><span class="k">[x]</span><span>Short bow, worn</span><span class="wt">1.1</span><span class="ct">×1</span></div>
+<div class="row"><span class="k">[ ]</span><span class="magic">Bone die</span><span class="wt">0.1</span><span class="ct">×1</span></div>
+<div class="row"><span class="k">[ ]</span><span>Hardtack</span><span class="wt">0.2</span><span class="ct">×4</span></div>
+<div class="row"><span class="k">[ ]</span><span>Copper coin</span><span class="wt">—</span><span class="ct">×17</span></div>
+</body>
+</html>

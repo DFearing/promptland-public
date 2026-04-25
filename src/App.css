@@ -1,0 +1,69 @@
+.boot {
+  height: 100vh;
+  background: var(--bg-0);
+}
+
+.shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+  color: var(--fg-1);
+  overflow: hidden;
+}
+
+.shell__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.game {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  grid-template-rows: auto 1fr;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  height: 100%;
+  box-sizing: border-box;
+  min-height: 0;
+}
+
+.game__sprite {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.game__tabs {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.game__map {
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 0;
+}
+
+.game__log {
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 0;
+}
+
+/* On narrow viewports, stack to a single column so the sprite
+   doesn't squeeze the right-side panels into unreadable widths. */
+@media (max-width: 900px) {
+  .game {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr 1fr;
+  }
+  .game__sprite { grid-column: 1; grid-row: 1; }
+  .game__tabs   { grid-column: 1; grid-row: 2; }
+  .game__map    { grid-column: 1; grid-row: 3; min-height: 240px; }
+  .game__log    { grid-column: 1; grid-row: 4; min-height: 240px; }
+}

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  
+  <path d="M4 8 H18 V14 H10 V50 H18 V56 H4 Z" fill="currentColor"></path>
+  
+  <path d="M60 8 H46 V14 H54 V50 H46 V56 H60 Z" fill="currentColor"></path>
+  
+  <g fill="currentColor" transform="translate(22, 20)">
+    <rect x="0" y="0" width="4" height="20"></rect>
+    <rect x="16" y="0" width="4" height="20"></rect>
+    <rect x="4" y="16" width="12" height="4"></rect>
+  </g>
+</svg>

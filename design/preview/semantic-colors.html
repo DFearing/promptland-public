@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mud">
+<head>
+<meta charset="utf-8">
+<title>Semantic colors</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 16px; background: var(--bg-0); }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .sw { padding: 10px 12px; border: 1px solid var(--line-2); background: var(--bg-1); font-family: var(--font-mono); font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
+  .swatch { width: 18px; height: 18px; border: 1px solid var(--line-1); }
+  .name { font-family: var(--font-display); font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .row { display: flex; align-items: center; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="grid">
+  <div class="sw"><span class="row"><span class="swatch" style="background:var(--good)"></span><span class="name" style="color:var(--good)">good</span></span><span>+ heal / loot</span></div>
+  <div class="sw"><span class="row"><span class="swatch" style="background:var(--warn)"></span><span class="name" style="color:var(--warn)">warn</span></span><span>low hp</span></div>
+  <div class="sw"><span class="row"><span class="swatch" style="background:var(--bad)"></span><span class="name" style="color:var(--bad)">bad</span></span><span>damage / death</span></div>
+  <div class="sw"><span class="row"><span class="swatch" style="background:var(--magic)"></span><span class="name" style="color:var(--magic)">magic</span></span><span>rare / dialogue</span></div>
+  <div class="sw"><span class="row"><span class="swatch" style="background:var(--speech)"></span><span class="name" style="color:var(--speech)">speech</span></span><span>NPC quotes</span></div>
+  <div class="sw"><span class="row"><span class="swatch" style="background:var(--link)"></span><span class="name" style="color:var(--link)">link</span></span><span>interactive</span></div>
+</div>
+</body>
+</html>

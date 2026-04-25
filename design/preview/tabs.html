@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mud">
+<head>
+<meta charset="utf-8">
+<title>Tabs</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 16px; background: var(--bg-0); }
+  .tabs { display: flex; border-bottom: 1px solid var(--line-2); }
+  .tab {
+    font-family: var(--font-display);
+    font-size: 18px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 8px 16px;
+    color: var(--fg-3);
+    border: 1px solid transparent;
+    border-bottom: none;
+    margin-bottom: -1px;
+    cursor: pointer;
+    background: transparent;
+  }
+  .tab.active {
+    color: var(--accent-hot);
+    background: var(--bg-1);
+    border-color: var(--line-2);
+    text-shadow: var(--glow-sm);
+  }
+  .tab:hover:not(.active) { color: var(--fg-1); }
+  .body { background: var(--bg-1); border: 1px solid var(--line-2); border-top: none; padding: 14px; font-family: var(--font-body); font-size: 13px; color: var(--fg-1); line-height: 1.6;}
+</style>
+</head>
+<body>
+<div class="tabs">
+  <div class="tab active">Sheet</div>
+  <div class="tab">Inventory</div>
+  <div class="tab">Journal</div>
+</div>
+<div class="body">
+  Active tab fills with <code>--bg-1</code>, border rises to <code>--line-2</code>, label glows <code>--glow-sm</code>. Inactive tabs are bare labels in <code>--fg-3</code> on page background.
+</div>
+</body>
+</html>
