@@ -1,8 +1,9 @@
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { formatRelative } from '../util/time'
 
 export interface HistoryItem {
   at: number
-  text: string
+  text: ReactNode
 }
 
 interface Props {
@@ -68,7 +69,14 @@ export default function HistoryDialog({ open, title, items, emptyText, onClose }
             <ul className="hist__list">
               {items.map((entry, i) => (
                 <li key={i} className="hist__item">
-                  <span className="hist__time">{formatTimestamp(entry.at)}</span>
+                  <span className="hist__time">
+                    <span className="hist__time-abs">
+                      {formatTimestamp(entry.at)}
+                    </span>
+                    <span className="hist__time-ago">
+                      {formatRelative(entry.at)}
+                    </span>
+                  </span>
                   <span className="hist__text">{entry.text}</span>
                 </li>
               ))}
@@ -101,7 +109,7 @@ export default function HistoryDialog({ open, title, items, emptyText, onClose }
         .hist__card {
           position: relative;
           width: 100%;
-          max-width: 560px;
+          max-width: 720px;
           max-height: 80vh;
           background: var(--bg-1);
           border: 1px solid var(--line-3);
@@ -130,9 +138,31 @@ export default function HistoryDialog({ open, title, items, emptyText, onClose }
         .hist__body { font-family: var(--font-body); font-size: var(--text-sm); line-height: 1.6; color: var(--fg-1); overflow-y: auto; min-height: 0; }
         .hist__empty { margin: 0; color: var(--fg-3); font-style: italic; }
         .hist__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
-        .hist__item { display: grid; grid-template-columns: auto 1fr; gap: var(--sp-3); align-items: baseline; padding-bottom: var(--sp-2); border-bottom: 1px solid var(--line-1); }
+        /* Two-column layout: a fixed time column (absolute + "ago" stacked)
+           and a flexible text column. Baseline align on the first line so
+           the timestamp and first line of the event description share the
+           same visual rail. */
+        .hist__item {
+          display: grid;
+          grid-template-columns: 176px 1fr;
+          gap: var(--sp-3);
+          align-items: baseline;
+          padding-bottom: var(--sp-2);
+          border-bottom: 1px solid var(--line-1);
+        }
         .hist__item:last-child { border-bottom: none; padding-bottom: 0; }
-        .hist__time { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); letter-spacing: 0.08em; white-space: nowrap; }
+        .hist__time {
+          display: flex;
+          flex-direction: column;
+          gap: 1px;
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          color: var(--fg-3);
+          letter-spacing: 0.08em;
+          white-space: nowrap;
+        }
+        .hist__time-abs { color: var(--fg-2); }
+        .hist__time-ago { color: var(--fg-3); font-style: italic; letter-spacing: 0.04em; }
         .hist__text { color: var(--fg-1); }
 
         .hist__actions { display: flex; justify-content: flex-end; padding-top: var(--sp-2); border-top: 1px solid var(--line-1); }

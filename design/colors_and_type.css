@@ -19,10 +19,28 @@
   --bg-inset:     #030504;   /* sunken field */
 
   /* Phosphor greens — the star of the show */
-  --fg-1:         #a8ffb0;   /* primary text, log body */
-  --fg-2:         #6fd37a;   /* secondary text, stat values */
+  --fg-1:         #a8ffb0;   /* primary text, stat values, log speaker */
+  --fg-2:         #6fd37a;   /* secondary phosphor — UI accents */
   --fg-3:         #3f8c4a;   /* tertiary, metadata, dim */
   --fg-dim:       #1f4a28;   /* fog-of-war, disabled */
+  /* Log body copy — intentionally neutral/desaturated so colored tokens
+     (directions, mobs, rooms, items) stand out against it. Themes can
+     override; anything without it falls back to var(--fg-2). */
+  --fg-body:      #b8b8b8;
+  /* Player character — the hero's name in the log and sheet. Per-theme so
+     each palette can pick its own "you are here" shade. Themes without an
+     override fall back to var(--accent-hot). MUD defaults to pure white so
+     the player stands clear of the phosphor-green hud. */
+  --player:       #ffffff;
+  /* Cardinal direction tokens in the log ("north", "southeast"). Per-theme
+     so each palette can pick something that reads as travel/movement. MUD
+     leans icy blue against the phosphor green. Falls back to var(--link). */
+  --dir:          #8ecbff;
+  /* High-tier damage verbs (severe / critical). Pulled from --bad into a
+     dedicated slot so they don't clash with mob names, which also use --bad.
+     Warm orange — reads as "fire" without being the same saturated red.
+     Themes without an override fall back to var(--warn). */
+  --heat:         #ff8a3d;
 
   /* Accents — reserved for semantic moments */
   --accent:       #7bff88;   /* current location, interactive hover */
@@ -30,11 +48,23 @@
   --link:         #8af0ff;   /* rare cyan — interactive, tooltips */
 
   /* Semantic — combat, loot, death, narration */
-  --good:         #9bf57a;   /* heal, xp, loot pickup */
+  --good:         #9bf57a;   /* xp, loot pickup, buffs, +bonuses */
   --warn:         #ffcc66;   /* caution, low hp */
-  --bad:          #ff6b6b;   /* damage, death, error */
+  --bad:          #ff6b6b;   /* damage, death, error, mob names */
   --magic:        #c99bff;   /* magic, rare items, dialogue */
+  --hp:           #e63855;   /* HP bar / heal potions / +HP ticks.
+                                Crimson red so HP reads as its own thing,
+                                distinct from --good (loot/xp) and --bad
+                                (damage/mobs). */
+  --mp:           #3a5fd0;   /* MP bar / label / mana potions. Deep blue,
+                                darker than the old light blue so it reads
+                                as a stat color rather than a link. */
   --speech:       #ffe58a;   /* NPC dialogue in log */
+  --verb-emph:    #ff8a3d;   /* SEVERE / CRITICAL damage verbs in the log.
+                                Warm orange — pops against the green/grey
+                                body text without colliding with mob names
+                                (red) or names (player accent). Themeable so
+                                light palettes can swap to a darker shade. */
 
   /* Lines — CRT scanline, panel borders */
   --line-1:       #1d3a24;   /* subtle divider */
@@ -130,6 +160,8 @@
   --warn:         #ffb347;
   --bad:          #ff6b6b;
   --magic:        #e5b0ff;
+  --hp:           #ff5a6a;
+  --mp:           #6f9aff;
   --speech:       #fff1c2;
 
   --line-1:       #3a2811;
@@ -172,6 +204,7 @@
   --warn:         #ffcc66;
   --bad:          #ff6b6b;
   --magic:        #c99bff;
+  --hp:           #e63855;
   --speech:       #ffe58a;
 
   --line-1:       #23232d;
@@ -270,6 +303,39 @@ hr {
 }
 
 ::selection { background: var(--fg-2); color: var(--bg-0); }
+
+/* Anything with a tooltip gets the OS help cursor so hover affordance is
+   visible before the tip appears. Component styles loaded after this rule
+   can override with `cursor: pointer` on interactive elements (buttons,
+   links) since the cascade prefers later declarations at equal specificity. */
+[data-tip] {
+  cursor: help;
+}
+
+/* Themed scrollbars — applies to any element that scrolls within the app.
+   Driven by the active theme's tokens, matching panel borders and inset wells. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) var(--bg-inset);
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-inset);
+  border-left: 1px solid var(--line-1);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border: 1px solid var(--line-1);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--line-3);
+}
+::-webkit-scrollbar-corner {
+  background: var(--bg-inset);
+}
 
 /* ============================================================================
    Utility classes — the "building blocks" used by components

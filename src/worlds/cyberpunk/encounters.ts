@@ -7,4 +7,10 @@ export const CYBERPUNK_ENCOUNTERS: Record<RoomType, string[]> = {
   chamber: ['street_punk', 'scav_hound', 'security_drone'],
   crypt: ['security_drone', 'netrunner_ghost'],
   storage: ['street_punk', 'scav_hound'],
+  inn: [],
+  water: ['scav_hound'],
+  portal: [],
+  entrance: ['street_punk'],
+  shop: [],
+  shrine: [],
 }

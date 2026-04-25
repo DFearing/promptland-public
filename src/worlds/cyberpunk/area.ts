@@ -3,20 +3,20 @@ import { roomKey } from '../../areas'
 
 // Grid + mechanical layout only. No names or descriptions here.
 const ROOM_ARCHETYPES: RoomArchetype[] = [
-  { x: 0, y: 0, z: 0, type: 'safe', satisfies: ['fatigue', 'hunger'] },
+  { x: 0, y: 0, z: 0, type: 'inn', satisfies: ['fatigue', 'hunger'] },
   { x: 1, y: 0, z: 0, type: 'corridor' },
   { x: 2, y: 0, z: 0, type: 'chamber' },
-  { x: 3, y: 0, z: 0, type: 'safe', satisfies: ['fatigue'] },
-  { x: 0, y: 1, z: 0, type: 'safe', satisfies: ['fatigue'] },
+  { x: 3, y: 0, z: 0, type: 'shop', satisfies: ['fatigue'] },
+  { x: 0, y: 1, z: 0, type: 'shrine', satisfies: ['fatigue'] },
   { x: 1, y: 1, z: 0, type: 'corridor' },
   { x: 3, y: 1, z: 0, type: 'chamber' },
   { x: 0, y: 2, z: 0, type: 'corridor' },
   { x: 1, y: 2, z: 0, type: 'chamber' },
-  { x: 2, y: 2, z: 0, type: 'crypt' },
+  { x: 2, y: 2, z: 0, type: 'entrance' },
   { x: 3, y: 2, z: 0, type: 'corridor' },
   { x: 0, y: 3, z: 0, type: 'corridor' },
   { x: 1, y: 3, z: 0, type: 'storage' },
-  { x: 2, y: 3, z: 0, type: 'storage', satisfies: ['hunger'] },
+  { x: 2, y: 3, z: 0, type: 'water', satisfies: ['hunger'] },
   { x: 3, y: 3, z: 0, type: 'safe', satisfies: ['fatigue'] },
 ]
 

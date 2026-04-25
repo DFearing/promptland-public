@@ -9,6 +9,8 @@ export const CYBERPUNK_CONDITIONS: ConditionDef[] = [
     polarity: 'debuff',
     defaultDuration: 4,
     params: { attack: -2, defense: -2 },
+    element: 'hack',
+    verb: 'hacks',
   },
   {
     id: 'jammed',
@@ -18,6 +20,7 @@ export const CYBERPUNK_CONDITIONS: ConditionDef[] = [
     polarity: 'debuff',
     defaultDuration: 2,
     params: { skipChance: 1 },
+    verb: 'jams',
   },
   {
     id: 'glitched',
@@ -27,6 +30,7 @@ export const CYBERPUNK_CONDITIONS: ConditionDef[] = [
     polarity: 'debuff',
     defaultDuration: 5,
     params: { skipChance: 0.5 },
+    verb: 'glitches',
   },
   {
     id: 'overclocked',
@@ -36,5 +40,7 @@ export const CYBERPUNK_CONDITIONS: ConditionDef[] = [
     polarity: 'buff',
     defaultDuration: 4,
     params: { attack: 3 },
+    element: 'electric',
+    verb: 'overclocks',
   },
 ]

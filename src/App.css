@@ -19,51 +19,96 @@
   flex-direction: column;
 }
 
+/* Game viewport designed around a 1920×1080 target. The outer grid caps at
+   1600px and centers, so on wider monitors the play area stays legible
+   instead of stretching edge-to-edge. Nested flex columns let the left and
+   right stacks pick their own row heights independently. */
 .game {
   display: grid;
-  grid-template-columns: 340px 1fr;
-  grid-template-rows: auto 1fr;
+  grid-template-columns: 440px 1fr;
   gap: var(--sp-3);
   padding: var(--sp-3);
+  max-width: 1600px;
+  margin: 0 auto;
   height: 100%;
+  width: 100%;
   box-sizing: border-box;
   min-height: 0;
 }
 
+.game__col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-height: 0;
+  min-width: 0;
+}
+
 .game__sprite {
-  grid-column: 1;
-  grid-row: 1;
+  /* Square sprite viewport — width-driven at the left column's 440px. Caps
+     vertical growth so tabs below always get room at smaller heights. */
+  position: relative;
+  aspect-ratio: 1;
+  max-height: 440px;
+  flex-shrink: 0;
+}
+
+.game__target-overlay {
+  /* Combat target card sits over the lower portion of the sprite frame so
+     "me" is above and "them" is below, without chewing into tab space. */
+  position: absolute;
+  left: var(--sp-2);
+  right: var(--sp-2);
+  bottom: var(--sp-2);
+  z-index: 5;
 }
 
 .game__tabs {
-  grid-column: 1;
-  grid-row: 2;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Room description lives to the left of the map so both get the full
+   map-row height. The description panel holds a fixed width slot so
+   the map grid gets predictable space for tiles. */
+.game__map-row {
+  height: 420px;
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: minmax(330px, 420px) 1fr;
+  gap: var(--sp-3);
+  min-height: 0;
+}
+
+.game__roomdesc,
+.game__map {
   display: flex;
   flex-direction: column;
   min-height: 0;
-}
-
-.game__map {
-  grid-column: 2;
-  grid-row: 1;
-  min-height: 0;
+  min-width: 0;
 }
 
 .game__log {
-  grid-column: 2;
-  grid-row: 2;
+  flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-/* On narrow viewports, stack to a single column so the sprite
-   doesn't squeeze the right-side panels into unreadable widths. */
+/* Narrow viewports stack into a single column. Panels get explicit sizes so
+   nothing collapses to zero height. The max-width cap stops applying here —
+   mobile layouts want the whole width. */
 @media (max-width: 900px) {
   .game {
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto 1fr 1fr;
+    max-width: none;
   }
-  .game__sprite { grid-column: 1; grid-row: 1; }
-  .game__tabs   { grid-column: 1; grid-row: 2; }
-  .game__map    { grid-column: 1; grid-row: 3; min-height: 240px; }
-  .game__log    { grid-column: 1; grid-row: 4; min-height: 240px; }
+  .game__sprite { max-height: 300px; }
+  .game__map-row {
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(0, 1fr);
+    height: 480px;
+  }
 }

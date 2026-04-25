@@ -1,13 +1,14 @@
 {
   "name": "understudy",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "proxy": "node tools/claude-proxy/server.mjs"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",

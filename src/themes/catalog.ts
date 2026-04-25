@@ -1,15 +1,24 @@
-import type { ScaleId, ScaleMeta, ThemeId, ThemeMeta } from './types'
+import type {
+  ScaleId,
+  ScaleMeta,
+  ThemeId,
+  ThemeMeta,
+  TickSpeedId,
+  TickSpeedMeta,
+} from './types'
 
 export const DEFAULT_THEME: ThemeId = 'mud'
 
 export const THEMES: readonly ThemeMeta[] = [
-  { id: 'mud', name: 'Classic MUD', description: 'Phosphor green on deep black. The default.' },
+  { id: 'mud', name: 'MUD (Modern)', description: 'Phosphor green hud with semantic color accents. The default.' },
+  { id: 'mud-classic', name: 'MUD (Classic)', description: 'Pure green-on-black. No color accents — every token collapses to a single phosphor shade.' },
   { id: 'amber', name: 'Amber', description: 'PC/3270 amber terminal.' },
   { id: 'phosphor', name: 'Phosphor', description: 'Paper white on black.' },
   { id: 'neon', name: 'Neon', description: 'Purple on slate. The old look.' },
   { id: 'cyber', name: 'Cyber', description: 'Magenta and cyan on near-black.' },
   { id: 'vacuum', name: 'Vacuum', description: 'Ice-white on navy.' },
   { id: 'vellum', name: 'Vellum', description: 'Ink on parchment. The only light one.' },
+  { id: 'paper', name: 'Paper', description: 'Pure white background, black text. For debugging color rules.' },
 ] as const
 
 export function isThemeId(value: unknown): value is ThemeId {
@@ -28,4 +37,23 @@ export const SCALES: readonly ScaleMeta[] = [
 
 export function isScaleId(value: unknown): value is ScaleId {
   return typeof value === 'string' && SCALES.some((s) => s.id === value)
+}
+
+export const DEFAULT_TICK_SPEED: TickSpeedId = '100'
+
+export const TICK_SPEEDS: readonly TickSpeedMeta[] = [
+  { id: '50', label: '0.5×', mult: 0.5 },
+  { id: '75', label: '0.75×', mult: 0.75 },
+  { id: '100', label: '1×', mult: 1 },
+  { id: '125', label: '1.25×', mult: 1.25 },
+  { id: '150', label: '1.5×', mult: 1.5 },
+  { id: '200', label: '2×', mult: 2 },
+] as const
+
+export function isTickSpeedId(value: unknown): value is TickSpeedId {
+  return typeof value === 'string' && TICK_SPEEDS.some((s) => s.id === value)
+}
+
+export function tickSpeedMult(id: TickSpeedId): number {
+  return TICK_SPEEDS.find((s) => s.id === id)?.mult ?? 1
 }

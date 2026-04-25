@@ -9,6 +9,8 @@ export const FANTASY_CONDITIONS: ConditionDef[] = [
     polarity: 'debuff',
     defaultDuration: 4,
     params: { damagePerTick: 2 },
+    element: 'earth',
+    verb: 'poisons',
   },
   {
     id: 'slept',
@@ -18,6 +20,7 @@ export const FANTASY_CONDITIONS: ConditionDef[] = [
     polarity: 'debuff',
     defaultDuration: 3,
     params: { skipChance: 1 },
+    verb: 'lulls',
   },
   {
     id: 'slowed',
@@ -27,6 +30,8 @@ export const FANTASY_CONDITIONS: ConditionDef[] = [
     polarity: 'debuff',
     defaultDuration: 5,
     params: { skipChance: 0.5 },
+    element: 'ice',
+    verb: 'slows',
   },
   {
     id: 'blessed',
@@ -36,5 +41,6 @@ export const FANTASY_CONDITIONS: ConditionDef[] = [
     polarity: 'buff',
     defaultDuration: 4,
     params: { attack: 2 },
+    verb: 'blesses',
   },
 ]

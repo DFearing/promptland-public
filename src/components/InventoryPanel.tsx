@@ -1,7 +1,17 @@
 import { useState } from 'react'
-import type { Character, InventoryItem } from '../character'
-import type { EquipBonuses, EquipSlot } from '../items'
+import type { Character, InventoryItem, ItemAcquisition } from '../character'
+import {
+  rarityColor,
+  rarityLabel,
+  type EquipBonuses,
+  type EquipSlot,
+  type Rarity,
+  type WeaponHands,
+} from '../items'
+import { equipBonusesFor } from '../game/equip'
+import { formatRelative } from '../util/time'
 import type { WorldContent } from '../worlds'
+import Popover from './Popover'
 
 interface Props {
   character: Character
@@ -15,12 +25,30 @@ interface DisplayItem {
   quantity?: number
   bonuses?: EquipBonuses
   slot?: EquipSlot
+  hands?: WeaponHands
+  rarity: Rarity
+  level: number
+  weight?: number
+  acquired?: ItemAcquisition
 }
+
+const BONUS_KEYS = [
+  'attack',
+  'defense',
+  'strength',
+  'dexterity',
+  'constitution',
+  'intelligence',
+  'wisdom',
+  'charisma',
+] as const
 
 // Archetyped items resolve live from world.items so future LLM-generated flavor
 // updates the UI without mutating stored inventory. Un-archetyped items (starting
 // inventory) use their frozen character-creation flavor.
 function displayOf(item: InventoryItem, world?: WorldContent): DisplayItem {
+  const rarity: Rarity = item.rarity ?? 'common'
+  const level = item.level ?? 1
   if (item.archetypeId && world) {
     const def = world.items.find((i) => i.id === item.archetypeId)
     if (def) {
@@ -29,55 +57,105 @@ function displayOf(item: InventoryItem, world?: WorldContent): DisplayItem {
         name: def.name,
         description: def.description,
         quantity: item.quantity,
+        rarity,
+        level,
+        weight: def.weight,
+        acquired: item.acquired,
       }
       if (def.kind === 'equipment') {
         base.slot = def.slot
-        base.bonuses = def.bonuses
+        // equipBonusesFor centralizes the level + rarity formula so the
+        // inventory UI shows exactly what combat will see when the item is
+        // worn. Avoids drift between the two surfaces.
+        base.bonuses = equipBonusesFor(item, world)
+        if (def.slot === 'weapon') base.hands = def.hands === 2 ? 2 : 1
       }
       return base
     }
   }
-  return { id: item.id, name: item.name, description: item.description, quantity: item.quantity }
+  return {
+    id: item.id,
+    name: item.name,
+    description: item.description,
+    quantity: item.quantity,
+    rarity,
+    level,
+    acquired: item.acquired,
+  }
+}
+
+const BONUS_LABELS: Record<(typeof BONUS_KEYS)[number], string> = {
+  attack: 'ATK',
+  defense: 'DEF',
+  strength: 'STR',
+  dexterity: 'DEX',
+  constitution: 'CON',
+  intelligence: 'INT',
+  wisdom: 'WIS',
+  charisma: 'CHA',
 }
 
 function bonusText(b: EquipBonuses): string {
   const parts: string[] = []
-  if (b.attack) parts.push(`+${b.attack} ATK`)
-  if (b.defense) parts.push(`+${b.defense} DEF`)
+  for (const key of BONUS_KEYS) {
+    const v = b[key]
+    if (v) parts.push(`+${v} ${BONUS_LABELS[key]}`)
+  }
   return parts.join(' ')
 }
 
+const SLOT_TIPS = {
+  weapon:
+    'Weapon — main-hand. Its attack bonus adds to every strike. Two-handed weapons occupy both hands and disable the off-hand slot.',
+  offhand:
+    'Off-hand — a second one-handed weapon. Attack bonuses stack with the main-hand weapon.',
+  armor: 'Torso armor — worn defense. Its bonus reduces incoming damage every hit.',
+  head: 'Head — helmets, hats, circlets. Bonuses stack with torso armor.',
+  arms: 'Arms — bracers, vambraces, sleeves.',
+  hands: 'Hands — gauntlets, gloves, wraps.',
+  legs: 'Legs — greaves, leggings.',
+  feet: 'Feet — boots, sabatons.',
+  cape: 'Cape — cloaks, mantles. Often carries utility bonuses.',
+  amulet: 'Amulet — neck-worn. Often stat-flavored.',
+  ring1: 'Ring — first of two ring slots. Often stat- or resistance-flavored.',
+  ring2: 'Ring — second of two ring slots.',
+} as const
+
 function SlotRow({
   slotLabel,
+  slotTip,
   item,
-  isSel,
-  onSelect,
+  onOpen,
 }: {
   slotLabel: string
+  slotTip: string
   item: DisplayItem | null
-  isSel: boolean
-  onSelect?: () => void
+  onOpen?: (item: DisplayItem, anchor: DOMRect) => void
 }) {
   if (!item) {
     return (
-      <li className="inv__eq-empty">
+      <li className="inv__eq-empty" data-tip={slotTip}>
         <span className="inv__eq-label">{slotLabel}</span>
         <span className="inv__eq-none">—</span>
       </li>
     )
   }
+  const stats = item.bonuses ? bonusText(item.bonuses) : ''
   return (
     <li>
       <button
         type="button"
-        className={'inv__row inv__row--eq' + (isSel ? ' inv__row--sel' : '')}
-        onClick={onSelect}
+        className="inv__row inv__row--eq"
+        onClick={(e) => onOpen?.(item, e.currentTarget.getBoundingClientRect())}
       >
-        <span className="inv__slot">{isSel ? '[x]' : '[ ]'}</span>
-        <span className="inv__name">
-          <span className="inv__eq-label">{slotLabel}</span> {item.name}
+        <span className="inv__eq-label">{slotLabel}</span>
+        <span className="inv__eq-body">
+          <span className="inv__name" style={{ color: rarityColor(item.rarity) }}>
+            {item.name}
+            <span className="inv__lv"> · Lv {item.level}</span>
+          </span>
+          {stats && <span className="inv__eq-stats">{stats}</span>}
         </span>
-        <span className="inv__qty">{item.bonuses ? bonusText(item.bonuses) : ''}</span>
       </button>
     </li>
   )
@@ -87,20 +165,45 @@ export default function InventoryPanel({ character, world }: Props) {
   const rawItems = character.inventory ?? []
   const items = rawItems.map((i) => displayOf(i, world))
   const equipped = character.equipped ?? {}
-  const weapon = equipped.weapon ? displayOf(equipped.weapon, world) : null
-  const armor = equipped.armor ? displayOf(equipped.armor, world) : null
+  const disp = (it?: InventoryItem) => (it ? displayOf(it, world) : null)
+  const weapon = disp(equipped.weapon)
+  const offhand = disp(equipped.offhand)
+  const armor = disp(equipped.armor)
+  const head = disp(equipped.head)
+  const arms = disp(equipped.arms)
+  const hands = disp(equipped.hands)
+  const legs = disp(equipped.legs)
+  const feet = disp(equipped.feet)
+  const cape = disp(equipped.cape)
+  const amulet = disp(equipped.amulet)
+  const ring1 = disp(equipped.ring1)
+  const ring2 = disp(equipped.ring2)
 
-  const firstId = weapon?.id ?? armor?.id ?? items[0]?.id ?? null
-  const [selectedId, setSelectedId] = useState<string | null>(firstId)
+  // Main hand is two-handed iff the equipped weapon is flagged as 2h. In that
+  // case we don't render a separate Off Hand row — the single "Weapon" row
+  // covers both hands.
+  const isTwoHanded = weapon?.hands === 2
 
-  const all: DisplayItem[] = [
-    ...(weapon ? [weapon] : []),
-    ...(armor ? [armor] : []),
-    ...items,
-  ]
-  const selected = all.find((i) => i.id === selectedId) ?? all[0] ?? null
+  const [popover, setPopover] = useState<{ item: DisplayItem; anchor: DOMRect } | null>(null)
 
-  const hasAnything = all.length > 0
+  const openPopover = (item: DisplayItem, anchor: DOMRect) => {
+    setPopover({ item, anchor })
+  }
+
+  const hasAnything =
+    !!weapon ||
+    !!offhand ||
+    !!armor ||
+    !!head ||
+    !!arms ||
+    !!hands ||
+    !!legs ||
+    !!feet ||
+    !!cape ||
+    !!amulet ||
+    !!ring1 ||
+    !!ring2 ||
+    items.length > 0
 
   if (!hasAnything) {
     return (
@@ -113,81 +216,168 @@ export default function InventoryPanel({ character, world }: Props) {
     )
   }
 
+  const weaponLabel = isTwoHanded ? 'Weapon (two-handed)' : 'Weapon'
+
   return (
     <div className="inv">
       <ul className="inv__list">
-        <li className="inv__group">Equipped</li>
+        <li className="inv__group" data-tip="Currently worn and wielded. Auto-equipped as better gear drops.">
+          Equipped
+        </li>
         <SlotRow
-          slotLabel="WPN"
+          slotLabel={weaponLabel}
+          slotTip={SLOT_TIPS.weapon}
           item={weapon}
-          isSel={weapon ? selected?.id === weapon.id : false}
-          onSelect={weapon ? () => setSelectedId(weapon.id) : undefined}
+          onOpen={openPopover}
         />
-        <SlotRow
-          slotLabel="ARM"
-          item={armor}
-          isSel={armor ? selected?.id === armor.id : false}
-          onSelect={armor ? () => setSelectedId(armor.id) : undefined}
-        />
-        {items.length > 0 && <li className="inv__group">Carried</li>}
-        {items.map((item) => {
-          const isSel = item.id === selected?.id
-          return (
-            <li key={item.id}>
-              <button
-                type="button"
-                className={'inv__row' + (isSel ? ' inv__row--sel' : '')}
-                onClick={() => setSelectedId(item.id)}
+        {!isTwoHanded && (
+          <SlotRow
+            slotLabel="Off Hand"
+            slotTip={SLOT_TIPS.offhand}
+            item={offhand}
+            onOpen={openPopover}
+          />
+        )}
+        <SlotRow slotLabel="Head" slotTip={SLOT_TIPS.head} item={head} onOpen={openPopover} />
+        <SlotRow slotLabel="Amulet" slotTip={SLOT_TIPS.amulet} item={amulet} onOpen={openPopover} />
+        <SlotRow slotLabel="Cape" slotTip={SLOT_TIPS.cape} item={cape} onOpen={openPopover} />
+        <SlotRow slotLabel="Torso" slotTip={SLOT_TIPS.armor} item={armor} onOpen={openPopover} />
+        <SlotRow slotLabel="Arms" slotTip={SLOT_TIPS.arms} item={arms} onOpen={openPopover} />
+        <SlotRow slotLabel="Hands" slotTip={SLOT_TIPS.hands} item={hands} onOpen={openPopover} />
+        <SlotRow slotLabel="Legs" slotTip={SLOT_TIPS.legs} item={legs} onOpen={openPopover} />
+        <SlotRow slotLabel="Feet" slotTip={SLOT_TIPS.feet} item={feet} onOpen={openPopover} />
+        <SlotRow slotLabel="Ring I" slotTip={SLOT_TIPS.ring1} item={ring1} onOpen={openPopover} />
+        <SlotRow slotLabel="Ring II" slotTip={SLOT_TIPS.ring2} item={ring2} onOpen={openPopover} />
+        {items.length > 0 && (
+          <li className="inv__group" data-tip="Stashed items. Click any for full details.">Carried</li>
+        )}
+        {items.map((item) => (
+          <li key={item.id}>
+            <button
+              type="button"
+              className="inv__row inv__row--carried"
+              onClick={(e) =>
+                openPopover(item, e.currentTarget.getBoundingClientRect())
+              }
+            >
+              <span
+                className="inv__name"
+                style={{ color: rarityColor(item.rarity) }}
               >
-                <span className="inv__slot">{isSel ? '[x]' : '[ ]'}</span>
-                <span className="inv__name">{item.name}</span>
-                <span className="inv__qty">{item.quantity && item.quantity > 1 ? `×${item.quantity}` : ''}</span>
-              </button>
-            </li>
-          )
-        })}
+                {item.name}
+                <span className="inv__lv"> · Lv {item.level}</span>
+              </span>
+              <span className="inv__qty">
+                {item.quantity && item.quantity > 1 ? `×${item.quantity}` : ''}
+              </span>
+            </button>
+          </li>
+        ))}
       </ul>
 
-      {selected && (
-        <div className="inv__detail">
-          <div className="inv__detail-name">
-            {selected.name}
-            {selected.bonuses ? (
-              <span className="inv__detail-bonus"> {bonusText(selected.bonuses)}</span>
-            ) : null}
-          </div>
-          {selected.description ? (
-            <p className="inv__detail-desc">{selected.description}</p>
-          ) : (
-            <p className="inv__detail-desc inv__detail-desc--empty">No further record.</p>
-          )}
-        </div>
-      )}
+      <Popover
+        open={popover != null}
+        anchor={popover?.anchor ?? null}
+        onClose={() => setPopover(null)}
+      >
+        {popover && (
+          <>
+            <h3
+              className="popover__title"
+              style={{ color: rarityColor(popover.item.rarity) }}
+            >
+              {popover.item.name}
+            </h3>
+            <p className="popover__meta">
+              Lv {popover.item.level}
+              {' · '}
+              {rarityLabel(popover.item.rarity)}
+              {popover.item.hands === 2 ? ' · Two-handed' : ''}
+              {popover.item.bonuses ? ` · ${bonusText(popover.item.bonuses)}` : ''}
+              {popover.item.weight != null ? ` · ${popover.item.weight} wt` : ''}
+              {popover.item.quantity && popover.item.quantity > 1
+                ? ` · ×${popover.item.quantity}`
+                : ''}
+            </p>
+            {popover.item.description ? (
+              <p className="popover__body">{popover.item.description}</p>
+            ) : (
+              <p className="popover__body popover__body--muted">No further record.</p>
+            )}
+            {popover.item.acquired && (
+              <p className="popover__meta popover__meta--acquired">
+                {(() => {
+                  const a = popover.item.acquired!
+                  const when = formatRelative(a.at)
+                  switch (a.source) {
+                    case 'mob':
+                      return a.mobName
+                        ? a.roomName
+                          ? `Won from ${a.mobName} in the ${a.roomName} · ${when}`
+                          : `Won from ${a.mobName} · ${when}`
+                        : `Won in battle · ${when}`
+                    case 'starting':
+                      return `Carried from the start · ${when}`
+                    case 'shop':
+                      return `Purchased · ${when}`
+                    case 'dev':
+                      return `Conjured · ${when}`
+                    default:
+                      return when
+                  }
+                })()}
+              </p>
+            )}
+          </>
+        )}
+      </Popover>
 
       <style>{`
         .inv { display: flex; flex-direction: column; flex: 1; min-height: 0; }
         .inv__list { list-style: none; margin: 0; padding: 0; flex: 1; min-height: 0; overflow-y: auto; font-family: var(--font-mono); font-size: var(--text-sm); }
         .inv__group { font-family: var(--font-display); font-size: var(--text-xs); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding: var(--sp-2) var(--sp-3) 2px; border-bottom: 1px solid var(--line-2); }
         .inv__group:first-child { padding-top: 0; }
-        .inv__row { width: 100%; display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: var(--sp-1); padding: 4px var(--sp-3); background: transparent; border: none; border-bottom: 1px solid var(--line-1); cursor: pointer; color: var(--fg-1); font: inherit; text-align: left; }
-        .inv__row:hover { background: var(--bg-2); }
-        .inv__row--sel { background: var(--bg-3); color: var(--accent-hot); box-shadow: inset 0 0 0 1px var(--line-3); text-shadow: var(--glow-sm); }
-        .inv__row--eq { background: var(--bg-inset); }
+        .inv__row { width: 100%; align-items: center; gap: var(--sp-2); padding: 4px var(--sp-3); background: transparent; border: none; border-bottom: 1px solid var(--line-1); cursor: pointer; color: var(--fg-1); font: inherit; text-align: left; }
+        .inv__row:hover, .inv__row:focus-visible { background: var(--bg-2); outline: none; }
+        .inv__row:focus-visible { box-shadow: inset 0 0 0 1px var(--line-3); }
+        /* Equipped rows are now two-line: slot label on the left, then a
+           stacked body (item name on top, bonus stats below in smaller text)
+           so long bonus strings don't get truncated by a narrow fixed-width
+           column. align-items: center keeps the slot label aligned to the
+           vertical midpoint of the stacked body. */
+        .inv__row--eq {
+          display: grid;
+          grid-template-columns: 120px 1fr;
+          align-items: center;
+          background: var(--bg-inset);
+        }
         .inv__row--eq:hover { background: var(--bg-2); }
-        .inv__row--eq.inv__row--sel { background: var(--bg-3); }
-        .inv__slot { color: var(--accent); font-variant-numeric: tabular-nums; }
+        .inv__row--carried { display: grid; grid-template-columns: 1fr auto; }
+        .inv__eq-body {
+          display: flex;
+          flex-direction: column;
+          gap: 1px;
+          min-width: 0;
+        }
+        .inv__eq-stats {
+          color: var(--fg-3);
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          font-variant-numeric: tabular-nums;
+          letter-spacing: 0.02em;
+          white-space: normal;
+        }
         .inv__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .inv__lv {
+          color: var(--fg-3);
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          letter-spacing: 0.04em;
+        }
         .inv__qty { color: var(--fg-3); font-variant-numeric: tabular-nums; text-align: right; font-size: var(--text-xs); }
-        .inv__eq-label { color: var(--speech); font-size: var(--text-xs); letter-spacing: 0.1em; padding-right: var(--sp-1); }
-        .inv__eq-empty { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: var(--sp-1); padding: 4px var(--sp-3); border-bottom: 1px solid var(--line-1); color: var(--fg-3); font-family: var(--font-mono); font-size: var(--text-sm); }
-        .inv__eq-empty .inv__eq-label { grid-column: 1 / 3; }
+        .inv__eq-label { color: var(--fg-3); font-family: var(--font-body); font-size: var(--text-xs); letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; }
+        .inv__eq-empty { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: var(--sp-2); padding: 4px var(--sp-3); border-bottom: 1px solid var(--line-1); color: var(--fg-3); font-family: var(--font-mono); font-size: var(--text-sm); }
         .inv__eq-none { color: var(--fg-3); font-style: italic; }
-
-        .inv__detail { border-top: 1px solid var(--line-2); padding: var(--sp-2) var(--sp-3); background: var(--bg-inset); box-shadow: var(--shadow-inset); font-family: var(--font-body); font-size: var(--text-sm); color: var(--fg-1); line-height: var(--leading-body); }
-        .inv__detail-name { font-family: var(--font-display); font-size: var(--text-md); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-hot); text-shadow: var(--glow-sm); margin-bottom: 3px; }
-        .inv__detail-bonus { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--magic); letter-spacing: 0.04em; text-transform: none; text-shadow: none; }
-        .inv__detail-desc { margin: 0; }
-        .inv__detail-desc--empty { color: var(--fg-3); font-style: italic; }
       `}</style>
     </div>
   )

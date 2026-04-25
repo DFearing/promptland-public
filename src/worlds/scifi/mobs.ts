@@ -61,19 +61,19 @@ const ARCHETYPES: MobArchetype[] = [
 
 const FLAVORS: Record<string, MobFlavor> = {
   maintenance_bot: {
-    name: 'maintenance bot',
+    name: 'Maintenance Bot',
     description: 'Treads scuffed, arms articulated wrong. Its task queue got corrupted years ago.',
   },
   vent_crawler: {
-    name: 'vent crawler',
+    name: 'Vent Crawler',
     description: 'Something lean and unlogged. Too many joints, wrong colour of eye-shine.',
   },
   boarding_drone: {
-    name: 'boarding drone',
+    name: 'Boarding Drone',
     description: 'Military surplus. Riot foam dispenser mounted where the neural lead used to be.',
   },
   reactor_wraith: {
-    name: 'reactor wraith',
+    name: 'Reactor Wraith',
     description: 'A crewman who stayed too close to the core, after. Blue glow where their skin used to be.',
   },
 }

@@ -9,6 +9,8 @@ export const SCIFI_CONDITIONS: ConditionDef[] = [
     polarity: 'debuff',
     defaultDuration: 6,
     params: { damagePerTick: 1 },
+    element: 'fire',
+    verb: 'irradiates',
   },
   {
     id: 'stunned',
@@ -18,6 +20,7 @@ export const SCIFI_CONDITIONS: ConditionDef[] = [
     polarity: 'debuff',
     defaultDuration: 2,
     params: { skipChance: 1 },
+    verb: 'stuns',
   },
   {
     id: 'vacuum_sick',
@@ -27,6 +30,7 @@ export const SCIFI_CONDITIONS: ConditionDef[] = [
     polarity: 'debuff',
     defaultDuration: 5,
     params: { skipChance: 0.5 },
+    verb: 'sickens',
   },
   {
     id: 'shielded',
@@ -36,5 +40,7 @@ export const SCIFI_CONDITIONS: ConditionDef[] = [
     polarity: 'buff',
     defaultDuration: 4,
     params: { defense: 3 },
+    element: 'ice',
+    verb: 'shields',
   },
 ]

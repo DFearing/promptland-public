@@ -1,3 +1,4 @@
+import { MOCK_BASE_URL, MockLLMClient } from './mockClient'
 import type {
   LLMClient,
   LLMCompletionRequest,
@@ -30,6 +31,13 @@ export class LLMError extends Error {
     this.status = opts.status
     this.body = opts.body
   }
+}
+
+export function createLLMClient(config: LLMConfig): LLMClient {
+  if (config.baseUrl.trim().toLowerCase().startsWith(MOCK_BASE_URL)) {
+    return new MockLLMClient()
+  }
+  return new OpenAICompatClient(config)
 }
 
 export class OpenAICompatClient implements LLMClient {

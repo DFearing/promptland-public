@@ -7,7 +7,23 @@ export interface LLMPreset {
   note?: string
 }
 
+/** Hosts that never require an API key (local / trusted LAN servers). */
+export const KEYLESS_HOSTS: readonly string[] = [
+  'localhost',
+  '127.0.0.1',
+  '0.0.0.0',
+  '192.168.1.186',
+]
+
 export const LLM_PRESETS: readonly LLMPreset[] = [
+  {
+    id: 'mock',
+    name: 'Mock (test)',
+    baseUrl: 'mock://local',
+    defaultModel: 'mock-1',
+    apiKeyRequired: false,
+    note: 'Returns canned JSON locally. No network. Use to verify the cache pipeline.',
+  },
   {
     id: 'ollama',
     name: 'Ollama',
@@ -15,6 +31,22 @@ export const LLM_PRESETS: readonly LLMPreset[] = [
     defaultModel: 'llama3.1',
     apiKeyRequired: false,
     note: 'Local. Set OLLAMA_ORIGINS=* so the browser can reach it.',
+  },
+  {
+    id: 'claude-subscription',
+    name: 'Claude Subscription (local proxy)',
+    baseUrl: 'http://127.0.0.1:11435/v1',
+    defaultModel: 'haiku',
+    apiKeyRequired: false,
+    note: 'Run `npm run proxy` in a second terminal. Uses your Claude Code login (Pro/Max plan) via headless mode.',
+  },
+  {
+    id: 'ollama-lan',
+    name: 'Ollama (LAN)',
+    baseUrl: 'http://192.168.1.186/v1',
+    defaultModel: 'llama3.1',
+    apiKeyRequired: false,
+    note: 'LAN Ollama server. Set OLLAMA_ORIGINS=* so it accepts browser requests.',
   },
   {
     id: 'lmstudio',

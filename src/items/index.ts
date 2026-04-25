@@ -9,4 +9,21 @@ export type {
   ItemFlavor,
   ItemKind,
   JunkArchetype,
+  ScrollArchetype,
+  WeaponHands,
 } from './types'
+export {
+  RARITIES,
+  RARITY_DEFS,
+  defeatLingerMs,
+  mobDisplayName,
+  rarityColor,
+  rarityLabel,
+  rarityStatMult,
+  rarityValueMult,
+  rollMobRarity,
+  rollRarity,
+  skullsFor,
+  type Rarity,
+  type RarityDef,
+} from './rarity'

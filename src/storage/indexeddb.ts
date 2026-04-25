@@ -40,6 +40,12 @@ export class IndexedDBStorage implements Storage {
       async put(entry) {
         await db.entities.put(entry)
       },
+      async deleteByTemplateAndWorld(templateId, worldId) {
+        // Cache keys are formatted "<templateId>:<worldId>:<hex>" — a
+        // prefix range scan on the primary key is O(log n) on Dexie's
+        // indexed store.
+        return db.entities.where('hash').startsWith(`${templateId}:${worldId}:`).delete()
+      },
     }
 
     this.saves = {

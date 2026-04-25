@@ -62,60 +62,104 @@ const ARCHETYPES: ItemArchetype[] = [
     slot: 'armor',
     bonuses: { defense: 3 },
   },
+  {
+    id: 'psi_charge_bolt',
+    kind: 'scroll',
+    value: 18,
+    stackable: true,
+    spellId: 'psi_bolt',
+  },
+  {
+    id: 'psi_charge_storm',
+    kind: 'scroll',
+    value: 35,
+    stackable: true,
+    spellId: 'mind_storm',
+  },
+  {
+    id: 'psi_charge_mend',
+    kind: 'scroll',
+    value: 22,
+    stackable: true,
+    spellId: 'bioregen',
+  },
+  {
+    id: 'psi_charge_beam_out',
+    kind: 'scroll',
+    value: 90,
+    stackable: true,
+    spellId: 'beam_out',
+  },
 ]
 
 const FLAVORS: Record<string, ItemFlavor> = {
   hull_shard: {
-    name: 'hull shard',
+    name: 'Hull Shard',
     description: 'A palm-sized curl of ship plate, cold even when warm.',
   },
   power_cell: {
-    name: 'power cell',
+    name: 'Power Cell',
     description: 'Dim indicator, still charged. Careful not to short it.',
   },
   coolant_vial: {
-    name: 'coolant vial',
+    name: 'Coolant Vial',
     description: 'Blue gel that refuses to settle. Useful in engineering bays that still work.',
   },
   star_chart: {
-    name: 'star chart',
+    name: 'Star Chart',
     description: 'Coordinates scratched onto a data-plaque. Three of the systems are circled in red.',
   },
   protein_bar: {
-    name: 'protein bar',
+    name: 'Protein Bar',
     description: 'Vacuum-sealed, best-before long gone. Still edible.',
   },
   medfoam: {
-    name: 'medfoam canister',
+    name: 'Medfoam Canister',
     description: 'Spray it on the wound and pretend the hissing sound is healing.',
   },
   psi_lozenge: {
-    name: 'psi lozenge',
+    name: 'Psi Lozenge',
     description: 'A lavender wafer that quiets the channels in your skull.',
   },
   service_pistol: {
-    name: 'service pistol',
+    name: 'Service Pistol',
     description: 'Standard-issue. Reliable. Your hand remembers the weight.',
   },
   laser_carbine: {
-    name: 'laser carbine',
+    name: 'Laser Carbine',
     description: 'Focused emitter, folding stock. One good cell gets you a dozen shots.',
   },
   phase_rifle: {
-    name: 'phase rifle',
+    name: 'Phase Rifle',
     description: 'Rarely seen outside the Fleet. The air warps where it points.',
   },
   flight_suit: {
-    name: 'flight suit',
+    name: 'Flight Suit',
     description: 'Patched thermal weave. Keeps you alive through a hull crack, briefly.',
   },
   mag_plate: {
-    name: 'mag plate',
+    name: 'Mag Plate',
     description: 'Slides over the chest and clicks to itself. Absorbs more than it should.',
   },
   boarding_armor: {
-    name: 'boarding armor',
+    name: 'Boarding Armor',
     description: 'Marines’ kit, stenciled with someone else’s service number.',
+  },
+  psi_charge_bolt: {
+    name: 'Psi-Charge: Bolt',
+    description: 'A one-use crystal keyed to a sharp, simple thought.',
+  },
+  psi_charge_storm: {
+    name: 'Psi-Charge: Storm',
+    description: 'A heavier crystal. Something howls inside it when held.',
+  },
+  psi_charge_mend: {
+    name: 'Psi-Charge: Mend',
+    description: 'A soft-edged crystal. Warm.',
+  },
+  psi_charge_beam_out: {
+    name: 'Psi-Charge: Beam-Out',
+    description: 'A transit-lock keyed to your last safe anchor.',
   },
 }
 
