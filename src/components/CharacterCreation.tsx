@@ -17,6 +17,14 @@ interface Draft {
 
 const STEPS: Step[] = ['world', 'species', 'gender', 'class', 'name']
 
+const STEP_LABEL: Record<Step, string> = {
+  world: 'World',
+  species: 'Species',
+  gender: 'Gender',
+  class: 'Class',
+  name: 'Name',
+}
+
 const STEP_TITLE: Record<Step, string> = {
   world: 'Choose a world',
   species: 'Choose a species',
@@ -51,49 +59,72 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
     }
   })()
 
+  const finalize = (
+    targetWorld: WorldManifest,
+    speciesId: string,
+    genderId: string,
+    classId: string,
+    name: string,
+  ) => {
+    const classDef = targetWorld.classes.find((c) => c.id === classId)
+    if (!classDef) return
+    const stats = { ...classDef.startingStats }
+    const startedAt = Date.now()
+    const inventory: InventoryItem[] = classDef.startingInventory.map((t) => ({
+      id: uuid(),
+      ...t,
+      level: 1,
+      acquired: { at: startedAt, source: 'starting' },
+    }))
+    const maxHp = maxHpFor(stats)
+    const maxMagic = classDef.startingMaxMagic
+    const createdAt = Date.now()
+    onComplete({
+      ...makeDefaults(targetWorld.id),
+      id: uuid(),
+      name: name.trim(),
+      worldId: targetWorld.id,
+      worldVersion: targetWorld.version,
+      speciesId,
+      genderId,
+      classId,
+      createdAt,
+      level: 1,
+      xp: 0,
+      hp: Math.max(1, Math.ceil(maxHp * 0.6)),
+      maxHp,
+      magic: maxMagic,
+      maxMagic,
+      stats,
+      inventory,
+      spells: [...(classDef.startingSpells ?? [])],
+      segment: { startedAt: createdAt, startGold: 0 },
+      // New characters wake into a slowed world (0.5×) and ramp up to 1×
+      // over their first ~150 ticks. The auto-flag lets the runtime
+      // step the speed up; the topbar control flips it off when the
+      // user picks a speed manually.
+      tickSpeed: '50',
+      tickSpeedAuto: true,
+    })
+  }
+
+  // Skip the full creation flow with a randomly-picked fantasy preset.
+  // Two presets alternate so successive Quick Starts don't feel identical.
+  const quickStart = () => {
+    const fantasy = getWorldManifest('fantasy')
+    if (!fantasy) return
+    const presets = [
+      { speciesId: 'human', genderId: 'man',   classId: 'warrior', name: 'Warrior' },
+      { speciesId: 'elf',   genderId: 'woman', classId: 'mage',    name: 'Mage' },
+    ] as const
+    const p = presets[Math.floor(Math.random() * presets.length)]
+    finalize(fantasy, p.speciesId, p.genderId, p.classId, p.name)
+  }
+
   const advance = () => {
     if (!canAdvance) return
     if (step === 'name' && world && draft.speciesId && draft.genderId && draft.classId) {
-      const classDef = world.classes.find((c) => c.id === draft.classId)
-      if (!classDef) return
-      const stats = { ...classDef.startingStats }
-      const startedAt = Date.now()
-      const inventory: InventoryItem[] = classDef.startingInventory.map((t) => ({
-        id: uuid(),
-        ...t,
-        level: 1,
-        acquired: { at: startedAt, source: 'starting' },
-      }))
-      const maxHp = maxHpFor(stats)
-      const maxMagic = classDef.startingMaxMagic
-      const createdAt = Date.now()
-      onComplete({
-        ...makeDefaults(world.id),
-        id: uuid(),
-        name: draft.name.trim(),
-        worldId: world.id,
-        worldVersion: world.version,
-        speciesId: draft.speciesId,
-        genderId: draft.genderId,
-        classId: draft.classId,
-        createdAt,
-        level: 1,
-        xp: 0,
-        hp: Math.max(1, Math.ceil(maxHp * 0.6)),
-        maxHp,
-        magic: maxMagic,
-        maxMagic,
-        stats,
-        inventory,
-        spells: [...(classDef.startingSpells ?? [])],
-        segment: { startedAt: createdAt, startGold: 0 },
-        // New characters wake into a slowed world (0.5×) and ramp up to 1×
-        // over their first ~150 ticks. The auto-flag lets the runtime
-        // step the speed up; the topbar control flips it off when the
-        // user picks a speed manually.
-        tickSpeed: '50',
-        tickSpeedAuto: true,
-      })
+      finalize(world, draft.speciesId, draft.genderId, draft.classId, draft.name)
       return
     }
     setStep(STEPS[stepIndex + 1])
@@ -124,20 +155,33 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
                   (i < stepIndex ? ' cc__step--done' : '')
                 }
               >
-                <span className="cc__step-num">{i + 1}</span>
-                <span className="cc__step-label">{STEP_TITLE[s]}</span>
+                <span className="cc__step-num">{i + 1}.</span>
+                <span className="cc__step-label">{STEP_LABEL[s]}</span>
               </li>
             ))}
           </ol>
         </header>
 
         <main className="cc__body">
-          <h1 className="cc__title">{STEP_TITLE[step]}</h1>
+          <div className="cc__title-row">
+            <h1 className="cc__title">{STEP_TITLE[step]}</h1>
+            {step === 'world' && (
+              <button
+                type="button"
+                className="cc__quickstart"
+                onClick={quickStart}
+                data-tip="Drop into a fantasy game with a preset character"
+              >
+                Quick Start
+              </button>
+            )}
+          </div>
 
           {step === 'world' && (
-            <ul className="cc__options">
-              {WORLD_MANIFESTS.map((w) => {
-                const ready = hasWorldContent(w.id)
+            <>
+              <ul className="cc__options">
+                {WORLD_MANIFESTS.map((w) => {
+                const ready = hasWorldContent(w.id) && !w.comingSoon
                 return (
                   <li key={w.id}>
                     <button
@@ -152,14 +196,15 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
                     >
                       <strong>
                         {w.name}
-                        {!ready && <span className="cc__pending"> — coming soon</span>}
+                        {!ready && <span className="cc__pending"> (Coming Soon)</span>}
                       </strong>
                       <span>{w.description}</span>
                     </button>
                   </li>
                 )
               })}
-            </ul>
+              </ul>
+            </>
           )}
 
           {step === 'species' && world && (
@@ -264,13 +309,28 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
         .cc__card { width: 100%; max-width: 720px; background: var(--bg-1); border: 1px solid var(--line-2); display: flex; flex-direction: column; }
         .cc__header { padding: var(--sp-5) var(--sp-6) 0; }
         .cc__steps { list-style: none; display: flex; gap: var(--sp-1); margin: 0; padding: 0; flex-wrap: wrap; }
-        .cc__step { display: flex; align-items: center; gap: var(--sp-1); padding: 3px var(--sp-2); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); background: transparent; border: 1px solid var(--line-1); text-transform: uppercase; letter-spacing: 0.08em; }
-        .cc__step-num { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; background: var(--bg-inset); color: var(--fg-2); font-weight: 600; font-size: var(--text-xs); border: 1px solid var(--line-1); }
+        .cc__step { display: flex; align-items: baseline; gap: var(--sp-1); padding: 3px var(--sp-2); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); background: transparent; border: 1px solid var(--line-1); text-transform: uppercase; letter-spacing: 0.08em; }
+        .cc__step-num { color: var(--fg-2); font-weight: 600; font-size: var(--text-xs); }
         .cc__step--current { color: var(--accent-hot); border-color: var(--line-3); text-shadow: var(--glow-sm); }
-        .cc__step--current .cc__step-num { background: var(--bg-3); color: var(--accent-hot); border-color: var(--line-3); }
+        .cc__step--current .cc__step-num { color: var(--accent-hot); }
         .cc__step--done { color: var(--fg-2); }
         .cc__body { padding: var(--sp-6); flex: 1; min-height: 0; overflow-y: auto; }
-        .cc__title { margin: 0 0 var(--sp-4); font-family: var(--font-display); font-size: var(--text-2xl); color: var(--accent-hot); text-shadow: var(--glow-sm); letter-spacing: 0.02em; }
+        .cc__title-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); margin: 0 0 var(--sp-4); }
+        .cc__title { margin: 0; font-family: var(--font-display); font-size: var(--text-2xl); color: var(--accent-hot); text-shadow: var(--glow-sm); letter-spacing: 0.02em; }
+        .cc__quickstart {
+          padding: 6px var(--sp-3);
+          background: var(--bg-2);
+          border: 1px solid var(--line-3);
+          color: var(--accent-hot);
+          cursor: pointer;
+          font-family: var(--font-display);
+          font-size: var(--text-md);
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          text-shadow: var(--glow-md);
+          transition: background var(--dur-fast) var(--ease-crt), text-shadow var(--dur-fast) var(--ease-crt);
+        }
+        .cc__quickstart:hover { background: var(--bg-3); text-shadow: var(--glow-lg); }
         .cc__options { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--sp-2); }
         .cc__options--compact { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
         .cc__option { width: 100%; text-align: left; padding: var(--sp-3) var(--sp-4); background: var(--bg-inset); border: 1px solid var(--line-1); color: var(--fg-1); cursor: pointer; display: flex; flex-direction: column; gap: 3px; font: inherit; transition: border-color var(--dur-fast) var(--ease-crt), background var(--dur-fast) var(--ease-crt); }

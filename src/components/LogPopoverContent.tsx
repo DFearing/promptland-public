@@ -4,7 +4,9 @@ import type { Character, InventoryItem } from '../character'
 import { describeCharacter, xpToNextLevel } from '../character'
 import type { BonusBreakdown } from '../game'
 import type { ItemDef } from '../items'
+import { parseMobDisplayName, rarityColor, rarityLabel } from '../items'
 import type { MobTemplate } from '../mobs'
+import { mobLevel } from '../mobs'
 import { formatRelative } from '../util/time'
 
 export type Subject =
@@ -17,7 +19,10 @@ export type Subject =
 
 export interface SubjectContext {
   character: Character
-  area?: Area
+  /** All areas in the current world. Room popovers resolve their area by
+   *  matching the subject's areaId — using only the starting area breaks
+   *  popovers for rooms in other areas. */
+  areas?: Area[]
   mobs?: MobTemplate[]
   items?: ItemDef[]
   /** Names of mobs that have fallen in this session. Derived from the
@@ -26,21 +31,15 @@ export interface SubjectContext {
   defeatedMobs?: Set<string>
 }
 
-export interface SubjectActions {
-  onClose: () => void
-  onShowRoom?: (areaId: string, roomKey: string) => void
-}
-
 interface Props {
   subject: Subject
   ctx: SubjectContext
-  actions: SubjectActions
 }
 
-export default function LogPopoverContent({ subject, ctx, actions }: Props) {
+export default function LogPopoverContent({ subject, ctx }: Props) {
   switch (subject.kind) {
     case 'room':
-      return <RoomContent subject={subject} ctx={ctx} actions={actions} />
+      return <RoomContent subject={subject} ctx={ctx} />
     case 'mob':
       return <MobContent subject={subject} ctx={ctx} />
     case 'item':
@@ -57,19 +56,20 @@ export default function LogPopoverContent({ subject, ctx, actions }: Props) {
 function RoomContent({
   subject,
   ctx,
-  actions,
 }: {
   subject: Extract<Subject, { kind: 'room' }>
   ctx: SubjectContext
-  actions: SubjectActions
 }) {
-  const room = ctx.area?.id === subject.areaId
-    ? ctx.area.rooms[subject.roomKey]
-    : undefined
-  const here = ctx.area && ctx.area.id === ctx.character.position.areaId
-    ? makeRoomKey(ctx.character.position.x, ctx.character.position.y, ctx.character.position.z)
-    : null
-  const isHere = here === subject.roomKey
+  const area = ctx.areas?.find((a) => a.id === subject.areaId)
+  const room = area?.rooms[subject.roomKey]
+  const isHere =
+    subject.areaId === ctx.character.position.areaId &&
+    subject.roomKey ===
+      makeRoomKey(
+        ctx.character.position.x,
+        ctx.character.position.y,
+        ctx.character.position.z,
+      )
 
   return (
     <>
@@ -86,20 +86,6 @@ function RoomContent({
           You haven't been here yet.
         </p>
       )}
-      {actions.onShowRoom && (
-        <div className="popover__actions">
-          <button
-            type="button"
-            className="popover__btn"
-            onClick={() => {
-              actions.onShowRoom!(subject.areaId, subject.roomKey)
-              actions.onClose()
-            }}
-          >
-            Show on map
-          </button>
-        </div>
-      )}
     </>
   )
 }
@@ -111,13 +97,21 @@ function MobContent({
   subject: Extract<Subject, { kind: 'mob' }>
   ctx: SubjectContext
 }) {
-  // Rarity-prefixed names come through from combat (e.g. "Strong Cave Rat").
-  // Try an exact match first, then fall back to a suffix match against the
-  // base template name so popovers work for modified spawns.
+  // Rarity-prefixed names come through from combat ("Strong Cave Rat",
+  // "Dread King Goblin ★★★", etc.). Parse the display name back into its
+  // rarity + base-name parts so the template lookup is exact and the
+  // popover can show the derived combat level.
+  const { rarity, baseName } = parseMobDisplayName(subject.name)
   const mob =
-    ctx.mobs?.find((m) => m.name === subject.name) ??
-    ctx.mobs?.find((m) => subject.name.endsWith(m.name))
+    ctx.mobs?.find((m) => m.name === baseName) ??
+    ctx.mobs?.find((m) => m.name === subject.name)
+  const level = mob ? mobLevel(mob, rarity) : null
   const dead = ctx.defeatedMobs?.has(subject.name) ?? false
+  const metaParts: string[] = []
+  if (dead) metaParts.push('DEAD')
+  else metaParts.push('Hostile')
+  if (level != null) metaParts.push(`Lv ${level}`)
+  metaParts.push(rarityLabel(rarity))
   return (
     <>
       <h3
@@ -129,7 +123,7 @@ function MobContent({
         {subject.name}
       </h3>
       <p className={'popover__meta' + (dead ? ' popover__meta--dead' : '')}>
-        {dead ? 'DEAD' : 'Hostile'}
+        {metaParts.join(' · ')}
       </p>
       {mob ? (
         <p className="popover__body">{mob.description}</p>
@@ -155,12 +149,19 @@ function ItemContent({
   // describes a representative example. Equipped slots are inspected too
   // because a worn item won't appear in the loose inventory list.
   const owned = findOwnedItem(ctx.character, subject.id)
+  const rarity = owned?.rarity
   return (
     <>
-      <h3 className="popover__title popover__title--item">{def?.name ?? subject.name}</h3>
+      <h3
+        className="popover__title popover__title--item"
+        style={rarity ? { color: rarityColor(rarity) } : undefined}
+      >
+        {def?.name ?? subject.name}
+      </h3>
       <p className="popover__meta">
         Item
         {owned?.level ? ` · Lv ${owned.level}` : ''}
+        {rarity ? ` · ${rarityLabel(rarity)}` : ''}
         {def?.value != null ? ` · worth ${def.value}` : ''}
         {def?.stackable ? ' · stackable' : ''}
       </p>

@@ -1,6 +1,6 @@
 ---
-name: understudy-design
-description: Use this skill to generate well-branded interfaces and assets for Understudy, either for production or throwaway prototypes/mocks/etc. Contains essential design guidelines, colors, type, fonts, assets, and UI kit components for prototyping.
+name: promptland-design
+description: Use this skill to generate well-branded interfaces and assets for Promptland, either for production or throwaway prototypes/mocks/etc. Contains essential design guidelines, colors, type, fonts, assets, and UI kit components for prototyping.
 user-invocable: true
 ---
 
@@ -15,7 +15,7 @@ If the user invokes this skill without any other guidance, ask them what they wa
 - `colors_and_type.css` — all tokens, three themes (`mud` default, `amber`, `phosphor`). Set `data-theme` on `<html>` to switch.
 - `assets/logo/` — wordmark and `[U]` mark, both single-color SVGs that pick up `currentColor`.
 - `assets/icons/` — a handful of 16×16 utility icons (settings, close, play/pause/FF, chevrons).
-- `ui_kits/understudy/` — React UI kit: game view, character creation wizard, settings screen.
+- `ui_kits/promptland/` — React UI kit: game view, character creation wizard, settings screen.
 - `preview/` — per-token specimen cards.
 
 ## Iron rules

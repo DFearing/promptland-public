@@ -3,7 +3,10 @@ import type { Character, InventoryItem, ItemAcquisition } from '../character'
 import {
   rarityColor,
   rarityLabel,
+  rarityValueMult,
+  scaledRequirements,
   type EquipBonuses,
+  type EquipRequirements,
   type EquipSlot,
   type Rarity,
   type WeaponHands,
@@ -30,6 +33,10 @@ interface DisplayItem {
   level: number
   weight?: number
   acquired?: ItemAcquisition
+  /** Rarity-scaled requirements, if any. */
+  requirements?: EquipRequirements
+  /** Per-unit sell value, rarity-scaled. Undefined for items with no archetype value. */
+  unitValue?: number
 }
 
 const BONUS_KEYS = [
@@ -61,6 +68,7 @@ function displayOf(item: InventoryItem, world?: WorldContent): DisplayItem {
         level,
         weight: def.weight,
         acquired: item.acquired,
+        unitValue: def.value != null ? def.value * rarityValueMult(rarity) : undefined,
       }
       if (def.kind === 'equipment') {
         base.slot = def.slot
@@ -69,6 +77,7 @@ function displayOf(item: InventoryItem, world?: WorldContent): DisplayItem {
         // worn. Avoids drift between the two surfaces.
         base.bonuses = equipBonusesFor(item, world)
         if (def.slot === 'weapon') base.hands = def.hands === 2 ? 2 : 1
+        base.requirements = scaledRequirements(def.requirements, rarity)
       }
       return base
     }
@@ -82,6 +91,12 @@ function displayOf(item: InventoryItem, world?: WorldContent): DisplayItem {
     level,
     acquired: item.acquired,
   }
+}
+
+function stackValue(d: DisplayItem): number {
+  const unit = d.unitValue ?? 0
+  const qty = d.quantity && d.quantity > 1 ? d.quantity : 1
+  return unit * qty
 }
 
 const BONUS_LABELS: Record<(typeof BONUS_KEYS)[number], string> = {
@@ -161,9 +176,55 @@ function SlotRow({
   )
 }
 
+const REQ_LABELS: Record<keyof EquipRequirements, string> = {
+  level: 'Lv',
+  strength: 'STR',
+  dexterity: 'DEX',
+  intelligence: 'INT',
+  wisdom: 'WIS',
+}
+
+function RequirementsLine({
+  reqs,
+  character,
+}: {
+  reqs: EquipRequirements
+  character: Character
+}) {
+  const charStats = {
+    level: character.level,
+    strength: character.stats.strength,
+    dexterity: character.stats.dexterity,
+    intelligence: character.stats.intelligence,
+    wisdom: character.stats.wisdom,
+  }
+  const parts: Array<{ label: string; value: number; met: boolean }> = []
+  for (const key of ['level', 'strength', 'dexterity', 'intelligence', 'wisdom'] as const) {
+    const v = reqs[key]
+    if (v == null) continue
+    parts.push({ label: REQ_LABELS[key], value: v, met: charStats[key] >= v })
+  }
+  if (parts.length === 0) return null
+  return (
+    <p className="popover__meta popover__meta--reqs">
+      Requires:{' '}
+      {parts.map((p, i) => (
+        <span key={p.label}>
+          {i > 0 && ' '}
+          <span style={p.met ? undefined : { color: 'var(--bad)' }}>
+            {p.label} {p.value}
+          </span>
+        </span>
+      ))}
+    </p>
+  )
+}
+
 export default function InventoryPanel({ character, world }: Props) {
   const rawItems = character.inventory ?? []
-  const items = rawItems.map((i) => displayOf(i, world))
+  const items = rawItems
+    .map((i) => displayOf(i, world))
+    .sort((a, b) => stackValue(b) - stackValue(a))
   const equipped = character.equipped ?? {}
   const disp = (it?: InventoryItem) => (it ? displayOf(it, world) : null)
   const weapon = disp(equipped.weapon)
@@ -265,10 +326,15 @@ export default function InventoryPanel({ character, world }: Props) {
                 style={{ color: rarityColor(item.rarity) }}
               >
                 {item.name}
+                {item.quantity && item.quantity > 1 ? ` (x${item.quantity})` : ''}
                 <span className="inv__lv"> · Lv {item.level}</span>
               </span>
               <span className="inv__qty">
-                {item.quantity && item.quantity > 1 ? `×${item.quantity}` : ''}
+                {item.weight != null && (
+                  <span className="inv__wt">
+                    {item.weight * (item.quantity && item.quantity > 1 ? item.quantity : 1)} wt
+                  </span>
+                )}
               </span>
             </button>
           </li>
@@ -293,12 +359,16 @@ export default function InventoryPanel({ character, world }: Props) {
               {' · '}
               {rarityLabel(popover.item.rarity)}
               {popover.item.hands === 2 ? ' · Two-handed' : ''}
-              {popover.item.bonuses ? ` · ${bonusText(popover.item.bonuses)}` : ''}
               {popover.item.weight != null ? ` · ${popover.item.weight} wt` : ''}
-              {popover.item.quantity && popover.item.quantity > 1
-                ? ` · ×${popover.item.quantity}`
-                : ''}
             </p>
+            {popover.item.bonuses && (
+              <p className="popover__meta popover__meta--bonuses">
+                {bonusText(popover.item.bonuses)}
+              </p>
+            )}
+            {popover.item.requirements && (
+              <RequirementsLine reqs={popover.item.requirements} character={character} />
+            )}
             {popover.item.description ? (
               <p className="popover__body">{popover.item.description}</p>
             ) : (

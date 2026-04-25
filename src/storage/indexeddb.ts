@@ -8,10 +8,10 @@ import type {
   Storage,
 } from './types'
 
-const DB_NAME = 'understudy'
+const DB_NAME = 'promptland'
 const DB_VERSION = 1
 
-class UnderstudyDB extends Dexie {
+class PromptlandDB extends Dexie {
   entities!: EntityTable<EntityCacheEntry, 'hash'>
   saves!: EntityTable<SaveRecord, 'id'>
 
@@ -27,10 +27,10 @@ class UnderstudyDB extends Dexie {
 export class IndexedDBStorage implements Storage {
   readonly entities: EntityCache
   readonly saves: SaveStore
-  private readonly db: UnderstudyDB
+  private readonly db: PromptlandDB
 
   constructor(dbName: string = DB_NAME) {
-    this.db = new UnderstudyDB(dbName)
+    this.db = new PromptlandDB(dbName)
     const db = this.db
 
     this.entities = {
@@ -39,6 +39,12 @@ export class IndexedDBStorage implements Storage {
       },
       async put(entry) {
         await db.entities.put(entry)
+      },
+      async listByPrefix(prefix) {
+        return db.entities.where('hash').startsWith(prefix).toArray()
+      },
+      async delete(hash) {
+        await db.entities.delete(hash)
       },
       async deleteByTemplateAndWorld(templateId, worldId) {
         // Cache keys are formatted "<templateId>:<worldId>:<hex>" — a

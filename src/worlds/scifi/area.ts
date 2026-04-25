@@ -101,6 +101,7 @@ const rooms: Record<string, Room> = Object.fromEntries(
 export const SCIFI_START_AREA: Area = {
   id: 'derelict_frigate',
   name: 'Derelict Frigate Lerwick',
+  level: 1,
   startX: 0,
   startY: 0,
   startZ: 0,

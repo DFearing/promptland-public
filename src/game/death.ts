@@ -3,6 +3,9 @@ import type { LogEntry } from '../log'
 
 const EQUIPMENT_LOSS_CHANCE = 1.0
 const XP_LOSS_PERCENT = 0.25
+const GOLD_LOSS_MIN_PERCENT = 0.10
+const GOLD_LOSS_MAX_PERCENT = 0.25
+const GOLD_LOSS_FLOOR = 10
 
 /** Wear-slot name as it appears on `Equipped` — superset of EquipSlot because
  *  offhand / ring1 / ring2 are distinct from their archetype slot. */
@@ -64,8 +67,21 @@ export function applyDeathPenalty(character: Character): {
     })
   }
 
+  let gold = character.gold
+  if (gold > 0) {
+    const pct = GOLD_LOSS_MIN_PERCENT + Math.random() * (GOLD_LOSS_MAX_PERCENT - GOLD_LOSS_MIN_PERCENT)
+    const goldLost = Math.max(GOLD_LOSS_FLOOR, Math.floor(gold * pct))
+    const actualLoss = Math.min(gold, goldLost)
+    gold = gold - actualLoss
+    entries.push({
+      kind: 'death-loss',
+      text: `${character.name} loses ${actualLoss} gold — scattered in the chaos.`,
+      meta: { name: character.name, goldAmount: actualLoss },
+    })
+  }
+
   return {
-    character: { ...character, equipped, xp },
+    character: { ...character, equipped, xp, gold },
     entries,
   }
 }

@@ -15,13 +15,14 @@ import {
   type TickSpeedId,
 } from './types'
 
-const THEME_KEY = 'understudy.theme'
-const SCALE_KEY = 'understudy.scale'
-const EFFECTS_KEY = 'understudy.effects'
-const TICK_SPEED_KEY = 'understudy.tickSpeed'
+const THEME_KEY = 'promptland.theme'
+const SCALE_KEY = 'promptland.scale'
+const EFFECTS_KEY = 'promptland.effects'
+const TICK_SPEED_KEY = 'promptland.tickSpeed'
 
 export const DEFAULT_EFFECTS: Effects = {
   scanlines: true,
+  logNumbers: false,
   fullscreen: {
     enabled: true,
     damage: true,
@@ -154,6 +155,7 @@ export function loadEffects(): Effects {
     const f = (parsed.fields ?? {}) as Partial<Effects['fields']>
     return {
       scanlines: pickBool(parsed.scanlines, DEFAULT_EFFECTS.scanlines),
+      logNumbers: pickBool(parsed.logNumbers, DEFAULT_EFFECTS.logNumbers),
       fullscreen: {
         enabled: pickBool(fs.enabled, DEFAULT_EFFECTS.fullscreen.enabled),
         damage: pickBool(fs.damage ?? fs.damageFlash, DEFAULT_EFFECTS.fullscreen.damage),

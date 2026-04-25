@@ -311,12 +311,14 @@ const FANTASY: WorldManifest = {
   forbiddenConcepts: ['gun', 'laser', 'spaceship', 'computer', 'robot'],
   creationVerb: 'Born',
   birthTitle: 'Wayfarer',
+  sacrificePhrase: 'The gods smile and grant',
 }
 
 const CYBERPUNK: WorldManifest = {
   id: 'cyberpunk',
   version: '3',
   name: 'Cyberpunk',
+  comingSoon: true,
   description:
     'Neon on wet streets. Corporations own the sky; you rent a coffin for the night.',
   species: [
@@ -430,12 +432,14 @@ const CYBERPUNK: WorldManifest = {
   forbiddenConcepts: ['magic', 'sword', 'dragon', 'wizard'],
   creationVerb: 'Grown',
   birthTitle: 'Nobody',
+  sacrificePhrase: 'The net pings back and credits',
 }
 
 const SCIFI: WorldManifest = {
   id: 'scifi',
   version: '3',
   name: 'Sci-Fi',
+  comingSoon: true,
   description:
     'Starships, first contacts, and the slow horror of deep space. A frontier with better plumbing.',
   species: [
@@ -567,6 +571,7 @@ const SCIFI: WorldManifest = {
   forbiddenConcepts: ['magic', 'sword', 'dragon', 'wizard'],
   creationVerb: 'Commissioned',
   birthTitle: 'Cadet',
+  sacrificePhrase: 'The archive registers the offering and issues',
 }
 
 export const WORLD_MANIFESTS: readonly WorldManifest[] = [FANTASY, CYBERPUNK, SCIFI] as const

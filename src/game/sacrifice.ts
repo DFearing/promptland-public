@@ -1,0 +1,85 @@
+import type { Character, InventoryItem } from '../character'
+import type { ItemDef } from '../items'
+import { RARITIES, type Rarity } from '../items'
+
+interface SacrificeResult {
+  sacrificed: Array<{ item: InventoryItem; def: ItemDef }>
+  totalGold: number
+  remainingInventory: InventoryItem[]
+}
+
+function equippedIds(character: Character): Set<string> {
+  const ids = new Set<string>()
+  for (const slot of Object.values(character.equipped)) {
+    if (slot?.id) ids.add(slot.id)
+  }
+  return ids
+}
+
+// The highest rarity the character currently owns anywhere (equipped or stashed).
+// Anything strictly below this tier is "no longer relevant" and eligible for
+// sacrifice. Commons are always eligible regardless.
+function maxOwnedRarity(character: Character): Rarity {
+  let max: Rarity = 'common'
+  let maxIdx = 0
+  const scan = (item: InventoryItem | undefined) => {
+    if (!item) return
+    const r = item.rarity ?? 'common'
+    const idx = RARITIES.indexOf(r)
+    if (idx > maxIdx) {
+      max = r
+      maxIdx = idx
+    }
+  }
+  for (const slot of Object.values(character.equipped)) scan(slot)
+  for (const item of character.inventory) scan(item)
+  return max
+}
+
+function isEligible(rarity: Rarity, max: Rarity): boolean {
+  if (rarity === 'common') return true
+  return RARITIES.indexOf(rarity) < RARITIES.indexOf(max)
+}
+
+// Picks items eligible for sacrifice: unworn, non-consumable, non-scroll items
+// whose rarity is common OR below the character's highest owned tier. The gods
+// (or whoever) give 1 gold per item sacrificed — stack quantity counts.
+export function pickItemsToSacrifice(
+  character: Character,
+  worldItems: ItemDef[],
+): SacrificeResult {
+  const defs = new Map(worldItems.map((d) => [d.id, d]))
+  const worn = equippedIds(character)
+  const max = maxOwnedRarity(character)
+  const sacrificed: SacrificeResult['sacrificed'] = []
+  const remaining: InventoryItem[] = []
+
+  for (const item of character.inventory) {
+    if (worn.has(item.id)) {
+      remaining.push(item)
+      continue
+    }
+    const def = item.archetypeId ? defs.get(item.archetypeId) : undefined
+    if (!def) {
+      remaining.push(item)
+      continue
+    }
+    // Keep consumables and scrolls — utility is utility regardless of rarity.
+    if (def.kind === 'consumable' || def.kind === 'scroll') {
+      remaining.push(item)
+      continue
+    }
+    const rarity: Rarity = item.rarity ?? 'common'
+    if (!isEligible(rarity, max)) {
+      remaining.push(item)
+      continue
+    }
+    sacrificed.push({ item, def })
+  }
+
+  const totalGold = sacrificed.reduce(
+    (sum, s) => sum + (s.item.quantity ?? 1),
+    0,
+  )
+  return { sacrificed, totalGold, remainingInventory: remaining }
+}

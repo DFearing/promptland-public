@@ -380,9 +380,8 @@ export default function LevelingDialog({
         .lvld__v--link {
           /* justify-self keeps a short button flush-left with the other
              value spans in the grid; text-align overrides the user-agent
-             center-alignment that buttons pick up by default. No underline —
-             color + glow alone carry the affordance; a brighter hover state
-             confirms the link is live. */
+             center-alignment that buttons pick up by default. Plain text
+             styling — rarity color alone carries the link affordance. */
           justify-self: start;
           text-align: left;
           display: inline;
@@ -393,13 +392,9 @@ export default function LevelingDialog({
           color: inherit;
           cursor: pointer;
           text-decoration: none;
-          text-shadow: 0 0 4px currentColor;
         }
-        .lvld__v--link:hover,
         .lvld__v--link:focus-visible {
           outline: none;
-          filter: brightness(1.2);
-          text-shadow: 0 0 6px currentColor, 0 0 12px currentColor;
         }
         .lvld__rarity { color: var(--fg-3); font-variant-caps: all-small-caps; letter-spacing: 0.06em; }
         .lvld__item--creation .lvld__tag { color: var(--magic); }

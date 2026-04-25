@@ -63,12 +63,25 @@ export interface ConsumableArchetype extends ArchetypeBase {
   effect: ConsumableEffect
 }
 
+/** Minimum stats a character must meet to equip this item. Rarity scales
+ *  these downward — higher rarity items are more "universal". See
+ *  `requirementMultFor` in items/requirements.ts. */
+export interface EquipRequirements {
+  level?: number
+  strength?: number
+  dexterity?: number
+  intelligence?: number
+  wisdom?: number
+}
+
 export interface EquipmentArchetype extends ArchetypeBase {
   kind: 'equipment'
   slot: EquipSlot
   bonuses: EquipBonuses
   /** Weapons only. Absent ⇒ one-handed. Ignored for armor. */
   hands?: WeaponHands
+  /** Base requirements before rarity scaling. Absent ⇒ no requirements. */
+  requirements?: EquipRequirements
 }
 
 export interface ScrollArchetype extends ArchetypeBase {

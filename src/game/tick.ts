@@ -16,7 +16,7 @@ import { RARITIES, rollMobRarity, type Rarity } from '../items'
 import type { LogEntry } from '../log'
 import { spawn, type Mob } from '../mobs'
 import { castSpell, getSpell } from '../spells'
-import { getWorldManifest, type WorldContent } from '../worlds'
+import { getWorldManifest, type WorldContent, type WorldManifest } from '../worlds'
 import {
   DRIVE_THRESHOLD,
   grow,
@@ -27,8 +27,8 @@ import {
 } from './drives'
 import { maybeAutoConsume } from './consume'
 import { applyDeathPenalty } from './death'
-import { applyAutoEquip, combatBonuses, equipLogEntry } from './equip'
-import { applyDrops, rollLoot, type Drops } from './loot'
+import { applyAutoEquip, combatBonuses, equipLogEntry, isRedundantEquip } from './equip'
+import { applyDrops, rollCuratedLoot, rollLoot, type Drops, type RewardContext } from './loot'
 import { pickItemsToSell } from './sell'
 import type { GameState } from './state'
 import type { TickSpeedId } from '../themes/types'
@@ -107,6 +107,14 @@ const MEDITATE_HP = 1
  *  safe-room tick. */
 const REST_FORCE_HP_RATIO = 0.5
 const MEDITATE_FORCE_MP_RATIO = 0.5
+/** How many ticks the character waits in the `generating-area` state
+ *  before giving up and bouncing back to exploring with a "not yet taken
+ *  shape" message. Generating-area ticks every 2s (TICK_MS), so 120 ticks
+ *  ≈ 4 minutes — generous enough to cover slow local models and cold
+ *  cloud starts. If the LLM responds sooner the .then() callback in
+ *  App.tsx transitions out immediately regardless of ticksLeft, so this
+ *  is purely a network-failure bail-out. */
+const AREA_GEN_TIMEOUT_TICKS = 120
 /** Ticks the character refuses to re-enter rest / meditate after exiting one
  *  of them. Stops the meditate → rest chain in the same room and forces them
  *  to take at least one exploration tick before sitting back down. */
@@ -216,13 +224,46 @@ function levelScaleIncoming(delta: number): number {
   return levelScaleOutgoing(-delta)
 }
 
-function rollEncounterFor(world: WorldContent, type: string): Mob | null {
+function rollEncounterFor(
+  world: WorldContent,
+  type: string,
+  areaLevel: number = 1,
+): Mob | null {
   const ids = world.encounters[type as keyof WorldContent['encounters']]
   if (!ids || ids.length === 0) return null
   const id = ids[rand(ids.length)]
   const template = world.mobs.find((m) => m.id === id)
   if (!template) return null
-  return spawn(template, rollMobRarity())
+  // Rarity roll is biased toward rare+ in higher-level areas, which
+  // feeds both loot quality and (via the rarity bump in `mobLevel`)
+  // additional combat level for the spawned mob.
+  const mob = spawn(template, rollMobRarity(areaLevel))
+  // Flat level offset from the area itself — stats stay at template ×
+  // rarity, but the bumped `level` feeds the combat level-delta math
+  // (higher mob level → bigger outgoing damage, smaller incoming,
+  // bigger XP reward). Zero offset at area level 1 preserves baseline.
+  const offset = Math.max(0, areaLevel - 1)
+  return offset > 0 ? { ...mob, level: mob.level + offset } : mob
+}
+
+// Spawns a specific mob id at a specific rarity — the curated-encounter
+// path. Same area-level offset as `rollEncounterFor` so a curated mob in
+// a level-N room reads at the same relative threat as a pool roll.
+// Returns null when the mob id isn't in the world pool (stale generation
+// referencing a removed mob, typo in an authored area, etc.) so callers
+// can graceful-fallback to the random pool.
+function spawnCuratedEncounter(
+  world: WorldContent,
+  mobId: string,
+  rarity: Rarity,
+  areaLevel: number = 1,
+): Mob | null {
+  const template = world.mobs.find((m) => m.id === mobId)
+  if (!template) return null
+  const mob = spawn(template, rarity)
+  const offset = Math.max(0, areaLevel - 1)
+  const leveled = offset > 0 ? { ...mob, level: mob.level + offset } : mob
+  return { ...leveled, curated: true }
 }
 
 function appendDropLogs(
@@ -285,13 +326,22 @@ function directionName(dx: number, dy: number): string {
   return 'somewhere'
 }
 
-function bfsNearestUnvisited(area: Area, start: Position, visitedRooms: string[]): Position | null {
+function bfsNearestUnvisited(
+  area: Area,
+  start: Position,
+  visitedRooms: Set<string>,
+  opts: { skipGateways?: boolean } = {},
+): Position | null {
   const seen = new Set<string>([`${start.x},${start.y},${start.z}`])
   const queue: Position[] = [start]
   while (queue.length > 0) {
     const cur = queue.shift()!
     const vk = visitedKey(cur.areaId, cur.x, cur.y, cur.z)
-    if (!visitedRooms.includes(vk)) return cur
+    if (!visitedRooms.has(vk)) {
+      if (!opts.skipGateways) return cur
+      const room = area.rooms[roomKey(cur.x, cur.y, cur.z)]
+      if (room?.type !== 'portal' && room?.type !== 'exit') return cur
+    }
     for (const n of neighborsOf(area, cur)) {
       const k = `${n.x},${n.y},${n.z}`
       if (!seen.has(k)) {
@@ -325,6 +375,12 @@ function findPortalToExplore(area: Area, character: Character, world: WorldConte
   const candidates: Candidate[] = []
   for (const key in area.rooms) {
     const r = area.rooms[key]
+    // Exit rooms are always interesting — they lead to unknown lands.
+    if (r.type === 'exit') {
+      const pos: Position = { areaId: area.id, x: r.x, y: r.y, z: r.z }
+      candidates.push({ pos, fresh: true })
+      continue
+    }
     if (r.type !== 'portal' || !r.destination) continue
     const pos: Position = { areaId: area.id, x: r.x, y: r.y, z: r.z }
     const destArea = world.areas?.find((a) => a.id === r.destination!.areaId)
@@ -369,13 +425,30 @@ function moveByGoal(
   if (!goal) return randomStep(area, pos)
 
   if (goal === 'curiosity') {
+    const visited = new Set(character.visitedRooms)
     const options = neighborsOf(area, pos)
+    const isGateway = (p: Position): boolean => {
+      const r = area.rooms[roomKey(p.x, p.y, p.z)]
+      return r?.type === 'portal' || r?.type === 'exit'
+    }
     const unvisited = options.filter(
-      (o) => !character.visitedRooms.includes(visitedKey(o.areaId, o.x, o.y, o.z)),
+      (o) => !visited.has(visitedKey(o.areaId, o.x, o.y, o.z)),
     )
-    if (unvisited.length > 0) return unvisited[rand(unvisited.length)]
-    const target = bfsNearestUnvisited(area, pos, character.visitedRooms)
+    // Finish the current area before stepping through any gateway. Exit
+    // and portal tiles stay off the preferred list until nothing else is
+    // unvisited — prevents the character from bouncing out of a new area
+    // the moment they see a door.
+    const unvisitedNonGateway = unvisited.filter((o) => !isGateway(o))
+    if (unvisitedNonGateway.length > 0) {
+      return unvisitedNonGateway[rand(unvisitedNonGateway.length)]
+    }
+    const target = bfsNearestUnvisited(area, pos, visited, { skipGateways: true })
     if (target) return stepTowards(area, pos, target)
+    // Only unvisited rooms left are gateways — take the adjacent one if any,
+    // otherwise BFS for the nearest gateway tile.
+    if (unvisited.length > 0) return unvisited[rand(unvisited.length)]
+    const gateway = bfsNearestUnvisited(area, pos, visited)
+    if (gateway) return stepTowards(area, pos, gateway)
     // Area fully mapped — push outward to a portal, preferring destinations
     // with unvisited rooms.
     const portal = findPortalToExplore(area, character, world)
@@ -588,8 +661,24 @@ function explore(p: Playing, world: WorldContent): Playing {
     lastSafePosition,
   }
 
-  // Portal rooms immediately queue a traversal — no encounters, no drive satisfaction.
-  if (room?.type === 'portal' && room.destination) {
+  // Gateways (portals, wired exits, pending exits) only auto-traverse once
+  // the character has mapped every other room in the current area. This
+  // matches the exploration policy — finish the area in front of you before
+  // stepping through to the next one. If there's still something unvisited,
+  // the character just stands on the gateway tile this tick and the
+  // curiosity goal will pull them elsewhere next tick.
+  const isGatewayRoom = room?.type === 'portal' || room?.type === 'exit'
+  const areaFullyExplored = (() => {
+    if (!isGatewayRoom) return false
+    for (const key in area.rooms) {
+      const r = area.rooms[key]
+      const vk = visitedKey(area.id, r.x, r.y, r.z)
+      if (!visitedRooms.includes(vk)) return false
+    }
+    return true
+  })()
+
+  if (room?.type === 'portal' && room.destination && areaFullyExplored) {
     return {
       character,
       log,
@@ -597,8 +686,66 @@ function explore(p: Playing, world: WorldContent): Playing {
     }
   }
 
-  if (room && room.type !== 'safe' && Math.random() < ENCOUNTER_CHANCE) {
-    const mob = rollEncounterFor(world, room.type)
+  // Exit rooms at the edge of the known world. If the exit already has a
+  // wired destination (set by the LLM area generation callback), traverse
+  // like a portal. If pending and LLM is not configured, bounce back.
+  // If pending and LLM is available, transition to 'generating-area'.
+  if (room?.type === 'exit' && areaFullyExplored) {
+    if (room.destination) {
+      return {
+        character,
+        log,
+        state: { kind: 'using-room', action: { kind: 'traverse-portal', destination: room.destination } },
+      }
+    }
+    if (room.pendingAreaGeneration) {
+      const rk = roomKey(next.x, next.y, next.z)
+      return {
+        character,
+        log,
+        state: { kind: 'generating-area', exitRoomKey: `${area.id}::${rk}`, ticksLeft: AREA_GEN_TIMEOUT_TICKS },
+      }
+    }
+    // Exit with no destination and not pending — impassable.
+    return {
+      character,
+      log: append(log, {
+        kind: 'narrative',
+        text: `${c.name} senses the path ahead has not yet taken shape.`,
+        meta: { name: c.name },
+      }),
+      state: p.state,
+    }
+  }
+
+  if (room && room.type !== 'safe') {
+    // Three-way spawn decision:
+    //  1. Curated firstOnly encounter, not yet defeated → guaranteed
+    //     spawn (boss rooms should always deliver the boss on first
+    //     entry so players don't have to kite the random roll).
+    //  2. Curated ambient encounter (firstOnly false/absent) or
+    //     curated-defeated + random-pool fallback → roll
+    //     ENCOUNTER_CHANCE as normal. The curated mob is picked when
+    //     set; otherwise the pool.
+    //  3. No curated entry → existing random-pool behavior.
+    const rKey = visitedKey(area.id, character.position.x, character.position.y, character.position.z)
+    const defeatedHere = (character.defeatedRooms ?? []).includes(rKey)
+    const curated = room.encounter
+    const curatedActive = curated && !(curated.firstOnly && defeatedHere)
+
+    let mob: Mob | null = null
+    if (curatedActive && curated && curated.firstOnly) {
+      mob = spawnCuratedEncounter(world, curated.mobId, curated.rarity, area.level ?? 1)
+    } else if (Math.random() < ENCOUNTER_CHANCE) {
+      if (curatedActive && curated) {
+        mob = spawnCuratedEncounter(world, curated.mobId, curated.rarity, area.level ?? 1)
+      }
+      // Fallback: curated mob missing from the pool (stale gen, renamed
+      // mob) or no curated entry at all — use the normal random roll so
+      // the room isn't silently empty just because a curated id went bad.
+      if (!mob) mob = rollEncounterFor(world, room.type, area.level ?? 1)
+    }
+
     if (mob) {
       log = append(log, {
         kind: 'narrative',
@@ -638,9 +785,78 @@ function explore(p: Playing, world: WorldContent): Playing {
   return { character, log, state: p.state }
 }
 
+// After selling, try to auto-purchase consumables from the shop's inventory.
+// Only buys healing potions when HP < 50% and mana potions when magic < 50%.
+// Caps at 3 of any given consumable already in inventory.
+const SHOP_CARRY_LIMIT = 3
+
+function tryShopPurchase(
+  character: Character,
+  world: WorldContent,
+  manifest: WorldManifest | undefined,
+): { character: Character; log: LogEntry[] } | null {
+  const stock = world.shopInventory
+  if (!stock || stock.length === 0) return null
+
+  const defs = new Map(world.items.map((d) => [d.id, d]))
+  const currency = (manifest?.currencyName ?? 'gold').toLowerCase()
+  let c = character
+  const entries: LogEntry[] = []
+
+  for (const slot of stock) {
+    const def = defs.get(slot.itemId)
+    if (!def || def.kind !== 'consumable') continue
+
+    // Check if character needs this consumable.
+    const effect = def.effect
+    if (effect.kind === 'heal' && c.hp >= c.maxHp * 0.5) continue
+    if (effect.kind === 'restore-magic') {
+      if (c.maxMagic === 0) continue
+      if (c.magic >= c.maxMagic * 0.5) continue
+    }
+
+    // Count how many of this item the character already carries.
+    const owned = c.inventory.reduce((n, inv) => {
+      if (inv.archetypeId === slot.itemId) return n + (inv.quantity ?? 1)
+      return n
+    }, 0)
+    if (owned >= SHOP_CARRY_LIMIT) continue
+
+    // Can the character afford it?
+    if (c.gold < slot.price) continue
+
+    // Purchase one.
+    const newItem = {
+      id: `shop-${slot.itemId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      archetypeId: slot.itemId,
+      name: def.name,
+      quantity: 1,
+    }
+    c = {
+      ...c,
+      gold: c.gold - slot.price,
+      inventory: [...c.inventory, newItem],
+    }
+    entries.push({
+      kind: 'loot',
+      text: `${c.name} buys a ${def.name} for ${slot.price} ${currency}.`,
+      meta: {
+        name: c.name,
+        itemId: slot.itemId,
+        itemName: def.name,
+        goldAmount: -slot.price,
+        goldText: `${slot.price} ${currency}`,
+      },
+    })
+  }
+
+  if (entries.length === 0) return null
+  return { character: c, log: entries }
+}
+
 // One tick of the `using-room` state — 'satisfy' drains drives from the
 // current room's amenities; 'traverse-portal' moves the character to a linked area.
-function useRoom(p: Playing, world: WorldContent): Playing {
+function handleRoomAction(p: Playing, world: WorldContent): Playing {
   if (p.state.kind !== 'using-room') return p
   const action = p.state.action
   const c = p.character
@@ -653,7 +869,7 @@ function useRoom(p: Playing, world: WorldContent): Playing {
     const vk = visitedKey(dest.areaId, dest.x, dest.y, dest.z)
     const visitedRooms = c.visitedRooms.includes(vk) ? c.visitedRooms : [...c.visitedRooms, vk]
     const isNewArea = !c.visitedRooms.some((k) => k.startsWith(`${dest.areaId}:`))
-    if (isNewArea) log = append(log, { kind: 'area', text: destArea.name })
+    if (isNewArea) log = append(log, { kind: 'area', text: destArea.name, rarity: destArea.rarity })
     if (destRoom) {
       log = append(log, {
         kind: 'narrative',
@@ -726,10 +942,16 @@ function useRoom(p: Playing, world: WorldContent): Playing {
           roomName: room?.name,
         },
       })
-      const afterSell: Character = {
+      let afterSell: Character = {
         ...c,
         inventory: result.remainingInventory,
         gold: c.gold + result.totalGold,
+      }
+      // Auto-purchase consumables from shop inventory after selling.
+      const purchased = tryShopPurchase(afterSell, world, manifest)
+      if (purchased) {
+        afterSell = purchased.character
+        log = purchased.log.reduce<LogEntry[]>((l, e) => append(l, e), log)
       }
       drives = stampWeight(satisfy(c.drives, ['weight']), afterSell, world)
       return {
@@ -791,7 +1013,7 @@ function tryRestAmbush(
   const chance = safeFamily ? REST_AMBUSH_CHANCE / 2 : REST_AMBUSH_CHANCE
   if (Math.random() >= chance) return null
   const type = room?.type ?? 'corridor'
-  return rollEncounterFor(world, type)
+  return rollEncounterFor(world, type, area.level ?? 1)
 }
 
 function rest(p: Playing, world: WorldContent): Playing {
@@ -1128,7 +1350,11 @@ interface MobTickResult {
 // Mirrors tickConditions() for characters: applies DoT damage to a mob (capped
 // so it can never reduce hp below 0) and decrements per-condition duration.
 // stat-mod conditions don't currently alter mob combat stats — future work.
-function tickMobConditions(mob: Mob, world: WorldContent): MobTickResult {
+function tickMobConditions(
+  mob: Mob,
+  world: WorldContent,
+  worldId: string,
+): MobTickResult {
   if (!mob.conditions || mob.conditions.length === 0) {
     return { mob, entries: [] }
   }
@@ -1146,9 +1372,12 @@ function tickMobConditions(mob: Mob, world: WorldContent): MobTickResult {
       if (dmg > 0 && hp > 0) {
         const taken = Math.min(dmg, hp)
         hp -= taken
+        const { verb } = damageVerb(taken, mob.maxHp, worldId)
+        const noun = def.noun ?? def.name.toLowerCase()
+        const capNoun = noun.charAt(0).toUpperCase() + noun.slice(1)
         entries.push({
           kind: 'condition-tick',
-          text: `The ${mob.name} suffers from ${def.name}.`,
+          text: `${capNoun} ${verb} the ${mob.name}.`,
           amount: taken,
           conditionId: def.id,
           meta: {
@@ -1200,7 +1429,6 @@ function knowsAnyDamageSpell(character: Character): boolean {
 
 function chooseCharacterAction(
   character: Character,
-  mob: Mob,
   world: WorldContent,
 ): AttackDecision {
   const hpRatio = character.maxHp > 0 ? character.hp / character.maxHp : 1
@@ -1295,7 +1523,6 @@ function chooseCharacterAction(
     }
   }
 
-  void mob
   return { kind: 'melee' }
 }
 
@@ -1320,60 +1547,170 @@ function removeInventoryEntry(
   }
 }
 
+// Unified mob-defeat handling: award XP, log the kill, roll loot, satisfy
+// greed, auto-equip, re-stamp weight, return to exploring. Called from both
+// DoT-kill and melee-kill paths in fight().
+function resolveMobDefeat(
+  character: Character,
+  mob: Mob,
+  world: WorldContent,
+  log: LogEntry[],
+): Playing {
+  const awardedXp = Math.max(
+    1,
+    Math.round(mob.xpReward * xpScaleByDelta(mob.level - character.level)),
+  )
+  let out = append(log, {
+    kind: 'loot',
+    text: `The ${mob.name} falls. (+${awardedXp} XP)`,
+    meta: { mobName: mob.name, xpText: `+${awardedXp} XP`, mobDefeat: true },
+  })
+  const area = getArea(world, character.position.areaId)
+  const dropRoom =
+    area.rooms[
+      roomKey(character.position.x, character.position.y, character.position.z)
+    ]
+  const rewardCtx: RewardContext = {
+    mobRarity: mob.rarity,
+    mobLevel: mob.level,
+    roomType: dropRoom?.type,
+    areaRarity: area.rarity,
+  }
+  // Curated loot override: fires only when the defeated mob was actually
+  // spawned from the room's curated encounter (mob.curated === true).
+  // A random-pool spawn of the same mob id does NOT trigger the override,
+  // so post-firstOnly-defeat pool kills keep using the archetype loot.
+  // Reward context threads through so Phase 4 scaling (gold mult, level
+  // floor bump, extreme-mult rarity nudge) applies to curated drops too
+  // — a rare amulet in a level-7 epic area is meaningfully beefier than
+  // the same curated entry in a level-1 area.
+  const curatedLoot =
+    mob.curated && dropRoom?.encounter?.loot ? dropRoom.encounter.loot : null
+  const drops = curatedLoot
+    ? rollCuratedLoot(curatedLoot, rewardCtx)
+    : rollLoot(mob, rewardCtx)
+  out = appendDropLogs(out, character, world, drops, mob.rarity)
+  const greedEased = satisfy(character.drives, ['greed'])
+  const trackedForBaddest = trackBaddest(
+    { ...character, drives: greedEased },
+    mob,
+  )
+  const looted = applyDrops(
+    trackedForBaddest,
+    world,
+    drops,
+    mob,
+    { areaId: area.id, roomName: dropRoom?.name },
+    rewardCtx,
+  )
+  const equipResult = applyAutoEquip(looted, world)
+  for (const ev of equipResult.events) {
+    if (isRedundantEquip(ev)) continue
+    out = append(out, equipLogEntry(equipResult.character, ev))
+  }
+  const postLoot = {
+    ...equipResult.character,
+    drives: stampWeight(equipResult.character.drives, equipResult.character, world),
+  }
+  const xpResult = applyXp(postLoot, awardedXp, out)
+  // firstOnly curated encounter defeated? Stamp the room key so the
+  // spawn logic on subsequent entries skips the curated encounter and
+  // falls back to the random pool. Only fires when the defeat happened
+  // in a room with a firstOnly encounter — ambient curated fights and
+  // random-pool fights don't populate this list.
+  const finalCharacter =
+    dropRoom?.encounter?.firstOnly
+      ? recordFirstOnlyDefeat(xpResult.character, area.id, dropRoom.x, dropRoom.y, dropRoom.z)
+      : xpResult.character
+  return { character: finalCharacter, log: xpResult.log, state: { kind: 'exploring' } }
+}
+
+function recordFirstOnlyDefeat(
+  character: Character,
+  areaId: string,
+  x: number,
+  y: number,
+  z: number,
+): Character {
+  const key = visitedKey(areaId, x, y, z)
+  const defeated = character.defeatedRooms ?? []
+  if (defeated.includes(key)) return character
+  return { ...character, defeatedRooms: [...defeated, key] }
+}
+
+// Unified character-death handling: record the death, log it, apply the
+// configured death penalty, respawn at the last safe position. Shared by the
+// main fight path and the mob-ambush path.
+function resolveCharacterDeath(
+  character: Character,
+  mob: Mob,
+  world: WorldContent,
+  log: LogEntry[],
+): Playing {
+  const area = getArea(world, character.position.areaId)
+  const rk = roomKey(character.position.x, character.position.y, character.position.z)
+  const room = area.rooms[rk]
+  const record: DeathRecord = {
+    at: Date.now(),
+    cause: `Fell to the ${mob.name}`,
+    areaId: area.id,
+    roomName: room?.name,
+    roomKey: rk,
+    mobName: mob.name,
+  }
+  const respawn: Position = character.lastSafePosition ?? {
+    areaId: area.id,
+    x: area.startX,
+    y: area.startY,
+    z: area.startZ,
+  }
+  const respawnArea = getArea(world, respawn.areaId)
+  const respawnRoom = respawnArea.rooms[roomKey(respawn.x, respawn.y, respawn.z)]
+  const respawnText = respawnRoom
+    ? `They wake again in the ${respawnRoom.name}.`
+    : "They wake again where it's safe."
+  let out = append(log, {
+    kind: 'narrative',
+    text: `${character.name} falls to the ${mob.name}. ${respawnText}`,
+    meta: {
+      name: character.name,
+      mobName: mob.name,
+      areaId: area.id,
+      roomKey: roomKey(respawn.x, respawn.y, respawn.z),
+      roomName: respawnRoom?.name,
+    },
+  })
+  const penalty = applyDeathPenalty(character)
+  for (const entry of penalty.entries) out = append(out, entry)
+  return {
+    character: {
+      ...penalty.character,
+      hp: penalty.character.maxHp,
+      position: respawn,
+      deaths: [...penalty.character.deaths, record],
+      conditions: [],
+    },
+    log: out,
+    state: { kind: 'exploring' },
+  }
+}
+
 function fight(p: Playing, world: WorldContent): Playing {
   if (p.state.kind !== 'fighting') return p
-  let ambush = p.state.ambush
+  const ambush = p.state.ambush
   const condResult = tickConditions(p.character, world)
   let log = p.log
   for (const e of condResult.entries) log = append(log, e)
 
   // Apply any DoTs on the mob (e.g. poison spell last turn).
   let mob = p.state.mob
-  const mobCond = tickMobConditions(mob, world)
+  const mobCond = tickMobConditions(mob, world, p.character.worldId)
   mob = mobCond.mob
   for (const e of mobCond.entries) log = append(log, e)
 
   // If DoT finished the mob, award XP and exit.
   if (mob.hp === 0) {
-    const awardedXp = Math.max(
-      1,
-      Math.round(mob.xpReward * xpScaleByDelta(mob.level - condResult.character.level)),
-    )
-    log = append(log, {
-      kind: 'loot',
-      text: `The ${mob.name} falls. (+${awardedXp} XP)`,
-      meta: { mobName: mob.name, xpText: `+${awardedXp} XP`, mobDefeat: true },
-    })
-    const drops = rollLoot(mob)
-    log = appendDropLogs(log, condResult.character, world, drops, mob.rarity)
-    const greedEased = satisfy(condResult.character.drives, ['greed'])
-    const trackedForBaddest = trackBaddest(
-      { ...condResult.character, drives: greedEased },
-      mob,
-    )
-    const dropArea = getArea(world, condResult.character.position.areaId)
-    const dropRoom =
-      dropArea.rooms[
-        roomKey(
-          condResult.character.position.x,
-          condResult.character.position.y,
-          condResult.character.position.z,
-        )
-      ]
-    const looted = applyDrops(trackedForBaddest, world, drops, mob, {
-      areaId: dropArea.id,
-      roomName: dropRoom?.name,
-    })
-    const equipResult = applyAutoEquip(looted, world)
-    for (const ev of equipResult.events) {
-      log = append(log, equipLogEntry(equipResult.character, ev))
-    }
-    const postLoot = {
-      ...equipResult.character,
-      drives: stampWeight(equipResult.character.drives, equipResult.character, world),
-    }
-    const xpResult = applyXp(postLoot, awardedXp, log)
-    return { character: xpResult.character, log: xpResult.log, state: { kind: 'exploring' } }
+    return resolveMobDefeat(condResult.character, mob, world, log)
   }
 
   const consumed = maybeAutoConsume(condResult.character, world)
@@ -1385,7 +1722,6 @@ function fight(p: Playing, world: WorldContent): Playing {
     }
   }
 
-  const area = getArea(world, condResult.character.position.areaId)
   let character = condResult.character
   const skipAttack = condResult.skipTurn
 
@@ -1408,7 +1744,6 @@ function fight(p: Playing, world: WorldContent): Playing {
     const mobAttackResult = runMobAttack(
       character,
       mob,
-      area,
       world,
       defenseBonus,
       log,
@@ -1429,7 +1764,7 @@ function fight(p: Playing, world: WorldContent): Playing {
   }
 
   // Decide: melee, cast spell, or read a scroll?
-  const decision: AttackDecision = skipAttack ? { kind: 'melee' } : chooseCharacterAction(character, mob, world)
+  const decision: AttackDecision = skipAttack ? { kind: 'melee' } : chooseCharacterAction(character, world)
 
   let mobHpAfter = mob.hp
 
@@ -1469,7 +1804,8 @@ function fight(p: Playing, world: WorldContent): Playing {
     // never turn into one-shots at extreme mismatches.
     const levelDelta = character.level - mob.level
     const outgoingMult = levelScaleOutgoing(levelDelta)
-    const baseCharDmg = roll(4) + mod(character.stats.strength) + attackBonus - mob.defense
+    const attackRoll = roll(4) + mod(character.stats.strength) + attackBonus
+    const baseCharDmg = attackRoll - mob.defense
     const charDmg = Math.max(1, Math.round(baseCharDmg * outgoingMult))
     mobHpAfter = Math.max(0, mob.hp - charDmg)
     const { severity, verb } = damageVerb(charDmg, mob.maxHp, character.worldId)
@@ -1488,49 +1824,14 @@ function fight(p: Playing, world: WorldContent): Playing {
         verb,
         severity,
         itemName: weaponName,
+        attackPower: attackRoll,
+        defense: mob.defense,
       },
     })
   }
 
   if (mobHpAfter === 0) {
-    const awardedXp = Math.max(
-      1,
-      Math.round(mob.xpReward * xpScaleByDelta(mob.level - character.level)),
-    )
-    log = append(log, {
-      kind: 'loot',
-      text: `The ${mob.name} falls. (+${awardedXp} XP)`,
-      meta: { mobName: mob.name, xpText: `+${awardedXp} XP`, mobDefeat: true },
-    })
-    const drops = rollLoot(mob)
-    log = appendDropLogs(log, character, world, drops, mob.rarity)
-    const greedEased = satisfy(character.drives, ['greed'])
-    const trackedForBaddest = trackBaddest(
-      { ...character, drives: greedEased },
-      mob,
-    )
-    const dropRoom =
-      area.rooms[
-        roomKey(character.position.x, character.position.y, character.position.z)
-      ]
-    const looted = applyDrops(trackedForBaddest, world, drops, mob, {
-      areaId: area.id,
-      roomName: dropRoom?.name,
-    })
-    const equipResult = applyAutoEquip(looted, world)
-    for (const ev of equipResult.events) {
-      log = append(log, equipLogEntry(equipResult.character, ev))
-    }
-    const postLoot = {
-      ...equipResult.character,
-      drives: stampWeight(equipResult.character.drives, equipResult.character, world),
-    }
-    const xpResult = applyXp(postLoot, awardedXp, log)
-    return {
-      character: xpResult.character,
-      log: xpResult.log,
-      state: { kind: 'exploring' },
-    }
+    return resolveMobDefeat(character, mob, world, log)
   }
 
   // Character-ambush active → mob doesn't retaliate this tick. Decrement and
@@ -1582,7 +1883,9 @@ function fight(p: Playing, world: WorldContent): Playing {
 
   const levelDelta = character.level - mob.level
   const incomingMult = levelScaleIncoming(levelDelta)
-  const baseMobDmg = mob.attack + roll(3) - 2 - mod(character.stats.dexterity) - defenseBonus
+  const mobAttackRoll = mob.attack + roll(3) - 2
+  const totalDefense = mod(character.stats.dexterity) + defenseBonus
+  const baseMobDmg = mobAttackRoll - totalDefense
   const mobDmg = Math.max(1, Math.round(baseMobDmg * incomingMult))
   const charHpAfter = Math.max(0, character.hp - mobDmg)
   const mobAttack = damageVerb(mobDmg, character.maxHp, character.worldId)
@@ -1597,6 +1900,8 @@ function fight(p: Playing, world: WorldContent): Playing {
       mobName: mob.name,
       verb: mobAttack.verb,
       severity: mobAttack.severity,
+      attackPower: mobAttackRoll,
+      defense: totalDefense,
     },
   })
 
@@ -1613,51 +1918,7 @@ function fight(p: Playing, world: WorldContent): Playing {
   }
 
   if (charHpAfter === 0) {
-    const rk = roomKey(character.position.x, character.position.y, character.position.z)
-    const room = area.rooms[rk]
-    const record: DeathRecord = {
-      at: Date.now(),
-      cause: `Fell to the ${mob.name}`,
-      areaId: area.id,
-      roomName: room?.name,
-      roomKey: rk,
-      mobName: mob.name,
-    }
-    const respawn: Position = character.lastSafePosition ?? {
-      areaId: area.id,
-      x: area.startX,
-      y: area.startY,
-      z: area.startZ,
-    }
-    const respawnArea = getArea(world, respawn.areaId)
-    const respawnRoom = respawnArea.rooms[roomKey(respawn.x, respawn.y, respawn.z)]
-    const respawnText = respawnRoom
-      ? `They wake again in the ${respawnRoom.name}.`
-      : "They wake again where it's safe."
-    log = append(log, {
-      kind: 'narrative',
-      text: `${character.name} falls to the ${mob.name}. ${respawnText}`,
-      meta: {
-        name: character.name,
-        mobName: mob.name,
-        areaId: area.id,
-        roomKey: roomKey(respawn.x, respawn.y, respawn.z),
-        roomName: respawnRoom?.name,
-      },
-    })
-    const penalty = applyDeathPenalty(character)
-    for (const entry of penalty.entries) log = append(log, entry)
-    return {
-      character: {
-        ...penalty.character,
-        hp: penalty.character.maxHp,
-        position: respawn,
-        deaths: [...penalty.character.deaths, record],
-        conditions: [],
-      },
-      log,
-      state: { kind: 'exploring' },
-    }
+    return resolveCharacterDeath(character, mob, world, log)
   }
 
   // Ambush counter was only consumed by the char-only / mob-only branches
@@ -1683,7 +1944,6 @@ type MobAttackOutcome =
 function runMobAttack(
   character: Character,
   mob: Mob,
-  area: Area,
   world: WorldContent,
   defenseBonus: number,
   log: LogEntry[],
@@ -1709,7 +1969,9 @@ function runMobAttack(
 
   const levelDelta = character.level - mob.level
   const incomingMult = levelScaleIncoming(levelDelta)
-  const base = mob.attack + roll(3) - 2 - mod(character.stats.dexterity) - defenseBonus
+  const mobAttackRoll = mob.attack + roll(3) - 2
+  const totalDefense = mod(character.stats.dexterity) + defenseBonus
+  const base = mobAttackRoll - totalDefense
   const dmg = Math.max(1, Math.round(base * incomingMult))
   const hpAfter = Math.max(0, character.hp - dmg)
   const verb = damageVerb(dmg, character.maxHp, character.worldId)
@@ -1723,58 +1985,13 @@ function runMobAttack(
       mobName: mob.name,
       verb: verb.verb,
       severity: verb.severity,
+      attackPower: mobAttackRoll,
+      defense: totalDefense,
     },
   })
 
   if (hpAfter === 0) {
-    const rk = roomKey(character.position.x, character.position.y, character.position.z)
-    const room = area.rooms[rk]
-    const record: DeathRecord = {
-      at: Date.now(),
-      cause: `Fell to the ${mob.name}`,
-      areaId: area.id,
-      roomName: room?.name,
-      roomKey: rk,
-      mobName: mob.name,
-    }
-    const respawn: Position = character.lastSafePosition ?? {
-      areaId: area.id,
-      x: area.startX,
-      y: area.startY,
-      z: area.startZ,
-    }
-    const respawnArea = getArea(world, respawn.areaId)
-    const respawnRoom = respawnArea.rooms[roomKey(respawn.x, respawn.y, respawn.z)]
-    const respawnText = respawnRoom
-      ? `They wake again in the ${respawnRoom.name}.`
-      : "They wake again where it's safe."
-    log = append(log, {
-      kind: 'narrative',
-      text: `${character.name} falls to the ${mob.name}. ${respawnText}`,
-      meta: {
-        name: character.name,
-        mobName: mob.name,
-        areaId: area.id,
-        roomKey: roomKey(respawn.x, respawn.y, respawn.z),
-        roomName: respawnRoom?.name,
-      },
-    })
-    const penalty = applyDeathPenalty(character)
-    for (const entry of penalty.entries) log = append(log, entry)
-    return {
-      kind: 'died',
-      playing: {
-        character: {
-          ...penalty.character,
-          hp: penalty.character.maxHp,
-          position: respawn,
-          deaths: [...penalty.character.deaths, record],
-          conditions: [],
-        },
-        log,
-        state: { kind: 'exploring' },
-      },
-    }
+    return { kind: 'died', playing: resolveCharacterDeath(character, mob, world, log) }
   }
 
   return { kind: 'alive', character: { ...character, hp: hpAfter }, mob, log }
@@ -1816,6 +2033,29 @@ function maybeRampTickSpeed(p: Playing): Playing {
   return p
 }
 
+function generatingArea(p: Playing): Playing {
+  if (p.state.kind !== 'generating-area') return p
+  const ticksLeft = p.state.ticksLeft - 1
+  if (ticksLeft > 0) {
+    return {
+      ...p,
+      state: { ...p.state, ticksLeft },
+    }
+  }
+  // Timer expired — if an LLM response hasn't wired in the new area yet,
+  // just resume exploring. The async callback in App.tsx will handle the
+  // transition when the LLM response arrives.
+  return {
+    ...p,
+    log: append(p.log, {
+      kind: 'narrative',
+      text: `${p.character.name} senses the path ahead has not yet taken shape.`,
+      meta: { name: p.character.name },
+    }),
+    state: { kind: 'exploring' },
+  }
+}
+
 export function runTick(p: Playing, world: WorldContent): Playing {
   // Bump the character's lifetime tick counter at the top of every tick so
   // every downstream update (and the roster card) sees the fresh value.
@@ -1837,7 +2077,9 @@ export function runTick(p: Playing, world: WorldContent): Playing {
     case 'fighting':
       return fight(withTick, world)
     case 'using-room':
-      return useRoom(withTick, world)
+      return handleRoomAction(withTick, world)
+    case 'generating-area':
+      return generatingArea(withTick)
   }
 }
 
@@ -1856,7 +2098,7 @@ export function seedLog(
     { kind: 'chapter', text: `${character.name} stirs.`, meta: { name: character.name } },
   ]
   if (options.discovery) {
-    entries.push({ kind: 'area', text: area.name })
+    entries.push({ kind: 'area', text: area.name, rarity: area.rarity })
   }
   if (room) {
     entries.push({

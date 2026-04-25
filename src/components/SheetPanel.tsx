@@ -64,6 +64,26 @@ function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n))
 }
 
+const SEG_COUNT = 20
+
+function SegBar({ ratio, segClass, color }: { ratio: number; segClass?: string; color?: string }) {
+  const filled = Math.round(ratio * SEG_COUNT)
+  return (
+    <>
+      {Array.from({ length: SEG_COUNT }, (_, i) => {
+        const on = i < filled
+        return (
+          <div
+            key={i}
+            className={`sheet__seg${on && segClass ? ` ${segClass}` : ''}`}
+            style={on && color ? { background: color } : undefined}
+          />
+        )
+      })}
+    </>
+  )
+}
+
 // Keeps big HP/MP/XP readable without wrapping the bar row. Values at or below
 // 9,999 render as-is; from 10K up we truncate to one decimal of the matching
 // unit (10.2K, 1.3M, 4B). Sheet reserves enough column width for "999M / 999M"
@@ -125,9 +145,15 @@ export default function SheetPanel({ character, fieldEvents, fields }: Props) {
     { subject: Subject; anchor: DOMRect } | null
   >(null)
 
+  // Look up content inside the memo so the dep list is just `character`.
+  // `content` is a module-level registry reference that the React Compiler
+  // flags as potentially mutable even though it's effectively immutable.
   const bonuses = useMemo(
-    () => (content ? bonusBreakdowns(character, content) : null),
-    [character, content],
+    () => {
+      const c = getWorldContent(character.worldId)
+      return c ? bonusBreakdowns(character, c) : null
+    },
+    [character],
   )
 
   // Derived combat stats. Mirrors the formulas in tick.ts/fight():
@@ -242,11 +268,11 @@ export default function SheetPanel({ character, fieldEvents, fields }: Props) {
             subject={popover.subject}
             ctx={{
               character,
-              area: content?.startingArea,
+              areas: content?.areas ?? (content ? [content.startingArea] : undefined),
               mobs: content?.mobs,
               items: content?.items,
             }}
-            actions={{ onClose: () => setPopover(null) }}
+
           />
         )}
       </Popover>
@@ -255,23 +281,23 @@ export default function SheetPanel({ character, fieldEvents, fields }: Props) {
         <div className="sheet__bar-row" data-tip={hpTip}>
           <span className="sheet__bar-label sheet__bar-label--hp">HP</span>
           <div className="sheet__bar">
-            <div className="sheet__bar-fill sheet__bar-fill--hp" style={{ width: `${hpRatio * 100}%` }} />
+            <SegBar ratio={hpRatio} segClass="sheet__seg--hp" />
           </div>
-          <span className="sheet__bar-val">{formatCompact(character.hp)} / {formatCompact(character.maxHp)}</span>
+          <span className="sheet__bar-val sheet__bar-val--hp">{formatCompact(character.hp)} / {formatCompact(character.maxHp)}</span>
           <FieldIndicator events={fieldEvents} field="hp" enabled={fields.hp} durationMs={fields.durationMs} />
         </div>
         <div className="sheet__bar-row" data-tip={magicTip}>
           <span className="sheet__bar-label sheet__bar-label--magic">{magicAbbr}</span>
           <div className="sheet__bar">
-            <div className="sheet__bar-fill sheet__bar-fill--magic" style={{ width: `${magicRatio * 100}%` }} />
+            <SegBar ratio={magicRatio} segClass="sheet__seg--magic" />
           </div>
-          <span className="sheet__bar-val">{formatCompact(character.magic)} / {formatCompact(character.maxMagic)}</span>
+          <span className="sheet__bar-val sheet__bar-val--magic">{formatCompact(character.magic)} / {formatCompact(character.maxMagic)}</span>
           <FieldIndicator events={fieldEvents} field="magic" enabled={fields.magic} durationMs={fields.durationMs} />
         </div>
         <div className="sheet__bar-row sheet__bar-row--xp" data-tip={xpTip}>
           <span className="sheet__bar-label sheet__bar-label--xp">XP</span>
           <div className="sheet__bar">
-            <div className="sheet__bar-fill sheet__bar-fill--xp" style={{ width: `${xpRatio * 100}%` }} />
+            <SegBar ratio={xpRatio} segClass="sheet__seg--xp" />
           </div>
           <span className="sheet__bar-val sheet__bar-val--xp">{formatCompact(character.xp)} / {formatCompact(xpTarget)}</span>
           <FieldIndicator events={fieldEvents} field="xp" enabled={fields.xp} durationMs={fields.durationMs} />
@@ -332,12 +358,9 @@ export default function SheetPanel({ character, fieldEvents, fields }: Props) {
                 className={'sheet__drive' + (isGoal ? ' sheet__drive--goal' : '')}
                 data-tip={tip}
               >
-                <span className="sheet__drive-label">{DRIVE_LABELS[d]}</span>
+                <span className="sheet__drive-label">{isGoal ? '> ' : ''}{DRIVE_LABELS[d]}</span>
                 <div className="sheet__drive-gauge">
-                  <div
-                    className={`sheet__drive-fill sheet__drive-fill--${d}`}
-                    style={{ width: `${ratio * 100}%`, ...(heatColor ? { background: heatColor } : {}) }}
-                  />
+                  <SegBar ratio={ratio} segClass={`sheet__seg--drive-${d}`} color={heatColor} />
                 </div>
               </div>
             )
@@ -386,17 +409,24 @@ export default function SheetPanel({ character, fieldEvents, fields }: Props) {
            all three rows. The value column is wide enough for "999M / 999M"
            without wrapping. */
         .sheet__bar-row { position: relative; display: grid; grid-template-columns: 3.5ch 1fr 14ch; gap: var(--sp-2); align-items: center; font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
-        .sheet__bar-label { font-family: var(--font-display); color: var(--fg-2); letter-spacing: 0.08em; font-size: var(--text-sm); text-align: left; }
+        .sheet__bar-label { font-family: var(--font-mono); color: var(--fg-2); letter-spacing: 0.04em; font-size: var(--text-xs); font-variant-numeric: tabular-nums; text-align: left; }
         .sheet__bar-label--hp { color: var(--hp); text-shadow: var(--glow-sm); }
         .sheet__bar-label--magic { color: var(--mp); text-shadow: var(--glow-sm); }
-        .sheet__bar-label--xp { color: #ffffff; }
-        .sheet__bar-val--xp { color: #ffffff; }
+        .sheet__bar-label--xp { color: var(--xp, #ffffff); }
         .sheet__bar-val { color: var(--fg-2); text-align: right; white-space: nowrap; }
-        .sheet__bar { height: 10px; background: var(--bg-inset); border: 1px solid var(--line-1); box-shadow: var(--shadow-inset); overflow: hidden; }
-        .sheet__bar-fill { height: 100%; transition: width var(--dur-base) var(--ease-crt); box-shadow: var(--glow-sm); }
-        .sheet__bar-fill--hp { background: var(--hp); }
-        .sheet__bar-fill--magic { background: var(--mp); }
-        .sheet__bar-fill--xp { background: #ffffff; box-shadow: 0 0 4px rgba(255,255,255,0.35); }
+        .sheet__bar-val--hp { color: var(--hp); text-shadow: var(--glow-sm); }
+        .sheet__bar-val--magic { color: var(--mp); text-shadow: var(--glow-sm); }
+        .sheet__bar-val--xp { color: var(--xp, #ffffff); }
+        .sheet__bar { display: flex; gap: 2px; padding: 1px; height: 10px; background: var(--bg-inset); border: 1px solid var(--line-1); box-shadow: var(--shadow-inset); }
+        .sheet__seg { flex: 1; height: 100%; background: var(--bg-0); }
+        .sheet__seg--hp { background: var(--hp); box-shadow: var(--glow-sm); }
+        .sheet__seg--magic { background: var(--mp); box-shadow: var(--glow-sm); }
+        .sheet__seg--xp { background: var(--xp, #ffffff); box-shadow: 0 0 4px rgba(255,255,255,0.35); }
+        .sheet__seg--drive-hunger { background: var(--warn); box-shadow: var(--glow-sm); }
+        .sheet__seg--drive-fatigue { background: var(--magic); box-shadow: var(--glow-sm); }
+        .sheet__seg--drive-greed { background: var(--good); box-shadow: var(--glow-sm); }
+        .sheet__seg--drive-curiosity { background: var(--speech, var(--accent)); box-shadow: var(--glow-sm); }
+        .sheet__seg--drive-weight { background: var(--fg-2); box-shadow: var(--glow-sm); }
 
         .sheet__attrs { margin: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-1); padding: var(--sp-2); background: var(--bg-inset); border: 1px solid var(--line-1); box-shadow: var(--shadow-inset); }
         /* Combat stats sit between the attribute block and the drive grid.
@@ -442,14 +472,8 @@ export default function SheetPanel({ character, fieldEvents, fields }: Props) {
         .sheet__drives-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-1) var(--sp-3); }
         .sheet__drive { display: grid; grid-template-rows: auto 10px; gap: 3px; min-width: 0; }
         .sheet__drive-label { font-family: var(--font-body); font-size: var(--text-xs); color: var(--fg-2); text-transform: uppercase; letter-spacing: 0.08em; }
-        .sheet__drive--goal .sheet__drive-label { color: var(--accent-hot); text-shadow: var(--glow-sm); }
-        .sheet__drive-gauge { height: 10px; background: var(--bg-inset); border: 1px solid var(--line-1); box-shadow: var(--shadow-inset); overflow: hidden; }
-        .sheet__drive-fill { height: 100%; transition: width var(--dur-base) var(--ease-crt); box-shadow: var(--glow-sm); }
-        .sheet__drive-fill--hunger { background: var(--warn); }
-        .sheet__drive-fill--fatigue { background: var(--magic); }
-        .sheet__drive-fill--greed { background: var(--good); }
-        .sheet__drive-fill--curiosity { background: var(--speech, var(--accent)); }
-        .sheet__drive-fill--weight { background: var(--fg-2); }
+        .sheet__drive--goal .sheet__drive-label { color: var(--accent-hot); }
+        .sheet__drive-gauge { display: flex; gap: 2px; padding: 1px; height: 10px; background: var(--bg-inset); border: 1px solid var(--line-1); box-shadow: var(--shadow-inset); }
       `}</style>
     </div>
   )

@@ -27,8 +27,10 @@ interface Props {
   volume?: number
   /** Live volume callback. App writes to soundManager + persists. */
   onSetVolume?: (volume: number) => void
-  /** Whether sound is muted (sound.enabled === false). Drives the mute
-   *  button's pressed/label state. */
+  /** Whether sound is muted via the topbar button. Independent of the
+   *  Settings-tab `enabled` flag — muting here preserves volume and keeps
+   *  the slider visible. When sound is disabled in Settings this prop is
+   *  left absent so the entire audio cluster disappears. */
   muted?: boolean
   /** Toggle mute from the topbar. Absent ⇒ no mute control rendered. */
   onToggleMute?: () => void
@@ -94,21 +96,6 @@ export default function Topbar({
         </span>
       </div>
       <div className="topbar__center">
-        {showPause && (
-          <button
-            type="button"
-            className={
-              'topbar__icon-btn' +
-              (paused ? ' topbar__icon-btn--active' : '')
-            }
-            aria-pressed={paused}
-            aria-label={paused ? 'Resume' : 'Pause'}
-            data-tip={paused ? 'Resume the game' : 'Pause the game'}
-            onClick={onTogglePause}
-          >
-            {paused ? '▶' : '❚❚'}
-          </button>
-        )}
         {showSpeed && (
           <div
             className="topbar__speed-wrap"
@@ -120,16 +107,34 @@ export default function Topbar({
               role="group"
               aria-label="Game speed"
             >
+              {showPause && (
+                <button
+                  type="button"
+                  className={
+                    'topbar__speed-btn' +
+                    (paused ? ' topbar__speed-btn--active' : '')
+                  }
+                  aria-pressed={paused}
+                  aria-label="Pause"
+                  data-tip="Pause the game"
+                  onClick={onTogglePause}
+                >
+                  ❚❚
+                </button>
+              )}
               {TICK_SPEEDS.map((s) => (
                 <button
                   key={s.id}
                   type="button"
                   className={
                     'topbar__speed-btn' +
-                    (tickSpeed === s.id ? ' topbar__speed-btn--active' : '')
+                    (!paused && tickSpeed === s.id ? ' topbar__speed-btn--active' : '')
                   }
-                  aria-pressed={tickSpeed === s.id}
-                  onClick={() => onPickTickSpeed?.(s.id)}
+                  aria-pressed={!paused && tickSpeed === s.id}
+                  onClick={() => {
+                    if (paused) onTogglePause?.()
+                    onPickTickSpeed?.(s.id)
+                  }}
                 >
                   {s.label}
                 </button>
@@ -168,7 +173,7 @@ export default function Topbar({
             data-tip={muted ? 'Unmute sound' : 'Mute sound'}
             onClick={onToggleMute}
           >
-            {muted ? '🔇' : '🔊'}
+            {muted ? 'M' : 'S'}
           </button>
         )}
       </div>
@@ -219,11 +224,11 @@ export default function Topbar({
            gap keeps them legible without an explicit divider; both clusters
            share the same label styling so they read as one row of controls. */
         .topbar__center { display: flex; justify-content: center; align-items: center; gap: var(--sp-3); min-width: 0; flex-wrap: wrap; }
-        /* Pause + mute — square icon buttons that flank the center cluster.
+        /* Mute — square icon button in the center cluster.
            Compact, theme-coloured, and aria-pressed when active so the
            toggle state reads from screen readers and from the visible
-           highlight. The glyphs (❚❚ / ▶ / 🔊 / 🔇) keep the row terse
-           without competing with the speed/volume labels. */
+           highlight. The glyphs (🔊 / 🔇) keep the row terse without
+           competing with the speed/volume labels. */
         .topbar__icon-btn {
           display: inline-flex;
           align-items: center;

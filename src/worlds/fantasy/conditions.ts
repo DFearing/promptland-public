@@ -11,6 +11,7 @@ export const FANTASY_CONDITIONS: ConditionDef[] = [
     params: { damagePerTick: 2 },
     element: 'earth',
     verb: 'poisons',
+    noun: 'poison',
   },
   {
     id: 'slept',
@@ -21,6 +22,7 @@ export const FANTASY_CONDITIONS: ConditionDef[] = [
     defaultDuration: 3,
     params: { skipChance: 1 },
     verb: 'lulls',
+    noun: 'sleep',
   },
   {
     id: 'slowed',
@@ -32,6 +34,7 @@ export const FANTASY_CONDITIONS: ConditionDef[] = [
     params: { skipChance: 0.5 },
     element: 'ice',
     verb: 'slows',
+    noun: 'the slow',
   },
   {
     id: 'blessed',
@@ -42,5 +45,6 @@ export const FANTASY_CONDITIONS: ConditionDef[] = [
     defaultDuration: 4,
     params: { attack: 2 },
     verb: 'blesses',
+    noun: 'the blessing',
   },
 ]

@@ -11,6 +11,7 @@ export const SCIFI_CONDITIONS: ConditionDef[] = [
     params: { damagePerTick: 1 },
     element: 'fire',
     verb: 'irradiates',
+    noun: 'radiation',
   },
   {
     id: 'stunned',

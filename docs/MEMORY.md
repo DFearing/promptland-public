@@ -1,4 +1,4 @@
-# Understudy — Project Memory
+# Promptland — Project Memory
 
 Living document. Update as decisions solidify or change.
 

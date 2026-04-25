@@ -1,6 +1,6 @@
 import type { LLMConfig } from './types'
 
-const STORAGE_KEY = 'understudy.llm.config'
+const STORAGE_KEY = 'promptland.llm.config'
 
 export const EMPTY_CONFIG: LLMConfig = { baseUrl: '', apiKey: '', model: '' }
 

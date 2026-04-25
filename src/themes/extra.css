@@ -1,5 +1,5 @@
 /* ============================================================================
-   Understudy — extra themes
+   Promptland — extra themes
    Layered on top of design/colors_and_type.css. Same token shape, new palettes.
    ============================================================================ */
 
@@ -37,6 +37,13 @@
   --magic:        #7bff88;
   --hp:           #7bff88;
   --mp:           #7bff88;
+  /* mud-classic is deliberately monochrome — collapse the log-only
+   *  HP/MP tokens (and the neutral/muted log tokens) back to phosphor
+   *  shades so nothing breaks the VT-100 aesthetic. */
+  --log-hp:       #7bff88;
+  --log-mp:       #7bff88;
+  --log-neutral:  #7bff88;
+  --log-muted:    #2f8a38;
   --speech:       #7bff88;
   --verb-emph:    #7bff88;
 
@@ -88,8 +95,9 @@
   text-shadow: 0 0 4px rgba(123, 255, 136, 0.4) !important;
 }
 
-/* XP bar fill is a hardcoded white background — drop it back to green. */
-:root[data-theme='mud-classic'] .sheet__bar-fill--xp {
+/* XP bar segments hardcode a white fill — drop them back to green so the
+   phosphor palette holds. */
+:root[data-theme='mud-classic'] .sheet__seg--xp {
   background: var(--fg-1) !important;
   box-shadow: 0 0 4px rgba(123, 255, 136, 0.4) !important;
 }

@@ -31,6 +31,10 @@ export interface ConditionDef {
    *  passive form (`is ${name.toLowerCase()}`) when absent or source is
    *  unknown. Intensity adverbs may be appended by the log layer. */
   verb?: string
+  /** Noun form for passive DoT lines that mention the condition as the
+   *  agent — "X is DEVASTATED by poison." Without this, the fallback is
+   *  `name.toLowerCase()`, which reads awkwardly ("by poisoned"). */
+  noun?: string
 }
 
 export interface ActiveCondition {

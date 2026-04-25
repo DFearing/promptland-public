@@ -23,7 +23,7 @@ function gitBranchName(): string {
 // (LLM generations, cache hits, etc.) in real time alongside Vite's own logs.
 function devLogPlugin(): Plugin {
   return {
-    name: 'understudy-dev-log',
+    name: 'promptland-dev-log',
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use('/__dev/log', (req, res) => {

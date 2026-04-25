@@ -9,7 +9,8 @@ interface Props {
   children: ReactNode
 }
 
-const POPOVER_WIDTH = 360
+const POPOVER_MIN_WIDTH = 280
+const POPOVER_MAX_WIDTH = 480
 const MARGIN = 8
 const MAX_HEIGHT = 360
 // How long the popover sticks around before auto-dismissing itself when the
@@ -39,6 +40,11 @@ export default function Popover({ open, anchor, onClose, children }: Props) {
 
   useEffect(() => {
     if (!open) return
+    // Flag the document body so TooltipLayer (and anyone else who cares) can
+    // suppress hovers while a popover owns the dialog slot. Matches the
+    // z-index ordering: the popover sits at 1100; tooltips are a lower
+    // stacking layer and would otherwise render alongside it.
+    document.body.classList.add('has-popover')
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -50,24 +56,43 @@ export default function Popover({ open, anchor, onClose, children }: Props) {
       if (!el) return
       if (!el.contains(e.target as Node)) onClose()
     }
+    // Dismiss behavior is pointer-position driven. Starting a timer on open
+    // fires the popover away even when the user is still parked on the
+    // trigger reading the card. Instead, each pointermove checks whether
+    // the pointer is still over the anchor rect or the panel; only when it
+    // leaves both does the grace countdown start. If the user clicks and
+    // never moves the mouse, the popover stays up indefinitely (Escape or
+    // an outside click still close it).
+    const inRect = (x: number, y: number, r: DOMRect) =>
+      x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
+    const onMove = (e: PointerEvent) => {
+      const onAnchor = anchor != null && inRect(e.clientX, e.clientY, anchor)
+      const panel = panelRef.current
+      const onPanel =
+        panel != null && inRect(e.clientX, e.clientY, panel.getBoundingClientRect())
+      if (onAnchor || onPanel) {
+        cancelDismiss()
+      } else if (dismissTimerRef.current == null) {
+        scheduleDismiss()
+      }
+    }
     window.addEventListener('keydown', onKey)
+    window.addEventListener('pointermove', onMove)
     // Defer the outside-click listener by one task so the click that opened
     // the popover doesn't immediately dismiss it.
     const timer = window.setTimeout(() => {
       window.addEventListener('pointerdown', onPointerDown, true)
     }, 0)
-    // Prime the auto-dismiss when we open. If the user is already hovering the
-    // card (possible if the click landed on something nested inside it), the
-    // onPointerEnter handler will cancel this immediately.
-    scheduleDismiss()
     return () => {
+      document.body.classList.remove('has-popover')
       window.removeEventListener('keydown', onKey)
+      window.removeEventListener('pointermove', onMove)
       window.clearTimeout(timer)
       window.removeEventListener('pointerdown', onPointerDown, true)
       cancelDismiss()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, onClose])
+  }, [open, onClose, anchor])
 
   if (!open || !anchor || typeof document === 'undefined') return null
 
@@ -77,8 +102,8 @@ export default function Popover({ open, anchor, onClose, children }: Props) {
   const flipUp = anchor.bottom + MARGIN + MAX_HEIGHT > viewportH
   // Horizontal: align to anchor's left edge, clamp to viewport.
   let left = anchor.left
-  if (left + POPOVER_WIDTH > viewportW - MARGIN) {
-    left = viewportW - POPOVER_WIDTH - MARGIN
+  if (left + POPOVER_MAX_WIDTH > viewportW - MARGIN) {
+    left = viewportW - POPOVER_MAX_WIDTH - MARGIN
   }
   if (left < MARGIN) left = MARGIN
 
@@ -93,15 +118,15 @@ export default function Popover({ open, anchor, onClose, children }: Props) {
       role="dialog"
       aria-modal="false"
       style={style}
-      onPointerEnter={cancelDismiss}
-      onPointerLeave={scheduleDismiss}
     >
       {children}
 
       <style>{`
         .popover {
           position: fixed;
-          width: ${POPOVER_WIDTH}px;
+          min-width: ${POPOVER_MIN_WIDTH}px;
+          max-width: ${POPOVER_MAX_WIDTH}px;
+          width: max-content;
           max-height: ${MAX_HEIGHT}px;
           overflow-y: auto;
           background: var(--bg-1);
@@ -148,6 +173,14 @@ export default function Popover({ open, anchor, onClose, children }: Props) {
           letter-spacing: 0.06em;
           text-transform: uppercase;
           margin: 0 0 var(--sp-2);
+        }
+        /* Stat bonuses — sits on its own line below the level/rarity/weight
+           meta line, styled slightly brighter so the numbers stand out. */
+        .popover__meta--bonuses {
+          color: var(--fg-2);
+          text-shadow: var(--glow-sm);
+          text-transform: none;
+          letter-spacing: 0.04em;
         }
         /* Acquisition footer — sits below the description, dimmer + italic so
            it reads as a side note rather than a primary fact about the item. */

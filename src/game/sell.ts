@@ -19,7 +19,7 @@ function equippedIds(character: Character): Set<string> {
 
 // Class-aware keep rules. Returns true if the item should be kept.
 function shouldKeep(
-  item: InventoryItem,
+  _item: InventoryItem,
   def: ItemDef,
   classId: string,
 ): boolean {

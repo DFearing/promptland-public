@@ -56,6 +56,11 @@ export type Mob = MobTemplate & {
   /** Remaining self-heal charges in the current encounter. Decrements on
    *  each use; defaults to the archetype's `healCharges` at spawn. */
   healChargesLeft: number
+  /** True when this mob was spawned from a room's curated encounter
+   *  override (not the random pool). Drives the curated-loot branch in
+   *  `resolveMobDefeat` — so a random-pool spawn of the same mob id in
+   *  a curated-loot room does NOT trigger the override. Absent ⇒ false. */
+  curated?: boolean
 }
 
 /**

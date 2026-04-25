@@ -82,6 +82,15 @@ export interface WorldManifest {
   /** Level-1 title shared by every class in this world. Classes diverge from
    *  level 2 onward via their own `titles` ladder. */
   birthTitle?: string
+  /** Thematic response to an item-sacrifice. Plugged into the sacrifice log
+   *  line as: `{name} sacrifices N item(s). {sacrificePhrase} N {currency}.`
+   *  Fantasy: "The gods smile and give". Optional — defaults to that phrase. */
+  sacrificePhrase?: string
+  /** When true, the world is still in development and is shown as
+   *  "(Coming Soon)" in the character creation picker. The world's
+   *  WorldContent may still be registered so internal tests pass, but
+   *  it won't be selectable by the player. */
+  comingSoon?: boolean
 }
 
 /**
@@ -101,4 +110,9 @@ export interface WorldContent {
   /** Code-authored LLM prompt context. Injected into every generation request
    *  for this world. See src/llm/templates.ts::WorldContextDefaults. */
   context: WorldContextDefaults
+  /** Items available for purchase at shop rooms. */
+  shopInventory?: Array<{ itemId: string; price: number; maxStock: number }>
+  /** Maps exit room keys (e.g. "millhaven::5,0,0") to generated area IDs.
+   *  Populated at runtime when LLM-generated areas are wired in. */
+  generatedAreaGraph?: Record<string, string>
 }

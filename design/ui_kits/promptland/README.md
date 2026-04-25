@@ -1,6 +1,6 @@
-# Understudy UI Kit
+# Promptland UI Kit
 
-High-fidelity recreation of the Understudy game UI in React. Three screens:
+High-fidelity recreation of the Promptland game UI in React. Three screens:
 
 | File | What |
 |---|---|

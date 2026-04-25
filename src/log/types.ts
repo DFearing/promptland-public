@@ -41,6 +41,16 @@ export interface LogMeta {
   verb?: string
   /** Damage severity — used to style the verb span when rendering. */
   severity?: DamageSeverity
+  /** Attacker's raw offensive power for this strike — post-roll,
+   *  pre-defense. Paired with `defense` in the log tag when the user
+   *  has "Log numbers" enabled so they can see what the hit was trying
+   *  to do before the defender chewed it down. */
+  attackPower?: number
+  /** Defender's damage reduction for this strike. For character attacks
+   *  this is the mob's `defense`; for mob attacks this folds the
+   *  character's dex mod and armor-derived defense bonus together so the
+   *  user sees a single "what blocked it" number. */
+  defense?: number
   /** Marks the log entry as a mob's defeat announcement. Lets downstream
    *  surfaces (popovers, history) distinguish "this mob just died" loot
    *  lines from ordinary gold/item pickups that also carry `mobName`. */
@@ -56,7 +66,13 @@ export type LogEntry =
   | { kind: 'narrative'; text: string; meta?: LogMeta }
   | { kind: 'system'; text: string }
   | { kind: 'chapter'; text: string; meta?: LogMeta }
-  | { kind: 'area'; text: string }
+  | {
+      kind: 'area'
+      text: string
+      /** Rarity of the area just discovered. Drives the fullscreen
+       *  banner variant — rare+ get the "Rare Area Discovered" treatment. */
+      rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
+    }
   | { kind: 'dialogue'; speaker?: string; text: string }
   | { kind: 'damage'; text: string; amount?: number; severity?: DamageSeverity; meta?: LogMeta }
   | { kind: 'heal'; text: string; amount?: number; meta?: LogMeta }

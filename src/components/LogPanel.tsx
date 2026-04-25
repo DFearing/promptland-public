@@ -19,7 +19,10 @@ interface Props {
   entries?: LogEntry[]
   state?: GameState
   paused?: boolean
-  onSelectRoom?: (areaId: string, roomKey: string) => void
+  /** When true, numeric amounts (HP / MP / XP / condition damage) render
+   *  as exact values. When false, they render as qualitative descriptors
+   *  — the shipping default. Controlled from Settings → Appearance. */
+  showNumbers?: boolean
 }
 
 function describeState(state?: GameState): ReactNode {
@@ -55,6 +58,35 @@ function stateTip(state: GameState | undefined, paused: boolean): string | undef
   }
 }
 
+// Maps a heal amount into a qualitative power descriptor. Tiers are tuned
+// against the shipped spell + potion amounts so each tier captures a
+// couple of steps — lesser-heal spells (6 HP) and minor potions (3 HP)
+// land in the lowest bands; greater-heal spells (14 HP) and larger
+// potions (18 HP) in the middle; anything beyond is reserved for future
+// high-tier sources. Zero-heal entries fall through to null so the
+// caller can skip the tag entirely.
+function healPowerDescriptor(amount: number): string {
+  if (amount <= 0) return 'no effect'
+  if (amount < 6) return 'a faint mend'
+  if (amount < 12) return 'a modest mend'
+  if (amount < 20) return 'a strong mend'
+  if (amount < 35) return 'a potent mend'
+  return 'a miraculous mend'
+}
+
+// Mirror of healPowerDescriptor for MP restores. Tuned against shipped
+// mana-tincture amounts so each tier captures a meaningful step: tiny
+// sips, usable top-ups, full-cup swigs, and anything beyond reads as
+// rare/legendary territory.
+function manaPowerDescriptor(amount: number): string {
+  if (amount <= 0) return 'no effect'
+  if (amount < 5) return 'a faint shimmer'
+  if (amount < 10) return 'a modest surge'
+  if (amount < 18) return 'a strong surge'
+  if (amount < 30) return 'a potent surge'
+  return 'a brilliant surge'
+}
+
 function sampleEntries(name: string): LogEntry[] {
   return [
     { kind: 'chapter', text: `${name} stirs.` },
@@ -81,7 +113,8 @@ function conditionDescription(
 
 function buildParts(
   meta: LogMeta,
-  world?: WorldContent,
+  world: WorldContent | undefined,
+  showNumbers: boolean,
   onSubjectClick?: SubjectClickHandler,
 ): HighlightPart[] {
   const parts: HighlightPart[] = []
@@ -141,10 +174,11 @@ function buildParts(
     })
   }
   // Potion effect overrides rarity — a Healing Draught reads as an HP
-  // thing when drunk, not a common-rarity thing. Applied via a CSS var
-  // so themes can redefine --hp / --mp without touching this code.
+  // thing when drunk, not a common-rarity thing. Painted in the log's
+  // HP/MP tokens so the potion bracket matches the stat tag it's paired
+  // with (e.g. "[Healing Draught]" and "(+8 HP)" share a color).
   const potionColor = (effect: NonNullable<LogMeta['potionEffect']>) =>
-    effect === 'heal' ? 'var(--hp)' : 'var(--mp)'
+    effect === 'heal' ? 'var(--log-hp, var(--hp))' : 'var(--log-mp, var(--mp))'
   if (meta.itemName && meta.itemId) {
     const color = meta.potionEffect
       ? potionColor(meta.potionEffect)
@@ -164,7 +198,7 @@ function buildParts(
       render: (t) => <span className="logp__tok logp__tok--gold">{t}</span>,
     })
   }
-  if (meta.xpText) {
+  if (meta.xpText && showNumbers) {
     parts.push({
       match: meta.xpText,
       render: (t) => <span className="logp__tok logp__tok--xp">{t}</span>,
@@ -258,56 +292,124 @@ function buildParts(
   return parts
 }
 
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Pull every "+N HP", "−N HP", "+N MP", "−N MP" substring out of `text`
+// and produce a HighlightPart per unique token. Used by the Highlight
+// scanner so inline stat mentions (meditate's "(+8 MP · +2 HP)",
+// potion chatter, rest ticks, condition damage, etc.) paint in their
+// respective stat colors rather than sitting as plain body text.
+function statMentionParts(text: string): HighlightPart[] {
+  const out: HighlightPart[] = []
+  const seen = new Set<string>()
+  const push = (
+    regex: RegExp,
+    kind: 'hp' | 'mp',
+  ) => {
+    const cls =
+      kind === 'hp'
+        ? 'logp__tok logp__tok--hp'
+        : 'logp__tok logp__tok--mp'
+    let m: RegExpExecArray | null
+    while ((m = regex.exec(text)) !== null) {
+      if (seen.has(m[0])) continue
+      seen.add(m[0])
+      const match = m[0]
+      out.push({
+        match,
+        render: (t) => <span className={cls}>{t}</span>,
+      })
+    }
+  }
+  push(/[+−-]\d+\s*HP\b/g, 'hp')
+  push(/[+−-]\d+\s*MP\b/g, 'mp')
+  return out
+}
+
 function Highlight({
   text,
   meta,
   world,
+  showNumbers,
   onSubjectClick,
 }: {
   text: string
   meta?: LogMeta
   world?: WorldContent
+  showNumbers: boolean
   onSubjectClick?: SubjectClickHandler
 }) {
-  if (!meta) return <>{text}</>
-  const parts = buildParts(meta, world, onSubjectClick)
-  if (parts.length === 0) return <>{text}</>
+  // When numbers are hidden, strip the "(+N XP)" parenthetical that the
+  // tick loop bakes into loot / chapter text — keeps the sentence clean
+  // instead of leaving an empty "()" dangling.
+  let displayText = text
+  if (!showNumbers && meta?.xpText) {
+    displayText = displayText.replace(
+      new RegExp(`\\s*\\(\\s*${escapeRegex(meta.xpText)}\\s*\\)`, 'g'),
+      '',
+    )
+  }
+  // Inline HP/MP mentions paint in stat colors whether or not meta is
+  // populated — some entries carry them in text without other meta
+  // (meditate's "(+8 MP · +2 HP)" is the canonical case).
+  const statParts = showNumbers ? statMentionParts(displayText) : []
+  if (!meta) {
+    if (statParts.length === 0) return <>{displayText}</>
+  }
+  const parts = [
+    ...(meta ? buildParts(meta, world, showNumbers, onSubjectClick) : []),
+    ...statParts,
+  ]
+  if (parts.length === 0) return <>{displayText}</>
 
   const chunks: ReactNode[] = []
   let i = 0
   let key = 0
-  while (i < text.length) {
-    let bestIdx = text.length
+  while (i < displayText.length) {
+    let bestIdx = displayText.length
     let bestPart: HighlightPart | null = null
     for (const part of parts) {
       if (!part.match) continue
-      const idx = text.indexOf(part.match, i)
+      const idx = displayText.indexOf(part.match, i)
       if (idx >= 0 && idx < bestIdx) {
         bestIdx = idx
         bestPart = part
       }
     }
     if (!bestPart) {
-      chunks.push(<Fragment key={key++}>{text.slice(i)}</Fragment>)
+      chunks.push(<Fragment key={key++}>{displayText.slice(i)}</Fragment>)
       break
     }
     if (bestIdx > i) {
-      chunks.push(<Fragment key={key++}>{text.slice(i, bestIdx)}</Fragment>)
+      chunks.push(<Fragment key={key++}>{displayText.slice(i, bestIdx)}</Fragment>)
     }
-    const matched = text.slice(bestIdx, bestIdx + bestPart.match.length)
+    const matched = displayText.slice(bestIdx, bestIdx + bestPart.match.length)
     chunks.push(<Fragment key={key++}>{bestPart.render(matched)}</Fragment>)
     i = bestIdx + bestPart.match.length
   }
   return <>{chunks}</>
 }
 
+// Strips trailing "(+N HP)" / "(+N MP)" / "(+N MP · +N HP)" from a heal line
+// so meditate-style entries that embed their numbers in the text stay clean
+// when the user has hidden log numbers. Conservative regex — only kills the
+// final parenthetical when it's composed of space-separated "+N UNIT" parts.
+const INLINE_NUMERIC_PAREN = /\s*\(\s*[+\-−]?\d+\s*(?:HP|MP|XP)(?:\s*[·\-/,]\s*[+\-−]?\d+\s*(?:HP|MP|XP))*\s*\)\s*$/i
+function stripInlineNumbers(text: string): string {
+  return text.replace(INLINE_NUMERIC_PAREN, '')
+}
+
 function LogLine({
   entry,
   world,
+  showNumbers,
   onSubjectClick,
 }: {
   entry: LogEntry
   world?: WorldContent
+  showNumbers: boolean
   onSubjectClick?: SubjectClickHandler
 }) {
   const meta = 'meta' in entry ? entry.meta : undefined
@@ -316,7 +418,7 @@ function LogLine({
     case 'narrative':
       return (
         <p className="logp__line logp__line--narrative">
-          <Highlight text={entry.text} meta={meta} world={world} onSubjectClick={onSubjectClick} />
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
         </p>
       )
 
@@ -326,7 +428,7 @@ function LogLine({
     case 'chapter':
       return (
         <p className="logp__line logp__line--chapter">
-          <Highlight text={entry.text} meta={meta} world={world} onSubjectClick={onSubjectClick} />
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
         </p>
       )
 
@@ -350,42 +452,87 @@ function LogLine({
         </p>
       )
 
-    case 'damage':
+    case 'damage': {
       // Line keeps body color; the verb span carries the severity styling so
-      // "the" / "a" / punctuation don't drag an effect along with it.
+      // "the" / "a" / punctuation don't drag an effect along with it. When
+      // the user wants numbers, trail a compact tag showing final damage,
+      // the attacker's pre-defense roll, and the defender's reduction —
+      // "(3 dmg · 7 ATK − 4 DEF)" — so combat math is legible.
+      const showDmg =
+        showNumbers &&
+        typeof entry.amount === 'number' &&
+        typeof meta?.attackPower === 'number' &&
+        typeof meta?.defense === 'number'
       return (
         <p className="logp__line logp__line--narrative">
-          <Highlight text={entry.text} meta={meta} world={world} onSubjectClick={onSubjectClick} />
-        </p>
-      )
-
-    case 'heal':
-      return (
-        <p className="logp__line logp__line--action">
-          <Highlight text={entry.text} meta={meta} world={world} onSubjectClick={onSubjectClick} />
-          {typeof entry.amount === 'number' ? (
-            <span className="logp__tag logp__tag--hp"> (+{entry.amount} HP)</span>
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
+          {showDmg ? (
+            <span className="logp__tag">
+              {' ('}
+              <span className="logp__tag-part--dmg">{entry.amount} DMG</span>
+              {' · '}
+              <span className="logp__tag-part--atk">{meta!.attackPower} ATK</span>
+              {' − '}
+              <span className="logp__tag-part--def">{meta!.defense} DEF</span>
+              {')'}
+            </span>
           ) : null}
         </p>
       )
+    }
+
+    case 'heal': {
+      // Meditate and similar rest ticks embed "(+N MP · +N HP)" directly in
+      // their text rather than carrying an amount field — strip that when
+      // the player has numbers hidden so the story stays clean.
+      const text = showNumbers ? entry.text : stripInlineNumbers(entry.text)
+      const tag =
+        typeof entry.amount === 'number'
+          ? showNumbers
+            ? `+${entry.amount} HP`
+            : healPowerDescriptor(entry.amount)
+          : null
+      return (
+        <p className="logp__line logp__line--action">
+          <Highlight text={text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
+          {tag ? (
+            <span className="logp__tag">
+              {' ('}
+              <span className="logp__tag-part--hp">{tag}</span>
+              {')'}
+            </span>
+          ) : null}
+        </p>
+      )
+    }
 
     case 'loot':
       return (
         <p className="logp__line logp__line--action">
-          <Highlight text={entry.text} meta={meta} world={world} onSubjectClick={onSubjectClick} />
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
         </p>
       )
 
     case 'consume': {
-      const tag = entry.effect === 'heal' ? `+${entry.amount} HP` : `+${entry.amount} MP`
-      const tagClass =
+      const tag = showNumbers
+        ? entry.effect === 'heal'
+          ? `+${entry.amount} HP`
+          : `+${entry.amount} MP`
+        : entry.effect === 'heal'
+          ? healPowerDescriptor(entry.amount)
+          : manaPowerDescriptor(entry.amount)
+      const partClass =
         entry.effect === 'restore-magic'
-          ? 'logp__tag logp__tag--mp'
-          : 'logp__tag logp__tag--hp'
+          ? 'logp__tag-part--mp'
+          : 'logp__tag-part--hp'
       return (
         <p className="logp__line logp__line--action">
-          <Highlight text={entry.text} meta={meta} world={world} onSubjectClick={onSubjectClick} />
-          <span className={tagClass}> ({tag})</span>
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
+          <span className="logp__tag">
+            {' ('}
+            <span className={partClass}>{tag}</span>
+            {')'}
+          </span>
         </p>
       )
     }
@@ -393,14 +540,14 @@ function LogLine({
     case 'equip':
       return (
         <p className="logp__line logp__line--action">
-          <Highlight text={entry.text} meta={meta} world={world} onSubjectClick={onSubjectClick} />
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
         </p>
       )
 
     case 'death-loss':
       return (
         <p className="logp__line logp__line--loss">
-          <Highlight text={entry.text} meta={meta} world={world} onSubjectClick={onSubjectClick} />
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
         </p>
       )
 
@@ -410,7 +557,7 @@ function LogLine({
         (entry.polarity === 'buff' ? 'logp__line--buff' : 'logp__line--debuff')
       return (
         <p className={cls}>
-          <Highlight text={entry.text} meta={meta} world={world} onSubjectClick={onSubjectClick} />
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
         </p>
       )
     }
@@ -418,15 +565,21 @@ function LogLine({
     case 'condition-tick':
       return (
         <p className="logp__line logp__line--debuff">
-          <Highlight text={entry.text} meta={meta} world={world} onSubjectClick={onSubjectClick} />
-          {entry.amount > 0 ? <span className="logp__tag"> (−{entry.amount} HP)</span> : null}
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
+          {showNumbers && entry.amount > 0 ? (
+            <span className="logp__tag">
+              {' ('}
+              <span className="logp__tag-part--hp">−{entry.amount} HP</span>
+              {')'}
+            </span>
+          ) : null}
         </p>
       )
 
     case 'condition-end':
       return (
         <p className="logp__line logp__line--cond-end">
-          <Highlight text={entry.text} meta={meta} world={world} onSubjectClick={onSubjectClick} />
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
         </p>
       )
   }
@@ -437,7 +590,7 @@ export default function LogPanel({
   entries,
   state,
   paused,
-  onSelectRoom,
+  showNumbers,
 }: Props) {
   const lines = entries ?? sampleEntries(character.name)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -445,7 +598,7 @@ export default function LogPanel({
   const [popover, setPopover] = useState<{ subject: Subject; anchor: DOMRect } | null>(null)
 
   const world = getWorldContent(character.worldId)
-  const area = world?.startingArea
+  const areas = world?.areas ?? (world ? [world.startingArea] : undefined)
 
   // Derive the set of mob names that have fallen this session from the log.
   // The game marks each defeat with `meta.mobDefeat: true`; we collect the
@@ -493,23 +646,8 @@ export default function LogPanel({
       )
     })()
 
-    // Render roomName as a clickable link when we have a key and a handler.
     const roomNode: ReactNode = d.roomName
-      ? onSelectRoom && d.roomKey && d.areaId ? (
-          <button
-            type="button"
-            className="logp__tok logp__tok--room logp__tok--link"
-            data-tip="Show on map"
-            onClick={() => {
-              onSelectRoom(d.areaId, d.roomKey!)
-              setShowDeaths(false)
-            }}
-          >
-            {d.roomName}
-          </button>
-        ) : (
-          <span className="logp__tok logp__tok--room">{d.roomName}</span>
-        )
+      ? <span className="logp__tok logp__tok--room">{d.roomName}</span>
       : null
 
     return {
@@ -565,14 +703,10 @@ export default function LogPanel({
             subject={popover.subject}
             ctx={{
               character,
-              area,
+              areas,
               mobs: world?.mobs,
               items: world?.items,
               defeatedMobs,
-            }}
-            actions={{
-              onClose: () => setPopover(null),
-              onShowRoom: onSelectRoom,
             }}
           />
         )}
@@ -580,7 +714,7 @@ export default function LogPanel({
       <div className="logp-wrap">
         <div className="logp" ref={scrollRef}>
           {lines.map((entry, i) => (
-            <LogLine key={i} entry={entry} world={world} onSubjectClick={onSubjectClick} />
+            <LogLine key={i} entry={entry} world={world} showNumbers={!!showNumbers} onSubjectClick={onSubjectClick} />
           ))}
           <p className="logp__line logp__line--tail cursor">
             <span className="logp__invis">.</span>
@@ -721,17 +855,30 @@ export default function LogPanel({
           text-transform: uppercase;
           color: var(--fg-2);
         }
+        /* Tag wrapper is layout/typography only — no color. Parens and
+           separators inside the tag stay in body-text color; each
+           numeric value brings its own color via a .logp__tag-part--*
+           class on an inner span, so the eye tracks the numbers while
+           the punctuation fades into prose. */
         .logp__tag {
           font-family: var(--font-mono);
           font-variant-numeric: tabular-nums;
-          color: var(--accent-hot);
         }
-        /* HP / MP restore tags paint in their respective stat colors so
-           "(+8 HP)" and "(+6 MP)" read as the stat they're healing
-           rather than the generic accent. Paired with the effect-colored
-           potion name above. */
-        .logp__tag--hp { color: var(--hp); text-shadow: 0 0 3px currentColor; }
-        .logp__tag--mp { color: var(--mp); text-shadow: 0 0 3px currentColor; }
+        /* Inner value spans — paired with the same stat colors the
+           inline prose tokens (.logp__tok--hp/mp) use, so "(+8 HP)"
+           in a tag and "+8 HP" inline read identically. */
+        .logp__tag-part--hp  { color: var(--log-hp, var(--hp)); text-shadow: 0 0 3px currentColor; }
+        .logp__tag-part--mp  { color: var(--log-mp, var(--mp)); text-shadow: 0 0 3px currentColor; }
+        .logp__tag-part--dmg { color: var(--log-neutral, var(--fg-1)); }
+        .logp__tag-part--atk { color: var(--log-hp, var(--bad)); }
+        .logp__tag-part--def { color: var(--log-muted, var(--fg-dim)); }
+        /* Inline stat mentions — "+8 MP" and "+2 HP" appearing inside a
+           log entry's body text rather than as a trailing tag. Share the
+           stat colors and glow treatment with the tags so "(+8 HP)" and
+           "+8 HP" read identically whether they're parenthetical tag or
+           inline prose. */
+        .logp__tok--hp { color: var(--log-hp, var(--hp)); text-shadow: 0 0 3px currentColor; font-variant-numeric: tabular-nums; }
+        .logp__tok--mp { color: var(--log-mp, var(--mp)); text-shadow: 0 0 3px currentColor; font-variant-numeric: tabular-nums; }
         .logp__tok--name { color: var(--player, var(--accent-hot)); font-weight: 500; text-shadow: 0 0 3px currentColor; }
         .logp__tok--dir { color: var(--dir, var(--link)); text-shadow: 0 0 3px currentColor; font-variant-caps: all-small-caps; letter-spacing: 0.05em; }
         .logp__tok--mob { color: var(--bad); }

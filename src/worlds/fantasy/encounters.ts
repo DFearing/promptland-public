@@ -18,4 +18,5 @@ export const FANTASY_ENCOUNTERS: Record<RoomType, string[]> = {
   entrance: ['barrow_crow', 'skeletal_scrap', 'hollow_knight'],
   shop: [],
   shrine: [],
+  exit: [],
 }
