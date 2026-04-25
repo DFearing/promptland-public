@@ -1,3 +1,4 @@
+import { mulberry32 } from '../rng'
 import type { AreaKind, RoomType } from './types'
 
 /**
@@ -19,21 +20,6 @@ function seedFromString(s: string): number {
   let h = 0
   for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0
   return h >>> 0
-}
-
-// Mulberry32 — cheap, well-distributed, deterministic PRNG. Only used for
-// small variants (which corner holds the shrine, which chamber branches
-// off the spine) so the shape still feels custom across different
-// seeds without straying from its silhouette.
-function mulberry32(seed: number): () => number {
-  let s = seed >>> 0
-  return () => {
-    s = (s + 0x6d2b79f5) | 0
-    let t = s
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
 }
 
 function pick<T>(arr: readonly T[], rand: () => number): T {
@@ -149,22 +135,86 @@ function ruinShape(): ShapeRoom[] {
 }
 
 /**
+ * Appends a frontier exit to the farthest border cell of the shape.
+ * The exit sits at the position most distant from the start cell (0,0)
+ * so it naturally ends up at the area's far edge, encouraging the
+ * player to explore the whole area before reaching it.
+ */
+function appendFrontierExit(rooms: ShapeRoom[]): ShapeRoom[] {
+  // occupied coordinate set for collision avoidance
+  const occupied = new Set(rooms.map((r) => `${r.x},${r.y},${r.z}`))
+  // Find the farthest existing room from the start cell
+  let best = rooms[rooms.length - 1]
+  let bestDist = 0
+  for (const r of rooms) {
+    const d = Math.abs(r.x) + Math.abs(r.y) + Math.abs(r.z)
+    if (d > bestDist) {
+      bestDist = d
+      best = r
+    }
+  }
+  // Try cardinal neighbors of the farthest room (preferring +x, +y for
+  // the "far edge" feel). Fall back to any unoccupied neighbor.
+  const candidates: Array<[number, number]> = [
+    [best.x + 1, best.y],
+    [best.x, best.y + 1],
+    [best.x - 1, best.y],
+    [best.x, best.y - 1],
+  ]
+  for (const [cx, cy] of candidates) {
+    const key = `${cx},${cy},${best.z}`
+    if (!occupied.has(key)) {
+      return [
+        ...rooms,
+        { x: cx, y: cy, z: best.z, type: 'exit' as RoomType, hint: 'frontier exit — path onward to unknown lands' },
+      ]
+    }
+  }
+  // Every neighbor is occupied — convert the farthest room itself into
+  // an exit. This is a last resort since it overwrites whatever type the
+  // shape chose, but having a frontier is more important than one extra
+  // chamber for recursive exploration to work.
+  return rooms.map((r) =>
+    r === best
+      ? { ...r, type: 'exit' as RoomType, hint: 'frontier exit — path onward to unknown lands' }
+      : r,
+  )
+}
+
+/**
  * Deterministically generates a room shape for the given area kind. The
  * same `seed` always produces the same layout so repeated gens at the
  * same exit hit the cache. Callers then feed this shape to the LLM for
  * flavor (names, descriptions) only — layout, position, and type are
  * decided here and never moved.
+ *
+ * Every shape includes at least one `exit`-type room so generated areas
+ * can chain recursively — the player always has a frontier leading
+ * deeper into the unknown.
  */
 export function generateShape(kind: AreaKind, seed: string): ShapeRoom[] {
   const rand = mulberry32(seedFromString(seed))
+  let rooms: ShapeRoom[]
   switch (kind) {
     case 'settlement':
-      return settlementShape(rand)
+      rooms = settlementShape(rand)
+      break
     case 'wilderness':
-      return wildernessShape(rand)
+      rooms = wildernessShape(rand)
+      break
     case 'dungeon':
-      return dungeonShape(rand)
+      rooms = dungeonShape(rand)
+      break
     case 'ruin':
-      return ruinShape()
+      rooms = ruinShape()
+      break
   }
+
+  // Guarantee a frontier exit for recursive exploration
+  const hasExit = rooms.some((r) => r.type === 'exit')
+  if (!hasExit) {
+    rooms = appendFrontierExit(rooms)
+  }
+
+  return rooms
 }

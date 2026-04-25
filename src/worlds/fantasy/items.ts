@@ -14,13 +14,17 @@ const ARCHETYPES: ItemArchetype[] = [
   { id: 'barrow_key', kind: 'junk', value: 50, weight: 1 },
 
   // ── Consumables ─────────────────────────────────────────────────────────────
+  // Sizes drive heal/mana amounts (see items/sizing.ts). Each archetype
+  // pins to one size; to vary the amount, content adds another archetype
+  // at a different size rather than relying on a per-drop roll.
   {
     id: 'healing_draught',
     kind: 'consumable',
     value: 15,
     stackable: true,
     weight: 1,
-    effect: { kind: 'heal', amount: 8 },
+    effect: { kind: 'heal' },
+    size: 'lesser',
   },
   {
     id: 'greater_healing_draught',
@@ -28,7 +32,8 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 30,
     stackable: true,
     weight: 1,
-    effect: { kind: 'heal', amount: 18 },
+    effect: { kind: 'heal' },
+    size: 'greater',
   },
   {
     id: 'hard_tack',
@@ -36,7 +41,8 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 4,
     stackable: true,
     weight: 1,
-    effect: { kind: 'heal', amount: 3 },
+    effect: { kind: 'heal' },
+    size: 'minor',
   },
   {
     id: 'mana_tincture',
@@ -44,7 +50,8 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 18,
     stackable: true,
     weight: 1,
-    effect: { kind: 'restore-magic', amount: 6 },
+    effect: { kind: 'restore-magic' },
+    size: 'lesser',
   },
   {
     id: 'mana_crystal',
@@ -52,7 +59,8 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 25,
     stackable: true,
     weight: 1,
-    effect: { kind: 'restore-magic', amount: 10 },
+    effect: { kind: 'restore-magic' },
+    size: 'standard',
   },
 
   // ── Weapons ─────────────────────────────────────────────────────────────────
@@ -62,6 +70,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 10,
     weight: 2,
     slot: 'weapon',
+    damageFamily: 'slash',
     bonuses: { attack: 1 },
     requirements: { strength: 4 },
   },
@@ -71,6 +80,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 20,
     weight: 2,
     slot: 'weapon',
+    damageFamily: 'slash',
     bonuses: { attack: 1, strength: 1 },
     requirements: { strength: 5 },
   },
@@ -80,6 +90,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 28,
     weight: 2,
     slot: 'weapon',
+    damageFamily: 'slash',
     bonuses: { attack: 2 },
     requirements: { strength: 5 },
   },
@@ -89,6 +100,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 30,
     weight: 2,
     slot: 'weapon',
+    damageFamily: 'pierce',
     bonuses: { attack: 2, dexterity: 1 },
     requirements: { dexterity: 5 },
   },
@@ -98,6 +110,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 32,
     weight: 4,
     slot: 'weapon',
+    damageFamily: 'crush',
     bonuses: { attack: 2, strength: 1 },
     requirements: { strength: 6 },
   },
@@ -107,6 +120,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 35,
     weight: 2,
     slot: 'weapon',
+    damageFamily: 'crush',
     bonuses: { attack: 1, intelligence: 1 },
     requirements: { intelligence: 6 },
   },
@@ -116,6 +130,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 40,
     weight: 2,
     slot: 'weapon',
+    damageFamily: 'pierce',
     bonuses: { attack: 3 },
     requirements: { dexterity: 5 },
   },
@@ -305,7 +320,29 @@ const ARCHETYPES: ItemArchetype[] = [
     bonuses: { attack: 1, strength: 1 },
   },
 
+  // ── Buff amulets (world-scoped lore; see items/types.ts EquipBonuses
+  //    hungerSlow / restBoost fields) ─────────────────────────────────────
+  {
+    id: 'sated_wanderer_pendant',
+    kind: 'equipment',
+    value: 80,
+    weight: 1,
+    slot: 'amulet',
+    bonuses: { hungerSlow: 0.35 },
+  },
+  {
+    id: 'stone_of_deep_rest',
+    kind: 'equipment',
+    value: 90,
+    weight: 1,
+    slot: 'amulet',
+    bonuses: { restBoost: 0.4 },
+  },
+
   // ── Scrolls ─────────────────────────────────────────────────────────────────
+  // Levels (I-V) drive the amount multiplier (see items/sizing.ts). Each
+  // archetype pins to one level; higher-tier scrolls live as separate
+  // archetypes rather than per-drop rolls.
   {
     id: 'scroll_fireball',
     kind: 'scroll',
@@ -313,6 +350,7 @@ const ARCHETYPES: ItemArchetype[] = [
     stackable: true,
     weight: 1,
     spellId: 'fireball',
+    level: 1,
   },
   {
     id: 'scroll_missile',
@@ -321,6 +359,7 @@ const ARCHETYPES: ItemArchetype[] = [
     stackable: true,
     weight: 1,
     spellId: 'magic_missile',
+    level: 1,
   },
   {
     id: 'scroll_heal',
@@ -329,6 +368,7 @@ const ARCHETYPES: ItemArchetype[] = [
     stackable: true,
     weight: 1,
     spellId: 'lesser_heal',
+    level: 1,
   },
   {
     id: 'scroll_recall',
@@ -337,6 +377,25 @@ const ARCHETYPES: ItemArchetype[] = [
     stackable: true,
     weight: 1,
     spellId: 'recall',
+    level: 1,
+  },
+
+  // ── Curated (legendary / artifact) ─────────────────────────────────────────
+  // Excluded from regular archetype loot rolls — they reach the player only
+  // via curated-room loot overrides (authored or LLM-picked) or bespoke
+  // generation that keys on the existing id. Stats are tuned to the
+  // legendary band; rarity is nailed to 'legendary' by the curated-loot
+  // override so `rollDropRarity` can't downshift them.
+  {
+    id: 'lost_blade_of_arvain',
+    kind: 'equipment',
+    value: 1200,
+    weight: 2,
+    slot: 'weapon',
+    damageFamily: 'slash',
+    bonuses: { attack: 8, strength: 2, charisma: 1 },
+    requirements: { strength: 12, level: 6 },
+    curated: true,
   },
 ]
 
@@ -529,6 +588,18 @@ const FLAVORS: Record<string, ItemFlavor> = {
     description: 'Iron set with blackthorn spurs. The thorns are not decorative.',
   },
 
+  // Buff amulets
+  sated_wanderer_pendant: {
+    name: 'Pendant of the Sated Wanderer',
+    description:
+      'A dull copper disk on a leather thong. Worn against the skin, the wearer forgets the last meal less urgently.',
+  },
+  stone_of_deep_rest: {
+    name: 'Stone of Deep Rest',
+    description:
+      'A river-smoothed stone with a hole through it, hung on braided cord. Sleep deepens around it; every breath counts.',
+  },
+
   // Scrolls
   scroll_fireball: {
     name: 'Scroll of Fireball',
@@ -545,6 +616,13 @@ const FLAVORS: Record<string, ItemFlavor> = {
   scroll_recall: {
     name: 'Scroll of Recall',
     description: 'Gilded edges. The words end in a door that opens elsewhere.',
+  },
+
+  // Curated / legendary — lore hook seeds the LLM expansion on first drop.
+  lost_blade_of_arvain: {
+    name: 'The Lost Blade of Arvain',
+    description:
+      'A slender sword said to have been buried with a king who refused the grave. The pommel is set with a pale stone that hums when blood is near.',
   },
 }
 

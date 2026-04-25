@@ -681,11 +681,21 @@ export interface AreaGenShapeRoom {
   hint?: string
 }
 
+/** Minimum offset above player level for generated-area difficulty. */
+export const AREA_LEVEL_OFFSET_MIN = 2
+/** Range of the random offset (0-inclusive). areaLevel = playerLevel +
+ *  OFFSET_MIN + rand(0..OFFSET_RANGE-1), yielding +2 or +3. */
+export const AREA_LEVEL_OFFSET_RANGE = 2
+
 export interface AreaGenParams {
   worldId: string
   characterName: string
   characterLevel: number
   characterClass: string
+  /** Target difficulty level for the generated area. Rolled client-side
+   *  as playerLevel + 2..3 so generated content is aspirational — harder
+   *  and more rewarding than the player's current level. */
+  areaLevel: number
   fromAreaName: string
   fromAreaDescription: string
   /** Flavor name of the exit room the character is stepping through
@@ -967,6 +977,7 @@ export const areaGenTemplate: PromptTemplate<AreaGenParams, AreaGenPayload> = {
   defaultSystemTemplate: `You generate flavor (names + short descriptions) for new explorable areas in a {{worldId}} world.{{worldContext}}
 The character is a level {{characterLevel}} {{characterClass}} named {{characterName}}.
 They are stepping out of "{{fromAreaName}}" through an exit called "{{fromExitName}}" into a new area of kind: {{areaKind}}.
+This area targets level {{areaLevel}} — 2-3 levels above the character. Generated content should be aspirational: mobs and loot are tougher and more rewarding than the player's home turf.
 Allowed concepts: {{allowedConcepts}}.
 Forbidden concepts: {{forbiddenConcepts}}.
 
@@ -1021,20 +1032,21 @@ Rules:
 - REF vs NEW (mobs):
   * PREFER REF. Only use NEW when the pool has no mob that fits the room's hint thematically (e.g. a dungeon boss chamber when the pool contains only rats and wolves).
   * If you use REF, mobId MUST be one of the available mob ids listed above. Do not invent a mobId in REF form.
-  * If you use NEW, its id must be a new kebab-case slug not already in the pool. Pick stats that feel right for the room's rarity: common ≈ (HP 3-6 / ATK 2-3 / DEF 0-1 / XP 2-5 / level 1-2); uncommon ≈ (HP 8-14 / ATK 4-5 / DEF 1-2 / XP 6-12 / level 3-5); rare+ ≈ bosses, HP 20-50, ATK 6-10, DEF 3-5, XP 18-60, level 6+.
+  * If you use NEW, its id must be a new kebab-case slug not already in the pool. Target area level {{areaLevel}} for stats: maxHp ≈ areaLevel * 8, attack ≈ areaLevel * 2, defense ≈ areaLevel, xpReward ≈ areaLevel * 3, level = {{areaLevel}} (± 1 for variety). Rarity multiplies from that baseline: uncommon ≈ ×1.3, rare ≈ ×1.6, epic ≈ ×2, legendary ≈ ×3.
   * A bespoke NEW mob is cached and reused — a later generation in the same world may reference it in REF form. Pick names and descriptions that a future area could plausibly reuse.
 - Curated loot (OPTIONAL — encounter-level "loot" field):
   * Add curated loot ONLY on rare+ or firstOnly encounters. A plain ambient common fixture should use the mob's default loot table (no override).
   * Gold range should match the mob's threat: rare boss ≈ 50-200 gold, epic boss ≈ 200-800, legendary ≈ 800-3000+. Common/uncommon curated ≈ 10-100.
   * 1-3 items per loot table. More than that feels like a vendor dump, not a drop.
   * PREFER REF for items — reuse existing ids from the item pool. Use NEW (bespoke items) only when the pool doesn't have a thematic fit.
-  * Bespoke items: kind must be "junk" or "equipment" (consumables and scrolls are not supported as bespoke yet). Equipment requires "slot" and "bonuses". Keep bonuses proportional to the item's rarity — common equip ≈ +1 bonuses, rare ≈ +3-5, legendary ≈ +8-12.
+  * Bespoke items: kind must be "junk" or "equipment" (consumables and scrolls are not supported as bespoke yet). Equipment requires "slot" and "bonuses". Scale bonuses to area level {{areaLevel}}: roughly areaLevel / 2 each for attack/defense at common rarity, then rarity multiplies (rare ≈ ×1.5, legendary ≈ ×2.5).
   * Rarity on a curated item is OPTIONAL — set it for a named-item drop ("the Marrow Lord's crown is always legendary"), omit for ambient pool items where the usual rarity roll is fine.`,
   systemPlaceholders: [
     'worldId',
     'characterName',
     'characterLevel',
     'characterClass',
+    'areaLevel',
     'fromAreaName',
     'fromExitName',
     'areaKind',
@@ -1052,6 +1064,7 @@ Rules:
       characterName: params.characterName,
       characterLevel: String(params.characterLevel),
       characterClass: params.characterClass,
+      areaLevel: String(params.areaLevel),
       fromAreaName: params.fromAreaName,
       fromExitName: params.fromExitName,
       areaKind: params.areaKind,
@@ -1071,6 +1084,7 @@ Rules:
     return (
       `Name and describe a new ${params.areaKind} connected to "${params.fromAreaName}" via the exit "${params.fromExitName}". ` +
       `Character: level ${params.characterLevel} ${params.characterClass} named ${params.characterName}. ` +
+      `Target area level: ${params.areaLevel}. ` +
       `Emit exactly ${params.rooms.length} rooms in order.`
     )
   },
@@ -1175,7 +1189,7 @@ Rules:
 - name is 1-3 words.
 - description evokes look and attitude in 1-2 sentences.
 - Stats should be scaled to character level: maxHp ~ level * 8, attack ~ level * 2, defense ~ level, xpReward ~ level * 3.
-- level should be within 2 of the character's level.`,
+- level should be 2-3 above the character's level — generated encounters are aspirational, not safe.`,
   systemPlaceholders: [
     'worldId',
     'characterName',
@@ -1284,7 +1298,7 @@ Rules:
 - If kind is "equipment", slot must be one of: "weapon", "armor", "head", "arms", "hands", "legs", "feet", "cape", "amulet", "ring".
 - If kind is "junk", slot should be null and bonuses should be null.
 - weight is 1-10. value is 1-100.
-- bonuses.attack and bonuses.defense should scale with character level (roughly level/2 each).`,
+- bonuses.attack and bonuses.defense should scale above character level (roughly (level+2)/2 each) — generated items are aspirational rewards.`,
   systemPlaceholders: [
     'worldId',
     'characterName',

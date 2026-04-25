@@ -15,7 +15,6 @@ export {
   manhattan,
   neighborsOf,
   pruneDisconnectedRooms,
-  randomStep,
   stepTowards,
 } from './movement'
 export { ROOM_TYPE_VISUALS, type RoomTypeVisual } from './roomTypes'

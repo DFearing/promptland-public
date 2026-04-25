@@ -17,11 +17,17 @@ import { createPortal } from 'react-dom'
 interface AnchorTip {
   el: HTMLElement
   text: string
+  /** Optional accent color for the tooltip — read from `data-tip-color`.
+   *  Accepts any CSS color string (including `var(--rarity-rare)`).
+   *  Tints the tooltip text and border so the floating card carries the
+   *  same identity as the anchor it points at. */
+  color?: string
 }
 
 interface RenderedTip {
   text: string
   rect: DOMRect
+  color?: string
 }
 
 interface Placement {
@@ -41,7 +47,8 @@ function findTipAnchor(target: EventTarget | null): AnchorTip | null {
   if (!(el instanceof HTMLElement)) return null
   const text = el.dataset.tip
   if (!text) return null
-  return { el, text }
+  const color = el.dataset.tipColor
+  return color ? { el, text, color } : { el, text }
 }
 
 export default function TooltipLayer() {
@@ -82,7 +89,11 @@ export default function TooltipLayer() {
         // Popover owns the dialog slot while it's open — swallow the
         // tooltip so the two don't render on top of each other.
         if (popoverOpen()) return
-        setTip({ text: current.text, rect: current.el.getBoundingClientRect() })
+        setTip({
+          text: current.text,
+          rect: current.el.getBoundingClientRect(),
+          color: current.color,
+        })
       }, SHOW_DELAY_MS)
     }
 
@@ -137,7 +148,11 @@ export default function TooltipLayer() {
       clearHide()
       currentRef.current = anchor
       if (popoverOpen()) return
-      setTip({ text: anchor.text, rect: anchor.el.getBoundingClientRect() })
+      setTip({
+        text: anchor.text,
+        rect: anchor.el.getBoundingClientRect(),
+        color: anchor.color,
+      })
     }
 
     const onFocusOut = () => hideNow()
@@ -227,6 +242,10 @@ export default function TooltipLayer() {
   const style: React.CSSProperties = placement
     ? { top: `${placement.top}px`, left: `${placement.left}px`, visibility: 'visible' }
     : { top: '-9999px', left: '-9999px', visibility: 'hidden' }
+  if (tip.color) {
+    style.color = tip.color
+    style.borderColor = tip.color
+  }
 
   return createPortal(
     <div

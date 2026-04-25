@@ -26,12 +26,6 @@ export function neighborsOf(area: Area, position: Position): Position[] {
   return out
 }
 
-export function randomStep(area: Area, position: Position): Position | null {
-  const options = neighborsOf(area, position)
-  if (options.length === 0) return null
-  return options[Math.floor(Math.random() * options.length)]
-}
-
 export function manhattan(a: Position, b: Position): number {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z)
 }

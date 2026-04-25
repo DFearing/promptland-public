@@ -8,6 +8,7 @@ export type ThemeId =
   | 'vacuum'
   | 'vellum'
   | 'paper'
+  | 'custom'
 
 export interface ThemeMeta {
   id: ThemeId
@@ -51,7 +52,6 @@ export interface Effects {
     damage: boolean
     heal: boolean
     levelUpBanner: boolean
-    levelUpConfetti: boolean
     death: boolean
     newArea: boolean
   }
@@ -71,8 +71,38 @@ export interface Effects {
     gold: boolean
     durationMs: number
   }
+  /** When true, the numeric readouts ("12 / 30") render next to the
+   *  HP / MP / XP bars on the sheet. When false, only the bars are
+   *  shown. Independent of `logNumbers` — the sheet and the log speak
+   *  with different voices and the player may want to quiet one but
+   *  not the other. Default: true — matches long-standing behavior. */
+  sheetNumbers: boolean
 }
 
 export const FIELD_DURATION_MIN_MS = 300
 export const FIELD_DURATION_MAX_MS = 2500
 export const FIELD_DURATION_STEP_MS = 100
+
+/**
+ * User-authored palette. Eight tokens — the most impactful ones —
+ * cover the visual range without drowning the editor UI. Each value is
+ * a CSS color string (hex or rgb; the color picker emits hex).
+ */
+export interface CustomTheme {
+  /** Page background. */
+  bg0: string
+  /** Panel background. */
+  bg1: string
+  /** Primary text / stat values. */
+  fg1: string
+  /** Brand accent — wordmark, highlights, hover states. */
+  accentHot: string
+  /** HP color (bars, damage lines). */
+  hp: string
+  /** MP / magic color (bars, spell lines). */
+  mp: string
+  /** Positive / good-outcome color (heal lines, confirmations). */
+  good: string
+  /** Negative / bad-outcome color (damage tag, death, errors). */
+  bad: string
+}

@@ -1,8 +1,14 @@
 import type { Character, InventoryItem } from '../character'
-import type { ConsumableArchetype, ConsumableEffect, ItemDef } from '../items'
+import {
+  potionEffectAmount,
+  type ConsumableArchetype,
+  type ConsumableEffect,
+  type ItemDef,
+} from '../items'
 import type { LogEntry } from '../log'
 import { getSpell } from '../spells'
 import type { WorldContent } from '../worlds'
+import { focusAdverb, healAdverb } from './intensity'
 
 const HEAL_THRESHOLD = 0.35
 const MAGIC_THRESHOLD = 0.35
@@ -59,8 +65,10 @@ export function maybeAutoConsume(
   if (character.hp < character.maxHp * HEAL_THRESHOLD && character.hp > 0) {
     const match = findConsumable(character.inventory, world, 'heal')
     if (match) {
-      const effect = match.def.effect as Extract<ConsumableEffect, { kind: 'heal' }>
-      const heal = Math.min(character.maxHp - character.hp, effect.amount)
+      const heal = Math.min(
+        character.maxHp - character.hp,
+        potionEffectAmount(match.def.size, character.maxHp),
+      )
       return {
         character: {
           ...character,
@@ -71,7 +79,10 @@ export function maybeAutoConsume(
           kind: 'consume',
           effect: 'heal',
           amount: heal,
-          text: `${character.name} drinks a ${match.def.name}.`,
+          text: `${character.name} drinks a ${match.def.name}, feeling ${healAdverb(
+            heal,
+            character.maxHp,
+          )} better.`,
           meta: {
             name: character.name,
             itemId: match.def.id,
@@ -96,8 +107,10 @@ export function maybeAutoConsume(
   if (character.maxMagic > 0 && character.magic < character.maxMagic * magicThreshold) {
     const match = findConsumable(character.inventory, world, 'restore-magic')
     if (match) {
-      const effect = match.def.effect as Extract<ConsumableEffect, { kind: 'restore-magic' }>
-      const restore = Math.min(character.maxMagic - character.magic, effect.amount)
+      const restore = Math.min(
+        character.maxMagic - character.magic,
+        potionEffectAmount(match.def.size, character.maxMagic),
+      )
       return {
         character: {
           ...character,
@@ -108,7 +121,10 @@ export function maybeAutoConsume(
           kind: 'consume',
           effect: 'restore-magic',
           amount: restore,
-          text: `${character.name} drinks a ${match.def.name}.`,
+          text: `${character.name} drinks a ${match.def.name}, focusing ${focusAdverb(
+            restore,
+            character.maxMagic,
+          )}.`,
           meta: {
             name: character.name,
             itemId: match.def.id,

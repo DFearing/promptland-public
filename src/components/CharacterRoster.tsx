@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import type { Character } from '../character'
-import { describeCharacter } from '../character'
+import { describeCharacter, formatActorName } from '../character'
 import { TICK_MS } from '../game'
 import { formatDuration, formatRelative } from '../util/time'
+import { getWorldContent } from '../worlds'
 import ConfirmDialog from './ConfirmDialog'
 
 export interface RosterEntry {
@@ -96,6 +97,28 @@ export default function CharacterRoster({ entries, onPlay, onNew, onDelete, onRe
               const d = describeCharacter(character)
               const subtitle = [d.speciesName, d.className].filter(Boolean).join(' · ')
               const ticks = formatTicks(character.ticks ?? 0)
+              // Display name follows the in-game title/name policy — title
+              // leads early ("Wayfarer Hiro"), then flips behind the name
+              // at the legendary threshold ("Hiro the Warlord"). Same
+              // helper that the milestone log lines use, so the roster
+              // surfaces the character the same way the game does.
+              const displayName = formatActorName(character, 'log-milestone')
+              // Resolve the area the character is currently in, so the
+              // roster card reads as "where did I leave them?". World
+              // content is rehydrated before the roster mounts, so
+              // generated areas are present here too. Falls back silently
+              // if the area can't be resolved (legacy save, deleted area).
+              const area = getWorldContent(character.worldId)?.areas?.find(
+                (a) => a.id === character.position.areaId,
+              )
+              const areaName = area?.name
+              // Room name layered after the area so the line reads
+              // "Whispering Glade — Mossy Atrium" — the area is the
+              // larger anchor, the room is where they paused. Falls
+              // back silently if the room key isn't in the area
+              // (legacy / removed rooms).
+              const roomKeyHere = `${character.position.x},${character.position.y},${character.position.z}`
+              const roomName = area?.rooms?.[roomKeyHere]?.name
               return (
                 <li key={character.id} className="roster__row">
                   <button
@@ -112,11 +135,18 @@ export default function CharacterRoster({ entries, onPlay, onNew, onDelete, onRe
                       <span className="roster__ticks-ghost" aria-hidden="true">{ticks.ghost}</span>
                       <span className="roster__ticks-val">{ticks.text}</span>
                     </span>
-                    <span className="roster__name">{character.name}</span>
+                    <span className="roster__name">{displayName}</span>
                     <span className="roster__sub">
-                      {subtitle}
+                      Lv {character.level}
+                      {subtitle ? ` · ${subtitle}` : ''}
                       {d.worldName ? ` — ${d.worldName}` : ''}
                     </span>
+                    {areaName && (
+                      <span className="roster__where">
+                        {areaName}
+                        {roomName ? ` — ${roomName}` : ''}
+                      </span>
+                    )}
                     <span className="roster__when">
                       Last played {FORMATTER.format(updatedAt)}
                       <span className="roster__when-ago">
@@ -187,11 +217,17 @@ export default function CharacterRoster({ entries, onPlay, onNew, onDelete, onRe
         .roster__row { display: flex; gap: var(--sp-1); }
         /* The right padding reserves a lane for the center-right tick
            counter so no text row (name, subtitle, "when") runs underneath
-           it at any card width. */
-        .roster__play { flex: 1; text-align: left; padding: var(--sp-3) 132px var(--sp-3) var(--sp-3); background: var(--bg-1); border: 1px solid var(--line-1); color: var(--fg-1); cursor: pointer; display: flex; flex-direction: column; gap: 2px; font: inherit; position: relative; transition: border-color var(--dur-fast) var(--ease-crt), background var(--dur-fast) var(--ease-crt); }
+           it at any card width. Bumped from 132px → 188px after the
+           counter grew 1.5×. */
+        .roster__play { flex: 1; text-align: left; padding: var(--sp-3) 188px var(--sp-3) var(--sp-3); background: var(--bg-1); border: 1px solid var(--line-1); color: var(--fg-1); cursor: pointer; display: flex; flex-direction: column; gap: 2px; font: inherit; position: relative; transition: border-color var(--dur-fast) var(--ease-crt), background var(--dur-fast) var(--ease-crt); }
         .roster__play:hover { border-color: var(--line-3); background: var(--bg-2); }
         .roster__name { font-family: var(--font-display); font-size: var(--text-xl); color: var(--accent-hot); text-shadow: var(--glow-sm); letter-spacing: 0.02em; }
         .roster__sub { font-family: var(--font-body); font-size: var(--text-sm); color: var(--fg-2); }
+        /* Where-line — area + room. Same family/scale as the "when"
+           line so the two pieces of secondary info stack as a pair,
+           but no tabular-nums (the slot below) since this isn't
+           numeric. */
+        .roster__where { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); }
         .roster__when { margin-top: 4px; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); font-variant-numeric: tabular-nums; }
         .roster__when-ago { color: var(--fg-2); }
         .roster__delete { width: 40px; background: transparent; border: 1px solid var(--line-1); color: var(--fg-3); cursor: pointer; font-size: var(--text-xl); line-height: 1; font-family: var(--font-display); }
@@ -211,13 +247,13 @@ export default function CharacterRoster({ entries, onPlay, onNew, onDelete, onRe
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          padding: 2px var(--sp-2);
+          padding: 4px var(--sp-3);
           background: #000;
           border: 1px solid var(--line-1);
           box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.9);
           font-family: var(--font-mono);
           font-variant-numeric: tabular-nums;
-          font-size: var(--text-md);
+          font-size: calc(var(--text-md) * 1.5);
           letter-spacing: 0.14em;
           line-height: 1;
           cursor: default;

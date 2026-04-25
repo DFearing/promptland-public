@@ -1,0 +1,208 @@
+<!-- Prototype: title rendering progression in the sheet header.
+     The honorific fades from dim to accent as the character progresses,
+     and picks up 1–3 ★ pips at the same thresholds used by formatActorName
+     (title-index 5 / 15 / 25). Mirrors the mob rarity glyph already in use. -->
+<!DOCTYPE html>
+<html lang="en" data-theme="mud">
+<head>
+  <meta charset="utf-8">
+  <title>Title progression — Promptland</title>
+  <link rel="stylesheet" href="../colors_and_type.css">
+  <style>
+    html, body { height: 100%; }
+    body {
+      padding: var(--sp-6);
+      background: var(--bg-0);
+      color: var(--fg-1);
+      font-family: var(--font-body);
+    }
+
+    .page {
+      max-width: 960px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-6);
+    }
+
+    h1 {
+      font-family: var(--font-display);
+      letter-spacing: 0.04em;
+      color: var(--fg-2);
+      text-transform: uppercase;
+      margin: 0;
+      font-size: var(--text-xl);
+    }
+
+    .lede {
+      font-size: var(--text-sm);
+      color: var(--fg-3);
+      line-height: var(--leading-body);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: var(--sp-3);
+    }
+
+    /* Mini sheet-header specimen. Replicates the proposed flex-column
+       layout so the preview matches what will land in SheetPanel.tsx. */
+    .card {
+      background: var(--bg-1);
+      border: 1px solid var(--line-2);
+      padding: var(--sp-4);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-3);
+    }
+
+    .card__meta {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .sheet__title {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;            /* tight vertical stacking per user request */
+      align-items: flex-start;
+    }
+
+    .sheet__name {
+      font-family: var(--font-display);
+      font-size: var(--text-3xl);
+      color: var(--accent-hot);
+      text-shadow: var(--glow-sm);
+      letter-spacing: 0.04em;
+      line-height: 1;
+    }
+
+    .sheet__honorific {
+      /* Base honorific — each tier overrides color / opacity. The pip
+         (★/★★/★★★) is appended via a sibling <span class="sheet__pip">. */
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      line-height: 1;
+    }
+
+    .sheet__pip {
+      letter-spacing: 0.05em;
+    }
+    .sheet__pip--lead { margin-right: 0.4em; }
+    .sheet__pip--trail { margin-left: 0.4em; }
+
+    .sheet__subtitle {
+      margin-top: var(--sp-2);
+      font-size: var(--text-sm);
+      color: var(--fg-2);
+    }
+
+    /* Stage 1 — dim, no pip. */
+    [data-stage="1"] .sheet__honorific { color: var(--fg-3); opacity: 0.5; }
+
+    /* Stage 2 — medium phosphor, ★. */
+    [data-stage="2"] .sheet__honorific { color: var(--fg-2); }
+
+    /* Stage 3 — full phosphor, ★★. */
+    [data-stage="3"] .sheet__honorific { color: var(--fg-1); }
+
+    /* Stage 4 — accent + glow, ★★★. */
+    [data-stage="4"] .sheet__honorific {
+      color: var(--accent-hot);
+      text-shadow: var(--glow-sm);
+    }
+
+    /* Stage 5 — final flip. The title has overtaken the name in fame, so
+       they swap visual positions: the title gets the display-font treatment
+       (down one step from the name's original size), and Hiro moves
+       below as the secondary line. */
+    [data-stage="5"] .sheet__title { flex-direction: column; }
+    [data-stage="5"] .sheet__honorific {
+      font-family: var(--font-display);
+      font-size: var(--text-2xl);
+      color: var(--accent-hot);
+      text-shadow: var(--glow-md);
+      letter-spacing: 0.04em;
+      text-transform: none;
+      line-height: 1;
+      order: 1;             /* title takes the top slot */
+    }
+    [data-stage="5"] .sheet__pip { display: none; }  /* drop stars — the flip is the signal */
+    [data-stage="5"] .sheet__name {
+      font-size: var(--text-lg);
+      color: var(--fg-2);
+      text-shadow: none;
+      order: 2;             /* name drops below */
+    }
+    [data-stage="5"] .sheet__subtitle { order: 3; }
+  </style>
+</head>
+<body class="flicker">
+  <div class="page">
+    <header>
+      <h1>Title progression — sheet header</h1>
+      <p class="lede">
+        Four progression stages. Color fades from <code>--fg-3</code> → <code>--fg-2</code> → <code>--fg-1</code> → <code>--accent-hot</code>,
+        and the title picks up 1–3 <code>★</code> pips at the same thresholds
+        <code>formatActorName</code> uses (title-index 5 / 15 / 25). Reuses the
+        mob-rarity star glyph rather than inventing a separate visual language.
+      </p>
+    </header>
+
+    <div class="grid">
+
+      <div class="card" data-stage="1">
+        <span class="card__meta">Stage 1 · indexes 0–4 · levels 1–5</span>
+        <div class="sheet__title">
+          <span class="sheet__name">Hiro</span>
+          <span class="sheet__honorific">Wayfarer</span>
+          <span class="sheet__subtitle">Human · Warrior</span>
+        </div>
+      </div>
+
+      <div class="card" data-stage="2">
+        <span class="card__meta">Stage 2 · indexes 5–14 · levels 6–15</span>
+        <div class="sheet__title">
+          <span class="sheet__name">Hiro</span>
+          <span class="sheet__honorific"><span class="sheet__pip sheet__pip--lead">★</span>Pathfinder<span class="sheet__pip sheet__pip--trail">★</span></span>
+          <span class="sheet__subtitle">Human · Warrior</span>
+        </div>
+      </div>
+
+      <div class="card" data-stage="3">
+        <span class="card__meta">Stage 3 · indexes 15–24 · levels 16–25</span>
+        <div class="sheet__title">
+          <span class="sheet__name">Hiro</span>
+          <span class="sheet__honorific"><span class="sheet__pip sheet__pip--lead">★★</span>Champion<span class="sheet__pip sheet__pip--trail">★★</span></span>
+          <span class="sheet__subtitle">Human · Warrior</span>
+        </div>
+      </div>
+
+      <div class="card" data-stage="4">
+        <span class="card__meta">Stage 4 · indexes 25–39 · levels 26–100</span>
+        <div class="sheet__title">
+          <span class="sheet__name">Hiro</span>
+          <span class="sheet__honorific"><span class="sheet__pip sheet__pip--lead">★★★</span>Warlord<span class="sheet__pip sheet__pip--trail">★★★</span></span>
+          <span class="sheet__subtitle">Human · Warrior</span>
+        </div>
+      </div>
+
+      <div class="card" data-stage="5">
+        <span class="card__meta">Stage 5 · final · indexes 40+ · levels 110+</span>
+        <div class="sheet__title">
+          <span class="sheet__name">Hiro</span>
+          <span class="sheet__honorific"><span class="sheet__pip sheet__pip--lead">★★★</span>Ascendant<span class="sheet__pip sheet__pip--trail">★★★</span></span>
+          <span class="sheet__subtitle">Human · Warrior</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>

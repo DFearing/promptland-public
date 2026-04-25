@@ -8,7 +8,14 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "proxy": "node tools/claude-proxy/server.mjs"
+    "proxy": "node tools/claude-proxy/server.mjs",
+    "pixel-gen": "node tools/pixel-gen/server.mjs",
+    "sim": "tsx tools/sim/sim.ts",
+    "sim:warrior": "tsx tools/sim/sim.ts tools/sim/profiles/warrior-quick.json",
+    "sim:mage": "tsx tools/sim/sim.ts tools/sim/profiles/mage-midgame.json",
+    "sim:long": "tsx tools/sim/sim.ts tools/sim/profiles/long-haul.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",
@@ -29,8 +36,10 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.5.0",
+    "tsx": "^4.21.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",
-    "vite": "^8.0.9"
+    "vite": "^8.0.9",
+    "vitest": "^4.1.5"
   }
 }

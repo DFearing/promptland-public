@@ -11,20 +11,23 @@ const ARCHETYPES: ItemArchetype[] = [
     kind: 'consumable',
     value: 16,
     stackable: true,
-    effect: { kind: 'heal', amount: 8 },
+    effect: { kind: 'heal' },
+    size: 'lesser',
   },
   {
     id: 'neural_cap',
     kind: 'consumable',
     value: 20,
     stackable: true,
-    effect: { kind: 'restore-magic', amount: 6 },
+    effect: { kind: 'restore-magic' },
+    size: 'lesser',
   },
   {
     id: 'shock_baton',
     kind: 'equipment',
     value: 10,
     slot: 'weapon',
+    damageFamily: 'electric',
     bonuses: { attack: 1 },
   },
   {
@@ -32,6 +35,7 @@ const ARCHETYPES: ItemArchetype[] = [
     kind: 'equipment',
     value: 30,
     slot: 'weapon',
+    damageFamily: 'slash',
     bonuses: { attack: 2 },
   },
   {
@@ -39,6 +43,7 @@ const ARCHETYPES: ItemArchetype[] = [
     kind: 'equipment',
     value: 46,
     slot: 'weapon',
+    damageFamily: 'fire',
     bonuses: { attack: 3 },
   },
   {
@@ -68,6 +73,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 35,
     stackable: true,
     spellId: 'overload',
+    level: 1,
   },
   {
     id: 'daemon_icepick',
@@ -75,6 +81,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 18,
     stackable: true,
     spellId: 'icepick',
+    level: 1,
   },
   {
     id: 'daemon_patch',
@@ -82,6 +89,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 22,
     stackable: true,
     spellId: 'patch_kit',
+    level: 1,
   },
   {
     id: 'daemon_extract',
@@ -89,6 +97,38 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 90,
     stackable: true,
     spellId: 'extract',
+    level: 1,
+  },
+
+  // ── Buff implants ──────────────────────────────────────────────────────
+  {
+    id: 'nutrichip_implant',
+    kind: 'equipment',
+    value: 85,
+    slot: 'amulet',
+    bonuses: { hungerSlow: 0.35 },
+  },
+  {
+    id: 'neural_relaxant_dose',
+    kind: 'equipment',
+    value: 95,
+    slot: 'amulet',
+    bonuses: { restBoost: 0.4 },
+  },
+
+  // ── Curated (legendary / artifact) ─────────────────────────────────────────
+  // Pre-release prototype chipset. Excluded from background loot rolls; only
+  // drops from curated encounters or bespoke LLM hooks. Fold it into the head
+  // slot so it reads as a neural interface rather than a weapon.
+  {
+    id: 'prototype_os9_chipset',
+    kind: 'equipment',
+    value: 1400,
+    weight: 1,
+    slot: 'head',
+    bonuses: { attack: 2, defense: 2, intelligence: 3, dexterity: 1 },
+    requirements: { intelligence: 12, level: 6 },
+    curated: true,
   },
 ]
 
@@ -160,6 +200,23 @@ const FLAVORS: Record<string, ItemFlavor> = {
   daemon_extract: {
     name: 'Daemon: Extract',
     description: 'Extraction protocol. Burns out after the door closes.',
+  },
+  nutrichip_implant: {
+    name: 'NutriChip Implant',
+    description:
+      'A subdermal wafer that leaks calorie-analogue into the bloodstream. The body stops nagging you about lunch.',
+  },
+  neural_relaxant_dose: {
+    name: 'Neural Relaxant Dose',
+    description:
+      'A slow-release cortical patch. Downtime snaps into repair time; you wake up sharper than you went down.',
+  },
+
+  // Curated / legendary — lore hook seeds the LLM expansion on first drop.
+  prototype_os9_chipset: {
+    name: 'Prototype OS-9 Chipset',
+    description:
+      'A sliver of unreleased silicon stamped with a corp logo nobody recognises. It runs warm even unplugged, and the city feels a little quieter when you hold it.',
   },
 }
 

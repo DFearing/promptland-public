@@ -11,20 +11,23 @@ const ARCHETYPES: ItemArchetype[] = [
     kind: 'consumable',
     value: 16,
     stackable: true,
-    effect: { kind: 'heal', amount: 8 },
+    effect: { kind: 'heal' },
+    size: 'lesser',
   },
   {
     id: 'psi_lozenge',
     kind: 'consumable',
     value: 20,
     stackable: true,
-    effect: { kind: 'restore-magic', amount: 6 },
+    effect: { kind: 'restore-magic' },
+    size: 'lesser',
   },
   {
     id: 'service_pistol',
     kind: 'equipment',
     value: 12,
     slot: 'weapon',
+    damageFamily: 'pierce',
     bonuses: { attack: 1 },
   },
   {
@@ -32,6 +35,7 @@ const ARCHETYPES: ItemArchetype[] = [
     kind: 'equipment',
     value: 32,
     slot: 'weapon',
+    damageFamily: 'fire',
     bonuses: { attack: 2 },
   },
   {
@@ -39,6 +43,7 @@ const ARCHETYPES: ItemArchetype[] = [
     kind: 'equipment',
     value: 48,
     slot: 'weapon',
+    damageFamily: 'electric',
     bonuses: { attack: 3 },
   },
   {
@@ -68,6 +73,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 18,
     stackable: true,
     spellId: 'psi_bolt',
+    level: 1,
   },
   {
     id: 'psi_charge_storm',
@@ -75,6 +81,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 35,
     stackable: true,
     spellId: 'mind_storm',
+    level: 1,
   },
   {
     id: 'psi_charge_mend',
@@ -82,6 +89,7 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 22,
     stackable: true,
     spellId: 'bioregen',
+    level: 1,
   },
   {
     id: 'psi_charge_beam_out',
@@ -89,6 +97,42 @@ const ARCHETYPES: ItemArchetype[] = [
     value: 90,
     stackable: true,
     spellId: 'beam_out',
+    level: 1,
+  },
+
+  // ── Buff modules ───────────────────────────────────────────────────────
+  {
+    id: 'ration_synth_module',
+    kind: 'equipment',
+    value: 85,
+    slot: 'amulet',
+    bonuses: { hungerSlow: 0.35 },
+  },
+  {
+    id: 'circadian_regulator',
+    kind: 'equipment',
+    value: 95,
+    slot: 'amulet',
+    bonuses: { restBoost: 0.4 },
+  },
+
+  // ── Curated (legendary / artifact) ─────────────────────────────────────────
+  // Fleet decoration awarded posthumously to a captain who held a failing
+  // bridge alone. Amulet slot so it reads as a worn honour rather than an
+  // offensive tool. Excluded from background loot rolls.
+  {
+    id: 'captains_medal_of_valor',
+    kind: 'equipment',
+    value: 1300,
+    weight: 1,
+    slot: 'amulet',
+    bonuses: { defense: 3, charisma: 3, wisdom: 2, constitution: 1 },
+    // Note: EquipRequirements doesn't include charisma — use wisdom as
+    // the "earned through service" gate instead. Keeps the bonus list
+    // (which allows all stats) reading as the captaincy reward while
+    // staying inside the schema.
+    requirements: { wisdom: 10, level: 6 },
+    curated: true,
   },
 ]
 
@@ -160,6 +204,23 @@ const FLAVORS: Record<string, ItemFlavor> = {
   psi_charge_beam_out: {
     name: 'Psi-Charge: Beam-Out',
     description: 'A transit-lock keyed to your last safe anchor.',
+  },
+  ration_synth_module: {
+    name: 'Ration Synth Module',
+    description:
+      'A palm-sized synth pack that trickles nutrients on-demand. Suppresses appetite without spoiling real meals.',
+  },
+  circadian_regulator: {
+    name: 'Circadian Regulator',
+    description:
+      'Wrist-worn field driver keyed to the crew-cycle. Recovery phases hit harder and land quicker.',
+  },
+
+  // Curated / legendary — lore hook seeds the LLM expansion on first drop.
+  captains_medal_of_valor: {
+    name: "Captain's Medal of Valor",
+    description:
+      'A Fleet decoration — a small star of cold alloy, the ribbon frayed. The engraved name has been rubbed smooth by a thumb that no longer lives.',
   },
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { rarityColor, type Rarity } from '../items'
 
 interface Props {
   open: boolean
@@ -7,6 +8,18 @@ interface Props {
   anchor: DOMRect | null
   onClose: () => void
   children: ReactNode
+  /** Tint the panel bg with the rarity color at low opacity. Common stays
+   *  neutral (no tint applied) so only uncommon+ draws a visible wash. */
+  rarity?: Rarity
+}
+
+/** Build a low-opacity rarity tint layered on the normal panel bg. Returns
+ *  null for common (and unknown rarities) so the caller can skip setting a
+ *  custom background altogether. Mix is kept at 12% — enough for the eye
+ *  to register the tier without crushing text contrast. */
+function rarityTintBg(rarity?: Rarity): string | null {
+  if (!rarity || rarity === 'common') return null
+  return `color-mix(in srgb, ${rarityColor(rarity)} 12%, var(--bg-1))`
 }
 
 const POPOVER_MIN_WIDTH = 280
@@ -19,7 +32,7 @@ const MAX_HEIGHT = 360
 // and return. Cancelled as soon as the pointer enters the panel.
 const AUTO_DISMISS_MS = 1500
 
-export default function Popover({ open, anchor, onClose, children }: Props) {
+export default function Popover({ open, anchor, onClose, children, rarity }: Props) {
   const panelRef = useRef<HTMLDivElement>(null)
   const dismissTimerRef = useRef<number | null>(null)
 
@@ -107,9 +120,28 @@ export default function Popover({ open, anchor, onClose, children }: Props) {
   }
   if (left < MARGIN) left = MARGIN
 
+  const tint = rarityTintBg(rarity)
+  // Always list background + borderColor in the style object so React sees
+  // them as managed keys and will clear any stale inline values when the
+  // popover re-renders with a different subject's rarity. Previously we only
+  // wrote them when `tint` was non-null; going from a legendary popover to a
+  // common one left the gold background/border in the DOM because React's
+  // style diff only overwrites keys that are present in the *new* style
+  // object. Explicit empty-string "" unsets the inline property and lets
+  // the .popover CSS rule (neutral var(--bg-1) / var(--line-3)) take over.
   const style: React.CSSProperties = flipUp
-    ? { left, bottom: viewportH - anchor.top + MARGIN }
-    : { left, top: anchor.bottom + MARGIN }
+    ? {
+        left,
+        bottom: viewportH - anchor.top + MARGIN,
+        background: tint ?? '',
+        borderColor: tint ? rarityColor(rarity!) : '',
+      }
+    : {
+        left,
+        top: anchor.bottom + MARGIN,
+        background: tint ?? '',
+        borderColor: tint ? rarityColor(rarity!) : '',
+      }
 
   return createPortal(
     <div
@@ -149,7 +181,6 @@ export default function Popover({ open, anchor, onClose, children }: Props) {
           text-transform: uppercase;
           text-shadow: var(--glow-sm);
         }
-        .popover__title--room { color: var(--magic); }
         .popover__title--mob { color: var(--bad); }
         .popover__title--item { color: var(--good); }
         .popover__title--name { color: var(--accent); }

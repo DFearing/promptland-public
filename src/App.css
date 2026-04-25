@@ -98,6 +98,73 @@
   flex-direction: column;
 }
 
+/* Sheet header — name + honorific title + subtitle. The honorific fades
+   from dim to accent through four stages and picks up 1–3 ★ pips at the
+   same thresholds formatActorName uses (title-index 5 / 15 / 25). Stage 5
+   (LLM-generated tier, idx 40+) swaps the visual positions of name and
+   title so the title reads as the dominant line. Stage is set via
+   data-stage on .sheet__title. Pip glyphs match the mob-rarity system
+   (★/★★/★★★) rather than inventing a separate language. */
+.sheet__title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+}
+.sheet__name {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  color: var(--accent-hot);
+  text-shadow: var(--glow-sm);
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+.sheet__honorific {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  line-height: 1;
+}
+.sheet__pip { letter-spacing: 0.05em; }
+.sheet__pip--lead  { margin-right: 0.4em; }
+.sheet__pip--trail { margin-left: 0.4em; }
+.sheet__subtitle {
+  margin-top: var(--sp-2);
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+.sheet__subtitle-sep { color: var(--fg-3); }
+
+.sheet__title[data-stage="1"] .sheet__honorific { color: var(--fg-3); opacity: 0.5; }
+.sheet__title[data-stage="2"] .sheet__honorific { color: var(--fg-2); }
+.sheet__title[data-stage="3"] .sheet__honorific { color: var(--fg-1); }
+.sheet__title[data-stage="4"] .sheet__honorific {
+  color: var(--accent-hot);
+  text-shadow: var(--glow-sm);
+}
+
+/* Stage 5 — the final flip. Title takes the display slot; name drops below
+   in a calmer weight. The flip itself is the signal, so no decorator. */
+.sheet__title[data-stage="5"] .sheet__honorific {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  color: var(--accent-hot);
+  text-shadow: var(--glow-md);
+  letter-spacing: 0.04em;
+  text-transform: none;
+  line-height: 1;
+  order: 1;
+}
+.sheet__title[data-stage="5"] .sheet__name {
+  font-size: var(--text-base);
+  color: var(--fg-2);
+  text-shadow: none;
+  order: 2;
+}
+.sheet__title[data-stage="5"] .sheet__subtitle { order: 3; }
+.sheet__title[data-stage="5"] .sheet__pip { display: none; }
+
 /* Narrow viewports stack into a single column. Panels get explicit sizes so
    nothing collapses to zero height. The max-width cap stops applying here —
    mobile layouts want the whole width. */

@@ -38,5 +38,7 @@ export const FANTASY_CONTENT: WorldContent = {
     { itemId: 'greater_healing_draught', price: 30, maxStock: 3 },
     { itemId: 'mana_tincture', price: 18, maxStock: 4 },
     { itemId: 'mana_crystal', price: 25, maxStock: 3 },
+    { itemId: 'sated_wanderer_pendant', price: 120, maxStock: 1 },
+    { itemId: 'stone_of_deep_rest', price: 140, maxStock: 1 },
   ],
 }

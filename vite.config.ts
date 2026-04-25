@@ -66,5 +66,10 @@ export default defineConfig({
   plugins: [react(), devLogPlugin()],
   define: {
     __GIT_BRANCH__: JSON.stringify(gitBranchName()),
+    // UTC timestamp of the build. The About tab renders this as a
+    // "built YYYY-MM-DD (N days ago)" line. Uses Date.now() so dev
+    // servers get a fresh timestamp each cold start and prod builds
+    // get a stamp of the exact moment `vite build` ran.
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },
 })

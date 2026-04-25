@@ -3,25 +3,34 @@ import CharacterViewport from './components/CharacterViewport'
 import CharacterTabs from './components/CharacterTabs'
 import CombatTargetPanel from './components/CombatTargetPanel'
 import DevPanel from './components/DevPanel'
+import FindingPathOverlay from './components/FindingPathOverlay'
+import FirstTimeDialog from './components/FirstTimeDialog'
 import MapPanel from './components/MapPanel'
+import NoLLMDialog from './components/NoLLMDialog'
+import PortalSelectDialog from './components/PortalSelectDialog'
 import RoomDescPanel from './components/RoomDescPanel'
 import LogPanel from './components/LogPanel'
 import CharacterCreation from './components/CharacterCreation'
 import CharacterRoster, { type RosterEntry } from './components/CharacterRoster'
 import type { DevCommand } from './components/DevPanel'
+import Landing from './components/Landing'
 import Settings from './components/Settings'
 import Topbar from './components/Topbar'
 import TooltipLayer from './components/TooltipLayer'
 import { generateShape, roomKey, visitedKey, type AreaKind } from './areas'
-import type { Character, DeathRecord, InventoryItem } from './character'
+import type { PortalDestination } from './areas/types'
+import type { Character, DeathRecord } from './character'
 import {
   LAST_AUTHORED_TITLE_INDEX,
   currentTitleIndex,
+  formatActorName,
   levelForTitleIndex,
   migrateCharacter,
   resolveTitle,
 } from './character'
 import {
+  AREA_LEVEL_OFFSET_MIN,
+  AREA_LEVEL_OFFSET_RANGE,
   areaGenTemplate,
   classTitleTemplate,
   countGeneratedAreas,
@@ -35,32 +44,49 @@ import {
   rehydrateBespokeItems,
   rehydrateBespokeMobs,
   rehydrateGeneratedAreas,
+  requestCuratedItemFlavor,
   saveGeneratedAreaGraph,
   storeGeneratedArea,
 } from './llm'
 import type { Mob } from './mobs'
-import { getVerbs } from './combat'
-import { applyCondition, clearConditions } from './conditions'
-import { defeatLingerMs, mobDisplayName, rarityValueMult, type Rarity } from './items'
+import { Rng } from './rng'
+import { damageVerb, formatAttackLog } from './combat'
+import { applyCondition, clearConditions, tickConditions } from './conditions'
+import { defeatLingerMs, mobDisplayName, type Rarity } from './items'
 import type { LogEntry } from './log'
+import { spawnGatewayGuardian } from './game/gatewayGuardian'
 import { spawn } from './mobs'
 import { uuid } from './util/uuid'
 import {
+  AREA_GEN_TIMEOUT_TICKS,
   INITIAL_STATE,
   TICK_MS,
+  addItemToInventory,
+  applyDeathPenalty,
   applyOneLevel,
+  beginFight,
+  equipLogEntry,
+  formatGoldPickupLog,
+  formatItemPickupLog,
+  formatMeditateSummaryLog,
+  formatMobDefeatLog,
+  formatMobSelfHealLog,
+  formatRestSummaryLog,
   maybeAutoConsume,
   runTick,
   seedLog,
   type GameState,
 } from './game'
+import { castSpell, getSpellList } from './spells'
 import { IndexedDBStorage, type SaveRecord, type Storage } from './storage'
 import type { WorldContent } from './worlds'
 import {
   EffectsOverlay,
+  deathDurationMs,
   deriveElementEvents,
   deriveEvents,
   deriveFieldEvents,
+  levelUpDurationMs,
   type EffectEvent,
   type ElementFxEvent,
   type FieldFxEvent,
@@ -74,6 +100,12 @@ import './App.css'
 
 const EVENT_CAP = 50
 const DEV_OPEN_KEY = 'promptland.devPanel.open'
+// One-shot landing-page dismissal flag. When the user clicks "Enter
+// Promptland" we write '1' here so future boots skip the landing and
+// go straight to the roster. Settings → About exposes a "Show landing
+// again" link that clears this key + jumps back to the landing phase
+// so users can revisit the pitch deliberately.
+const LANDING_SEEN_KEY = 'promptland.landing.seen'
 
 // Baseline linger before rarity scaling. Actual duration per mob comes
 // from `defeatLingerMs(mob.rarity)` — see the useEffect that schedules the
@@ -84,6 +116,7 @@ const DEV_OPEN_KEY = 'promptland.devPanel.open'
 // button to eyeball every style in one pass. Pulls from the current world so
 // names / rarities / conditions render against the real content library.
 function buildLogSamples(character: Character, world: WorldContent): LogEntry[] {
+  const rng = Rng.random()
   const charName = character.name
   const mobTemplate = world.mobs[0]
   const mobName = mobTemplate?.name ?? 'Cave Rat'
@@ -96,12 +129,14 @@ function buildLogSamples(character: Character, world: WorldContent): LogEntry[] 
   const item = world.items[0]
   const itemName = item?.name ?? 'Rat Tail'
   const itemId = item?.id ?? 'rat_tail'
-  const conditionDef = world.conditions[0]
-  const conditionName = conditionDef?.name ?? 'Poisoned'
-  const conditionId = conditionDef?.id ?? 'poisoned'
-  const conditionPolarity = conditionDef?.polarity ?? 'debuff'
 
   const severities = ['grazing', 'light', 'solid', 'heavy', 'severe', 'critical'] as const
+  // Hand-picked damage amounts chosen so each severity tier lands
+  // deterministically — each amount is well inside that tier's band so
+  // the damageVerb call below reliably classifies the sample into the
+  // intended tier. Tuned against a 30-HP target so mobName→mob-HP math
+  // is stable across worlds.
+  const SAMPLE_TARGET_MAX_HP = 30
   const sampleAmounts: Record<(typeof severities)[number], number> = {
     grazing: 1,
     light: 2,
@@ -110,28 +145,17 @@ function buildLogSamples(character: Character, world: WorldContent): LogEntry[] 
     severe: 14,
     critical: 22,
   }
-  // Pull a few real verbs per tier from the world's verb library so the
-  // sample log shows the actual variety the player will see in combat,
-  // not a single hand-picked specimen per tier. Capped at 4 to keep the
-  // sample dump readable.
-  const VERBS_PER_TIER = 4
-  const sampleVerbsByTier: Record<(typeof severities)[number], string[]> = {
-    grazing: [], light: [], solid: [], heavy: [], severe: [], critical: [],
+  const sampleAtk: Record<(typeof severities)[number], number> = {
+    grazing: 3, light: 5, solid: 8, heavy: 12, severe: 18, critical: 26,
   }
-  for (const sev of severities) {
-    const all = getVerbs(character.worldId, sev)
-    const slice = all.slice(0, VERBS_PER_TIER).map((v) =>
-      sev === 'critical' ? `${v}!` : v,
-    )
-    sampleVerbsByTier[sev] = slice
-  }
+  const sampleDef = 3
 
   const rarities = ['common', 'uncommon', 'rare', 'epic', 'legendary'] as const
 
   const base: LogEntry[] = [
     // Chapters / area / narrative / system / dialogue —
     { kind: 'chapter', text: `${charName} stirs.`, meta: { name: charName } },
-    { kind: 'area', text: world.startingArea.name },
+    { kind: 'area', text: world.startingArea.name, areaId: world.startingArea.id },
     {
       kind: 'narrative',
       text: `${charName} stands in the ${roomName}. ${roomDesc}`,
@@ -164,99 +188,124 @@ function buildLogSamples(character: Character, world: WorldContent): LogEntry[] 
     { kind: 'dialogue', text: '...the dice are already thrown.' },
   ]
 
-  // One damage entry per severity per direction — the verb is picked at
-  // random from the per-tier verb pool so sample dumps show variety
-  // without listing every single verb. ATK/DEF populated so the "Log
-  // numbers" mode surfaces the combat-math breakdown in the dump too.
-  const sampleAtk: Record<(typeof severities)[number], number> = {
-    grazing: 3, light: 5, solid: 8, heavy: 12, severe: 18, critical: 26,
-  }
-  const sampleDef = 3
-  const pickVerb = (sev: (typeof severities)[number]): string => {
-    const pool = sampleVerbsByTier[sev]
-    if (pool.length === 0) return 'hits'
-    return pool[Math.floor(Math.random() * pool.length)]
-  }
-  for (const sev of severities) {
-    const verb = pickVerb(sev)
+  // Ambush / stealth first-strike previews. Match the wording used in the
+  // live explore() branch in tick.ts — NPC-greeting actor form for the
+  // character so the sample reflects whatever tier the character is at.
+  {
+    const greetingName = formatActorName(character, 'npc-greeting')
     base.push({
-      kind: 'damage',
-      text: `${charName} ${verb} the ${mobName}.`,
-      amount: sampleAmounts[sev],
-      severity: sev,
-      meta: {
-        name: charName,
-        mobName,
-        verb,
-        severity: sev,
-        attackPower: sampleAtk[sev],
-        defense: sampleDef,
-      },
+      kind: 'narrative',
+      text: `The ${mobName} catches ${greetingName} off guard! (Ambush — 2× damage)`,
+      meta: { name: greetingName, mobName },
     })
-  }
-  for (const sev of severities) {
-    const verb = pickVerb(sev)
     base.push({
-      kind: 'damage',
-      text: `The ${mobName} ${verb} ${charName}.`,
-      amount: sampleAmounts[sev],
-      severity: sev,
-      meta: {
-        name: charName,
-        mobName,
-        verb,
-        severity: sev,
-        attackPower: sampleAtk[sev],
-        defense: sampleDef,
-      },
+      kind: 'narrative',
+      text: `${greetingName} catches the ${mobName} off guard! (Ambush — 2× damage)`,
+      meta: { name: greetingName, mobName },
+    })
+    base.push({
+      kind: 'narrative',
+      text: `${greetingName} slips from shadow and strikes the ${mobName} first! (Stealth — 3× damage)`,
+      meta: { name: greetingName, mobName, stealth: true },
     })
   }
 
-  // Heal / loot (gold + items of each rarity) / consume / equip.
-  base.push(
-    {
-      kind: 'heal',
-      text: `${charName} catches their breath.`,
-      amount: 5,
-      meta: { name: charName },
-    },
-    {
-      kind: 'heal',
-      text: `${charName}'s Lesser Heal knits flesh together.`,
-      amount: 6,
-      meta: { name: charName, spellName: 'Lesser Heal' },
-    },
-    {
-      kind: 'heal',
-      text: `The ${mobName} patches itself up.`,
-      amount: 8,
-      meta: { mobName },
-    },
-    {
-      kind: 'heal',
-      text: `${charName} centers their breathing. (+8 MP · +2 HP)`,
-      meta: { name: charName },
-    },
-    // Mob-defeat + XP award — the real loot line the tick loop emits
-    // when a fight resolves. Missing from the sample meant the "Log
-    // numbers" XP tag path never exercised in the dev dump.
-    {
+  // One damage entry per severity per direction. Severity + verb are
+  // resolved via the real `damageVerb` selector, then the LogEntry is
+  // built through the shared `formatAttackLog` helper that the live
+  // combat loop uses — so the sample's wording and meta shape can't
+  // drift from real damage entries.
+  for (const target of ['mob', 'char'] as const) {
+    for (const sev of severities) {
+      const amount = sampleAmounts[sev]
+      const atk = sampleAtk[sev]
+      // Inputs tuned so damageVerb lands in the intended tier. For char→
+      // mob we compare against the sampled mob max HP; for mob→char,
+      // against the character's maxHp. damageVerb may still pick a
+      // different tier if the ratio disagrees — in practice the sample
+      // amounts / target max-HPs were chosen so the tiers align.
+      const targetMax = target === 'mob' ? SAMPLE_TARGET_MAX_HP : character.maxHp
+      const { severity, verb } = damageVerb(amount, targetMax, character.worldId, undefined, rng)
+      base.push(
+        formatAttackLog({
+          direction: target === 'mob' ? 'char-to-mob' : 'mob-to-char',
+          characterName: charName,
+          mobName,
+          verb,
+          severity,
+          amount,
+          attackPower: atk,
+          defense: sampleDef,
+        }),
+      )
+      // Avoid unused-var warning on `sev` when the picker disagrees.
+      void sev
+    }
+  }
+
+  // Heal samples — a heal spell cast by the character (real `castSpell`
+  // path so "knits flesh …" reflects the actual spell text), plus a
+  // hardcoded mob self-heal / rest / meditate beat for the entries the
+  // engine emits from tick-state handlers (not worth a full helper
+  // extraction right now).
+  const healSpell = getSpellList(character.worldId).find(
+    (s) => s.effect.kind === 'heal',
+  )
+  if (healSpell) {
+    const mockCaster: Character = {
+      ...character,
+      hp: 1,
+      magic: character.maxMagic,
+      spells: [healSpell.id, ...(character.spells ?? [])],
+    }
+    const cast = castSpell({ character: mockCaster, world, spell: healSpell, rng })
+    for (const entry of cast.entries) base.push(entry)
+  }
+  // Rest summary — real helper, same string the rest handler emits at
+  // the end of a rest state.
+  base.push(formatRestSummaryLog(charName, 5, character.maxHp))
+  // Mob self-heal line — real helper used by both fight-round branches.
+  if (mobTemplate) {
+    const sampleMob = spawn(mobTemplate)
+    base.push(formatMobSelfHealLog(sampleMob.name, 8))
+    // Mob-defeat "falls" line — real helper. Meta carries mobId /
+    // mobRarity / curated / mobDefeat so the journal derivation path
+    // and the renderer's bracketed-mob link stay exercised here too.
+    base.push(formatMobDefeatLog({
+      mob: sampleMob,
+      awardedXp: 12,
+      areaId: world.startingArea.id,
+      roomName,
+      rng,
+    }))
+  } else {
+    base.push({
       kind: 'loot',
       text: `The ${mobName} falls. (+12 XP)`,
       meta: { mobName, xpText: '+12 XP', mobDefeat: true },
-    },
-    {
-      kind: 'loot',
-      text: `${charName} pockets 12 gold.`,
-      meta: { name: charName, goldAmount: 12, goldText: '12 gold' },
-    },
-  )
-  for (const r of rarities) {
-    base.push({
-      kind: 'loot',
-      text: `${charName} gathers ${itemName}.`,
-      meta: { name: charName, itemId, itemName, itemRarity: r },
     })
+  }
+  // Meditate end-of-session summary — mix of MP + HP so the sample
+  // exercises the "both pools" branch, which is the richest line.
+  base.push(formatMeditateSummaryLog(charName, 8, Math.max(character.maxMagic, 20), 2, character.maxHp))
+  // Gold pickup — real helper with the manifest's currency name.
+  const manifest = getWorldManifest(character.worldId)
+  const currency = (manifest?.currencyName ?? 'gold').toLowerCase()
+  base.push(formatGoldPickupLog(charName, 12, currency, rng))
+  // Item pickups at each rarity — real helper, so consumables still
+  // paint in HP / MP tokens and the pickup meta shape matches live drops.
+  if (item) {
+    for (const r of rarities) {
+      base.push(
+        formatItemPickupLog({
+          characterName: charName,
+          def: item,
+          rarity: r,
+          qty: 1,
+          areaId: world.startingArea.id,
+        }),
+      )
+    }
   }
   // Consume samples — drive the real auto-consume logic with mocked-out
   // characters (forced-low stats, single-item inventory) so the sample log
@@ -292,60 +341,79 @@ function buildLogSamples(character: Character, world: WorldContent): LogEntry[] 
     const result = maybeAutoConsume(mockMana, world)
     if (result) base.push(result.entry)
   }
+  // Equip samples — build two real EquipEvents and pass them through
+  // `equipLogEntry`, the same function the auto-equip path calls. Any
+  // change to equip wording or meta lands in both places.
   base.push(
-    {
-      kind: 'equip',
-      text: `${charName} wields the ${itemName}.`,
+    equipLogEntry(character, {
       slot: 'weapon',
-      // Sample meta now mirrors what real equip events carry — itemId +
-      // itemRarity light up the bracketed [Item] link in the renderer.
-      meta: { name: charName, itemId, itemName, itemRarity: 'common' },
-    },
-    {
-      kind: 'equip',
-      text: `${charName} dons the ${itemName}.`,
+      itemName,
+      itemId,
+      itemRarity: 'common',
+    }),
+    equipLogEntry(character, {
       slot: 'armor',
-      meta: { name: charName, itemId, itemName, itemRarity: 'common' },
-    },
+      itemName,
+      itemId,
+      itemRarity: 'common',
+    }),
   )
 
-  // Death losses.
-  base.push(
-    {
-      kind: 'death-loss',
-      text: `${charName} loses 42 XP.`,
-      meta: { name: charName, xpText: '42 XP' },
-    },
-    {
-      kind: 'death-loss',
-      text: `${charName} drops the ${itemName}.`,
-      meta: { name: charName, itemId, itemName, itemRarity: 'common' },
-    },
-  )
+  // Death losses — real engine. Feed `applyDeathPenalty` a mocked
+  // character with xp / gold / one equipped weapon so all three
+  // death-loss branches (equipment destroyed, XP lost, gold scattered)
+  // fire and land in the sample log.
+  if (item) {
+    const mockCorpse: Character = {
+      ...character,
+      xp: Math.max(character.xp, 168),
+      gold: Math.max(character.gold, 40),
+      equipped: {
+        ...character.equipped,
+        weapon: {
+          id: `sample-equip-${item.id}`,
+          archetypeId: item.id,
+          name: item.name,
+          quantity: 1,
+          rarity: 'common',
+          level: 1,
+        },
+      },
+    }
+    const penalty = applyDeathPenalty(mockCorpse, rng)
+    for (const e of penalty.entries) base.push(e)
+  }
 
-  // Condition lifecycle.
-  base.push(
-    {
-      kind: 'condition-gain',
-      text: `${charName} is ${conditionName.toLowerCase()}.`,
-      conditionId,
-      polarity: conditionPolarity,
-      meta: { name: charName, conditionName },
-    },
-    {
-      kind: 'condition-tick',
-      text: `Poison MAULS ${charName}.`,
-      amount: 2,
-      conditionId,
-      meta: { name: charName, conditionName },
-    },
-    {
-      kind: 'condition-end',
-      text: `${charName} shakes off ${conditionName}.`,
-      conditionId,
-      meta: { name: charName, conditionName },
-    },
-  )
+  // Condition lifecycle — use the real engine. Pick a DoT condition if
+  // the world has one (so tickConditions emits a condition-tick damage
+  // line); fall back to whichever condition is available.
+  const dotCondition =
+    world.conditions.find((c) => c.kind === 'dot') ?? world.conditions[0]
+  if (dotCondition) {
+    const gain = applyCondition(character, world, dotCondition.id, `the ${mobName}`)
+    if (gain.entry) base.push(gain.entry)
+    // Force remainingTicks=1 so the single tickConditions call emits both
+    // a condition-tick (DoT damage) AND a condition-end on the same pass.
+    // Start with plenty of HP so the DoT cap (hp > 1) doesn't swallow the
+    // damage line.
+    const primed: Character = {
+      ...gain.character,
+      hp: Math.max(10, character.hp),
+      conditions: gain.character.conditions.map((c) =>
+        c.id === dotCondition.id ? { ...c, remainingTicks: 1 } : c,
+      ),
+    }
+    const ticked = tickConditions(primed, world, rng)
+    for (const e of ticked.entries) base.push(e)
+  }
+  // Clear-conditions narrative — emitted by Resting in a safe room.
+  const cleared = clearConditions({
+    ...character,
+    conditions: dotCondition
+      ? [{ id: dotCondition.id, remainingTicks: 3 }]
+      : character.conditions,
+  })
+  if (cleared.entry) base.push(cleared.entry)
 
   // System samples — sell, dev commands.
   base.push({
@@ -353,12 +421,19 @@ function buildLogSamples(character: Character, world: WorldContent): LogEntry[] 
     text: `[Dev] Sold 4 items for 38 gold.`,
   })
 
-  // Level-up chapter — fires the levelTo hook so effect derivation would
-  // trigger the fullscreen level-up card if this were a live tick.
+  // Level-up + title-earned chapters — sparkler-decorated celebrations.
+  // Pair them so the dev preview shows them back-to-back (matches the
+  // live ordering: the title-earned line follows immediately after the
+  // level-up that crossed its threshold).
   base.push({
     kind: 'chapter',
     text: `🎉✨⭐ ${charName} rises to level 2! ⭐✨🎉`,
     meta: { name: charName, levelTo: 2 },
+  })
+  base.push({
+    kind: 'chapter',
+    text: `🎉✨⭐ Now everyone's gotta call ${charName} the Pathfinder. ⭐✨🎉`,
+    meta: { name: charName, titleEarned: true, titleText: 'Pathfinder' },
   })
 
   return base
@@ -404,8 +479,36 @@ function saveDevOpen(open: boolean): void {
   }
 }
 
+function hasSeenLanding(): boolean {
+  try {
+    return localStorage.getItem(LANDING_SEEN_KEY) === '1'
+  } catch {
+    // On first boot under a localStorage-denied context we just
+    // skip the landing — no way to record the dismissal, no point
+    // showing it every load.
+    return true
+  }
+}
+
+function markLandingSeen(): void {
+  try {
+    localStorage.setItem(LANDING_SEEN_KEY, '1')
+  } catch {
+    // ignore
+  }
+}
+
+function clearLandingSeen(): void {
+  try {
+    localStorage.removeItem(LANDING_SEEN_KEY)
+  } catch {
+    // ignore
+  }
+}
+
 type Phase =
   | { kind: 'loading' }
+  | { kind: 'landing' }
   | { kind: 'roster' }
   | { kind: 'creating' }
   | { kind: 'playing'; character: Character; log: LogEntry[]; state: GameState; paused: boolean }
@@ -415,6 +518,25 @@ export default function App() {
   const storage = useMemo<Storage>(() => new IndexedDBStorage(), [])
   const [entries, setEntries] = useState<RosterEntry[]>([])
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' })
+  // Post-commit mirror of `phase` so callbacks with empty deps (e.g.
+  // handleDevCommand) can read the latest phase WITHOUT wrapping the
+  // read in a `setPhase((p) => ...)` updater. Putting side effects
+  // (setEvents, soundManager.play, ...) inside a setState updater is
+  // the StrictMode double-invocation footgun — the updater runs twice
+  // in dev, side effects fire twice, banners play twice. Reading
+  // from a ref avoids that entirely.
+  const phaseRef = useRef<Phase>(phase)
+  // Same pattern for `sound` — handleSetVolume / handleToggleMute need
+  // the latest sound state to compute the next snapshot, but doing so
+  // inside a `setSound((prev) => ...)` updater would invoke the
+  // updater twice in StrictMode, calling soundManager.configure +
+  // unlock twice. Reading the ref lets us compute outside any updater.
+  const soundRef = useRef<SoundSettings | null>(null)
+  // doSave is declared later in the render body (it needs state that
+  // isn't defined yet here). The dev-command handler up above reaches
+  // it via this ref, populated by a mirror effect right after doSave's
+  // declaration. Matches the phaseRef / soundRef forward-ref pattern.
+  const doSaveRef = useRef<((c: Character) => void) | null>(null)
   const [effects, setEffects] = useState<Effects>(() => loadEffects())
   const [tickSpeed, setTickSpeed] = useState<TickSpeedId>(() => loadTickSpeed())
   const [sound, setSound] = useState<SoundSettings>(() => loadSoundSettings())
@@ -422,9 +544,22 @@ export default function App() {
   const [fieldEvents, setFieldEvents] = useState<FieldFxEvent[]>([])
   const [elementEvents, setElementEvents] = useState<ElementFxEvent[]>([])
   const [devOpen, setDevOpen] = useState<boolean>(() => loadDevOpen())
+  // Bumped whenever the player navigates away from the play surface
+  // (to roster or Settings). EffectsOverlay watches this and tears down
+  // any active/queued fullscreen effect the instant it changes, so a
+  // level-up card or rare-area banner doesn't keep animating over the
+  // roster grid or the Settings modal. Paired with `soundManager.stopAll()`
+  // so audio tails are cut at the same instant as the visual.
+  const [fxInterruptCounter, setFxInterruptCounter] = useState(0)
   const lastSnapRef = useRef<{
     characterId: string
-    logLength: number
+    /** Full log array, NOT a length — the log has a 200-entry cap, so
+     *  length-based diffs silently miss appends once we hit cap (every new
+     *  entry evicts an older one, length stays constant). Set-identity
+     *  diff (`nextLog.filter(e => !prevSet.has(e))`) is the robust form;
+     *  mirrors the fix already in place for `deriveJournalEntries` inside
+     *  runTick. */
+    log: LogEntry[]
     stateKind: GameState['kind']
     character: Character
   } | null>(null)
@@ -433,19 +568,98 @@ export default function App() {
   // Used by the dev "Sample log" command so dumping ~50 entries at once
   // doesn't slam the player with confetti/screen-flashes/sound stings.
   const suppressFxOnceRef = useRef(false)
-  // Effect-pause: when a fullscreen effect fires (new-area, new-mob, new-item,
-  // generating-area), we pause ticking for the effect duration + 500 ms.
+  // Effect-pause: when a fullscreen blocking effect fires we pause ticking
+  // for the effect duration + a small buffer (see the pauseMs table).
   const effectPauseUntilRef = useRef(0)
+  // Hover-pause: true while the mouse rests on a blocking card. Blocks
+  // the tick loop from resuming even if the scripted pauseMs has
+  // already elapsed, so hovering keeps the card — and the game —
+  // frozen until the user moves off.
+  const blockingHoverRef = useRef(false)
   // In-flight area generation keyed by a params signature that matches the
   // cache hash. Prior implementation keyed on exitRoomKey, but worlds with
   // multiple exits that share generation params (e.g. Millhaven's three
   // eastern exits) would produce identical hashes and bypass the guard —
   // firing a duplicate LLM call while the first was still inflight.
   const areaGenInflightRef = useRef<Set<string>>(new Set())
+  // AbortController for the current in-flight area generation. Used to
+  // cancel the LLM request on timeout or player death. Keyed by the
+  // same sig as areaGenInflightRef.
+  const areaGenAbortRef = useRef<Map<string, AbortController>>(new Map())
   // Post-defeat snapshot of the last mob we fought, rendered over the sprite
   // for DEFEAT_LINGER_MS so the defeat animation has something to shake.
   const [defeatedMob, setDefeatedMob] = useState<Mob | null>(null)
   const lastMobRef = useRef<Mob | null>(null)
+  // Area-transition dialog gate — shown when the player hits an exit tile
+  // that needs generation. 'no-llm' = no LLM configured; 'first-time' =
+  // first gen attempt this session; 'portal-hub' = portal hub selection
+  // dialog. null = no dialog active.
+  const [areaGateDialog, setAreaGateDialog] = useState<'no-llm' | 'first-time' | 'portal-hub' | null>(null)
+  // Mirror ref so the interval callback can read dialog state without
+  // adding it to the effect's dep array (which would restart the timer
+  // on every dialog open/close).
+  const areaGateDialogRef = useRef<'no-llm' | 'first-time' | 'portal-hub' | null>(null)
+  useEffect(() => { areaGateDialogRef.current = areaGateDialog }, [areaGateDialog])
+  // Surface the Portal Hub dialog whenever the game enters portal-hub-select,
+  // independent of the tick interval. The tick-interval gate at the bottom
+  // of the tick callback covers auto-walk entries, but explicit transitions
+  // (dev "Travel to portal hub", D-pad onto the hub) need to surface the
+  // dialog without waiting for — or being blocked by — a tick. The interval
+  // skips entirely while paused, and even unpaused there's a using-room
+  // cadence delay (~1.6s); both made the dialog feel broken.
+  const isPortalHubSelect =
+    phase.kind === 'playing' &&
+    phase.state.kind === 'using-room' &&
+    phase.state.action.kind === 'portal-hub-select'
+  useEffect(() => {
+    if (!isPortalHubSelect) return
+    if (areaGateDialogRef.current) return
+    areaGateDialogRef.current = 'portal-hub'
+    setAreaGateDialog('portal-hub')
+  }, [isPortalHubSelect])
+  // Per-session flag: true after the first-time dialog has been shown or
+  // dismissed. Resets on page refresh (module-level would also work, but
+  // a ref keeps it co-located with the component state it gates).
+  const firstTransitionShownRef = useRef(false)
+  // Epoch ms when the finding-path overlay started. Non-null means the
+  // player defeated a gateway guardian but LLM gen is still running.
+  // Drives the countdown timer in FindingPathOverlay.
+  const [findingPathStart, setFindingPathStart] = useState<number | null>(null)
+  // Keep the phase ref in sync so callbacks can read the latest value
+  // without needing it in their dep list.
+  useEffect(() => {
+    phaseRef.current = phase
+  }, [phase])
+  useEffect(() => {
+    soundRef.current = sound
+  }, [sound])
+
+  // Leaving the play surface (to roster or Settings) must instantly tear
+  // down whatever fullscreen effect is mid-animation — a level-up card or
+  // rare-area banner keeps rendering over the roster otherwise, which
+  // breaks immersion and looks like the game is still running behind the
+  // menu. Bumping the counter signals EffectsOverlay to drop `active` +
+  // `queue` and re-prime `seenRef` from the current events array, so a
+  // return to play doesn't replay the interrupted banner. `stopAll()`
+  // cuts any scheduled audio tail at the same instant.
+  //
+  // Tick pausing is already handled by the main tick effect's early
+  // return (`if (phase.kind !== 'playing') return`) — no extra work
+  // needed there. We also clear `effectPauseUntilRef` so a stale pause
+  // window from before the navigation doesn't stall the first tick when
+  // the player returns.
+  const prevPhaseKindRef = useRef<Phase['kind']>(phase.kind)
+  useEffect(() => {
+    const prevKind = prevPhaseKindRef.current
+    prevPhaseKindRef.current = phase.kind
+    const leftPlay =
+      prevKind === 'playing' && (phase.kind === 'roster' || phase.kind === 'settings')
+    if (!leftPlay) return
+    soundManager.stopAll()
+    effectPauseUntilRef.current = 0
+    setFxInterruptCounter((n) => n + 1)
+  }, [phase.kind])
+
   const playingState = phase.kind === 'playing' ? phase.state : null
   useEffect(() => {
     if (playingState?.kind === 'fighting') {
@@ -469,6 +683,25 @@ export default function App() {
     }
   }, [playingState])
 
+
+  // Detect transition into finding-path: the game just entered
+  // 'generating-area' but it's not the initial entry (the first-time
+  // dialog has been shown and LLM is configured). This means the player
+  // won a gateway fight and gen is still running.
+  const prevStateKindRef = useRef<GameState['kind'] | null>(null)
+  useEffect(() => {
+    const prev = prevStateKindRef.current
+    prevStateKindRef.current = playingState?.kind ?? null
+
+    if (playingState?.kind === 'generating-area' && prev === 'fighting') {
+      setFindingPathStart(Date.now())
+    } else if (playingState?.kind !== 'generating-area' && findingPathStart !== null) {
+      // Left the generating-area state (gen completed, timeout, or
+      // player died). Clear the finding-path overlay.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFindingPathStart(null)
+    }
+  }, [playingState?.kind, findingPathStart])
 
   const reload = useCallback(async (): Promise<RosterEntry[]> => {
     const metas = await storage.saves.list()
@@ -505,6 +738,13 @@ export default function App() {
       if (cancelled) return
       const loaded = await reload()
       if (cancelled) return
+      // First-run gate: show the landing once. On subsequent boots we
+      // skip straight to the normal creating / roster split so returning
+      // users aren't stopped by a pitch screen they've already read.
+      if (!hasSeenLanding()) {
+        setPhase({ kind: 'landing' })
+        return
+      }
       setPhase(loaded.length === 0 ? { kind: 'creating' } : { kind: 'roster' })
     })()
     return () => {
@@ -551,18 +791,53 @@ export default function App() {
     const cadence = Math.max(100, Math.round(TICK_MS[phase.state.kind] / mult))
     const id = setInterval(() => {
       // Effect pause — skip ticking while a fullscreen overlay is active.
+      if (blockingHoverRef.current) return
       if (Date.now() < effectPauseUntilRef.current) return
+      // Area-transition dialog is showing — game is paused until the
+      // player makes a choice.
+      if (areaGateDialogRef.current) return
       setPhase((p) => {
         if (p.kind !== 'playing' || p.paused) return p
         const world = getWorldContent(p.character.worldId)
         if (!world) return p
 
-        // If we're entering a generating-area state and LLM is configured,
-        // fire off the generation. If LLM is not configured, the tick handler
-        // inside runTick will bounce back to exploring with a message.
+        // If we're entering a generating-area state, check pre-conditions
+        // before firing LLM generation. Dialog gates (no-LLM, first-time)
+        // are checked here because the state updater can read the latest
+        // phase snapshot; the dialog is surfaced via a ref-set that a
+        // post-commit effect picks up.
         if (p.state.kind === 'generating-area') {
           const exitKey = p.state.exitRoomKey
           const config = loadLLMConfig()
+
+          // Gate: no LLM configured — show the NoLLMDialog and freeze
+          // in generating-area until the player picks an option.
+          if (!isLLMConfigured(config)) {
+            // Schedule the dialog to show. Using a ref write here
+            // (inside a setState updater) is safe because it's
+            // idempotent and the dialog render reads React state, not
+            // this ref. The ref→state sync effect picks it up.
+            if (!areaGateDialogRef.current) {
+              areaGateDialogRef.current = 'no-llm'
+              // Fire the state update outside the updater to avoid
+              // StrictMode double-invocation issues.
+              queueMicrotask(() => setAreaGateDialog('no-llm'))
+            }
+
+            return p
+          }
+
+          // Gate: first area transition this session — show tutorial
+          // dialog before kicking off generation.
+          if (!firstTransitionShownRef.current) {
+            if (!areaGateDialogRef.current) {
+              areaGateDialogRef.current = 'first-time'
+              queueMicrotask(() => setAreaGateDialog('first-time'))
+            }
+
+            return p
+          }
+
           if (isLLMConfigured(config)) {
             const graph = world.generatedAreaGraph
             if (countGeneratedAreas(graph) < MAX_GENERATED_AREAS) {
@@ -577,11 +852,21 @@ export default function App() {
               // the exit name so sibling exits from the same area produce
               // distinct signatures (and distinct cache hashes) — otherwise
               // all three eastern Millhaven exits would collapse to one area.
-              const sig = manifest && klass && area && exitRoom
+              // Permanent frontiers append a timestamp so each visit
+              // produces a unique signature and bypasses the cache.
+              const baseSig = manifest && klass && area && exitRoom
                 ? `${manifest.id}|${p.character.name}|${p.character.level}|${klass.name}|${area.name}|${exitRoom.name}`
                 : null
+              const sig = baseSig && exitRoom?.permanentFrontier
+                ? `${baseSig}|${Date.now()}`
+                : baseSig
+              // Fire LLM generation if not already inflight. The inflight
+              // guard prevents duplicate calls when the player re-enters
+              // the exit (e.g. after dying to a gateway guardian).
               if (manifest && klass && area && exitRoom && sig && !areaGenInflightRef.current.has(sig)) {
                 areaGenInflightRef.current.add(sig)
+                const abortCtrl = new AbortController()
+                areaGenAbortRef.current.set(sig, abortCtrl)
                 const client = createLLMClient(config)
                 // Pick a kind deterministically from the exit signature so
                 // repeated gens from the same exit hit the cache instead
@@ -594,6 +879,12 @@ export default function App() {
                 // repeated gens reproduce the exact same layout → same
                 // cache hash → cache hit.
                 const shape = generateShape(areaKind, sig)
+                // Roll an aspirational area level 2-3 above the player
+                // so generated content is harder and more rewarding than
+                // the player's current turf.
+                const areaLevel = p.character.level
+                  + AREA_LEVEL_OFFSET_MIN
+                  + Math.floor(Math.random() * AREA_LEVEL_OFFSET_RANGE)
                 void generate(
                   areaGenTemplate,
                   {
@@ -601,6 +892,7 @@ export default function App() {
                     characterName: p.character.name,
                     characterLevel: p.character.level,
                     characterClass: klass.name,
+                    areaLevel,
                     fromAreaName: area.name,
                     fromAreaDescription: '',
                     fromExitName: exitRoom.name,
@@ -632,6 +924,7 @@ export default function App() {
                   { llm: client, cache: storage.entities },
                   {
                     manifestVersion: manifest.version,
+                    signal: abortCtrl.signal,
                     meta: {
                       characterName: p.character.name,
                       characterLevel: p.character.level,
@@ -662,11 +955,20 @@ export default function App() {
                     installMeta,
                   )
                   const newArea = payloadToArea(installed, shape)
-                  // Stamp the character's current level so the dev Area
-                  // tab (and anything else that cares about tier) can
-                  // sort/display without guessing. The payload itself
-                  // doesn't carry level, so do it here where we have it.
-                  newArea.level = p.character.level
+                  // Stamp the rolled area level (player + 2..3) so the
+                  // dev Area tab and mob spawning scale to the aspirational
+                  // difficulty, not the player's current level.
+                  newArea.level = areaLevel
+                  // Record when we generated this area so the dev panel
+                  // can show age. Same epoch as installMeta.generatedAt
+                  // so the cache + in-memory area stay consistent.
+                  newArea.generatedAt = installMeta.generatedAt
+                  // Persist the sampled area kind so the map panel's
+                  // header chip knows whether the reader is in a
+                  // settlement, wilderness, dungeon, or ruin — same value
+                  // the shape generator was seeded with, now carried on
+                  // the Area itself.
+                  newArea.kind = areaKind
                   // Wire the exit room's destination to the new area's start.
                   const [areaId, roomCoords] = exitKey.split('::')
                   void storeGeneratedArea(storage.entities, newArea, manifest.id, installMeta)
@@ -677,11 +979,13 @@ export default function App() {
                     // Add the new area to the world's areas array.
                     const updatedAreas = [...(currentWorld.areas ?? []), newArea]
                     currentWorld.areas = updatedAreas
-                    // Update the exit room's destination.
+                    // Update the exit room's destination — unless it is a
+                    // permanent frontier, which must stay un-wired so the
+                    // next visit triggers a fresh generation.
                     const srcArea = currentWorld.areas.find((a) => a.id === areaId)
                     if (srcArea && roomCoords) {
                       const exitRoom = srcArea.rooms[roomCoords]
-                      if (exitRoom) {
+                      if (exitRoom && !exitRoom.permanentFrontier) {
                         exitRoom.destination = {
                           areaId: newArea.id,
                           x: newArea.startX,
@@ -689,6 +993,21 @@ export default function App() {
                           z: newArea.startZ,
                         }
                         exitRoom.pendingAreaGeneration = false
+                      }
+                      // Portal Hub — append the new area to the hub's
+                      // destination list so the player can revisit it.
+                      // Only portal-hub-triggered gens land here because
+                      // exitRoomKey matches the hub's coords.
+                      if (exitRoom && exitRoom.portalHub) {
+                        const entry = {
+                          areaId: newArea.id,
+                          name: newArea.name,
+                          generatedAt: installMeta.generatedAt,
+                        }
+                        exitRoom.portalDestinations = [
+                          ...(exitRoom.portalDestinations ?? []),
+                          entry,
+                        ]
                       }
                     }
                     // Add a portal back from the new area to the exit room.
@@ -722,7 +1041,7 @@ export default function App() {
                       : [...prev.character.visitedRooms, vk]
                     const entryRoom = newArea.rooms[startKey]
                     let log = prev.log
-                    log = [...log, { kind: 'area' as const, text: newArea.name }]
+                    log = [...log, { kind: 'area' as const, text: newArea.name, areaId: newArea.id, rarity: newArea.rarity }]
                     if (entryRoom) {
                       log = [...log, {
                         kind: 'narrative' as const,
@@ -758,7 +1077,35 @@ export default function App() {
                   })
                 }).finally(() => {
                   areaGenInflightRef.current.delete(sig)
+                  areaGenAbortRef.current.delete(sig)
                 })
+              }
+
+              // Spawn a gateway guardian to mask gen latency. Fires
+              // whether or not we just kicked off gen (gen may already
+              // be inflight from a prior attempt). Only spawns when the
+              // sig could be built — otherwise gen can't run and the
+              // fight would loop forever with no resolution.
+              //
+              // The guardian template pick + ambush roll consume draws
+              // from the character's RNG so this branch replays
+              // identically from a saved seed, same as every other
+              // game-logic choice.
+              if (sig) {
+                const rng = Rng.fromState(p.character.rngState)
+                const guardian = spawnGatewayGuardian(rng)
+                const fightResult = beginFight(p.character, p.log, guardian, { rng })
+
+                return {
+                  kind: 'playing',
+                  character: { ...p.character, rngState: rng.save() },
+                  log: fightResult.log,
+                  state: {
+                    ...fightResult.state,
+                    gatewayExitKey: exitKey,
+                  } as GameState,
+                  paused: p.paused,
+                }
               }
             }
           }
@@ -768,6 +1115,19 @@ export default function App() {
           { character: p.character, log: p.log, state: p.state },
           world,
         )
+
+        // Portal Hub gate — when the tick transitions to portal-hub-select,
+        // surface the selection dialog and freeze ticking until the player
+        // picks an option.
+        if (
+          next.state.kind === 'using-room' &&
+          next.state.action.kind === 'portal-hub-select' &&
+          !areaGateDialogRef.current
+        ) {
+          areaGateDialogRef.current = 'portal-hub'
+          queueMicrotask(() => setAreaGateDialog('portal-hub'))
+        }
+
         return { kind: 'playing', ...next, paused: p.paused }
       })
     }, cadence)
@@ -776,109 +1136,127 @@ export default function App() {
   }, [phase.kind, stateKind, activeTickSpeed, storage])
 
   const handleDevCommand = useCallback((cmd: DevCommand) => {
+    // Save runs outside the setPhase updater because doSave triggers
+    // side effects (storage.save, setSavingFlash, another setPhase) —
+    // doing that inside an updater would fire twice under StrictMode.
+    if (cmd.kind === 'save') {
+      const p = phaseRef.current
+      if (p.kind !== 'playing') return
+      // doSave is declared further down in render order, so reach it
+      // through a ref populated by a mirror effect. Matches the
+      // phaseRef / soundRef pattern for other callbacks with empty
+      // deps that need late-render values.
+      doSaveRef.current?.(p.character)
+      return
+    }
     // Effect-trigger commands don't touch phase; they push fake events into
     // the same queues that gameplay would, so the overlay pipeline renders
     // them identically to a real trigger.
     if (cmd.kind === 'fx-fullscreen') {
+      // Read the current phase via the ref instead of wrapping this in a
+      // setPhase((p) => ...) updater. The updater form gets double-
+      // invoked under React 18 StrictMode in dev, and the side effects
+      // below (setEvents + soundManager.play) would fire twice, making
+      // the banner play twice and the SFX stutter.
+      const p = phaseRef.current
+      if (p.kind !== 'playing') return
       const id = `dev-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-      setPhase((p) => {
-        if (p.kind !== 'playing') return p
-        let synthesized: EffectEvent | null = null
-        switch (cmd.fx) {
-          case 'level-up': {
-            // Reuse the most recent level-up record so the fullscreen card
-            // has real values to render. Falls back to a synthetic one at
-            // the character's current level if none exists yet.
-            const last = p.character.levelUps[p.character.levelUps.length - 1]
-            const record = last ?? {
-              at: Date.now(),
-              from: Math.max(1, p.character.level - 1),
-              to: p.character.level,
-              goldAtLevelUp: p.character.gold,
-              xpGained: 0,
-            }
-            synthesized = {
-              id,
-              kind: 'level-up',
-              record,
-              previousAt: p.character.createdAt,
-              previousGold: 0,
-            }
-            break
+      let synthesized: EffectEvent | null = null
+      switch (cmd.fx) {
+        case 'level-up': {
+          // Reuse the most recent level-up record so the fullscreen card
+          // has real values to render. Falls back to a synthetic one at
+          // the character's current level if none exists yet.
+          const last = p.character.levelUps[p.character.levelUps.length - 1]
+          const record = last ?? {
+            at: Date.now(),
+            from: Math.max(1, p.character.level - 1),
+            to: p.character.level,
+            goldAtLevelUp: p.character.gold,
+            xpGained: 0,
           }
-          case 'death':
-            synthesized = { id, kind: 'death' }
-            break
-          case 'damage-taken':
-            synthesized = {
-              id,
-              kind: 'damage-taken',
-              amount: Math.max(1, Math.round(p.character.maxHp * 0.25)),
-              maxHp: p.character.maxHp,
-            }
-            break
-          case 'damage-dealt':
-            synthesized = { id, kind: 'damage-dealt', amount: 12 }
-            break
-          case 'heal-self':
-            synthesized = {
-              id,
-              kind: 'heal-self',
-              amount: Math.max(1, Math.round(p.character.maxHp * 0.2)),
-              maxHp: p.character.maxHp,
-            }
-            break
-          case 'loot':
-            synthesized = { id, kind: 'loot' }
-            break
-          case 'enter-fight':
-            synthesized = { id, kind: 'enter-fight' }
-            break
-          case 'new-area': {
-            const world = getWorldContent(p.character.worldId)
-            synthesized = {
-              id,
-              kind: 'new-area',
-              name: world?.startingArea.name ?? 'New Area',
-            }
-            break
+          synthesized = {
+            id,
+            kind: 'level-up',
+            record,
+            previousAt: p.character.createdAt,
+            previousGold: 0,
           }
-          case 'rare-area': {
-            const world = getWorldContent(p.character.worldId)
-            synthesized = {
-              id,
-              kind: 'new-area',
-              name: world?.startingArea.name ?? 'Rare Area',
-              rarity: 'rare',
-            }
-            break
-          }
-          case 'new-mob': {
-            const base =
-              getWorldContent(p.character.worldId)?.mobs?.[0]?.name ?? 'Mysterious Beast'
-            // Decorate with the rare prefix so the banner reads like a
-            // real rare encounter and matches how live kills are named.
-            synthesized = { id, kind: 'new-mob', name: mobDisplayName(base, 'rare') }
-            break
-          }
-          case 'new-item': {
-            const base =
-              getWorldContent(p.character.worldId)?.items?.[0]?.name ?? 'Glimmering Relic'
-            synthesized = { id, kind: 'new-item', name: base }
-            break
-          }
+          break
         }
-        if (synthesized) {
-          const ev = synthesized
-          setEvents((es) => [...es, ev].slice(-EVENT_CAP))
-          // Dev-panel synthesizer also needs to fire the matching SFX — the
-          // live tick loop does this at the same spot where it queues the
-          // effect event. Without this call, the overlay plays but the
-          // speakers stay silent, which made the FX tab look broken.
-          soundManager.play(ev)
+        case 'death':
+          // Preview uses the live character's death count so the banner
+          // matches what it'd look like on the next real death.
+          synthesized = { id, kind: 'death', deathCount: p.character.deaths.length + 1 }
+          break
+        case 'damage-taken':
+          synthesized = {
+            id,
+            kind: 'damage-taken',
+            amount: Math.max(1, Math.round(p.character.maxHp * 0.25)),
+            maxHp: p.character.maxHp,
+          }
+          break
+        case 'damage-dealt':
+          synthesized = { id, kind: 'damage-dealt', amount: 12 }
+          break
+        case 'heal-self':
+          synthesized = {
+            id,
+            kind: 'heal-self',
+            amount: Math.max(1, Math.round(p.character.maxHp * 0.2)),
+            maxHp: p.character.maxHp,
+          }
+          break
+        case 'loot':
+          synthesized = { id, kind: 'loot' }
+          break
+        case 'enter-fight':
+          synthesized = { id, kind: 'enter-fight' }
+          break
+        case 'new-area': {
+          const world = getWorldContent(p.character.worldId)
+          synthesized = {
+            id,
+            kind: 'new-area',
+            name: world?.startingArea.name ?? 'New Area',
+          }
+          break
         }
-        return p
-      })
+        case 'rare-area': {
+          const world = getWorldContent(p.character.worldId)
+          synthesized = {
+            id,
+            kind: 'new-area',
+            name: world?.startingArea.name ?? 'Rare Area',
+            rarity: 'rare',
+          }
+          break
+        }
+        case 'new-mob': {
+          const base =
+            getWorldContent(p.character.worldId)?.mobs?.[0]?.name ?? 'Mysterious Beast'
+          // Decorate with the rare prefix so the banner reads like a
+          // real rare encounter and matches how live kills are named.
+          synthesized = { id, kind: 'new-mob', name: mobDisplayName(base, 'rare') }
+          break
+        }
+        case 'new-item': {
+          const base =
+            getWorldContent(p.character.worldId)?.items?.[0]?.name ?? 'Glimmering Relic'
+          synthesized = { id, kind: 'new-item', name: base }
+          break
+        }
+      }
+      if (synthesized) {
+        const ev = synthesized
+        setEvents((es) => [...es, ev].slice(-EVENT_CAP))
+        // Dev-panel synthesizer also needs to fire the matching SFX — the
+        // live tick loop does this at the same spot where it queues the
+        // effect event. Without this call, the overlay plays but the
+        // speakers stay silent, which made the FX tab look broken.
+        soundManager.play(ev)
+      }
       return
     }
     if (cmd.kind === 'fx-field') {
@@ -893,6 +1271,54 @@ export default function App() {
       setElementEvents((es) =>
         [...es, { id, target: cmd.target, element: cmd.element }].slice(-EVENT_CAP),
       )
+      return
+    }
+    if (cmd.kind === 'play-sound') {
+      // Route through soundManager.play with a minimal synthesized event —
+      // no log, no overlay. Dev-only probe so the sound tab can audition
+      // any catalog entry without firing the visual SFX pipeline. Using
+      // the real manager API means a future regression in `play()` shows
+      // up here too.
+      const id = `dev-sound-${Date.now()}`
+      let synth: EffectEvent
+      switch (cmd.event) {
+        case 'damage-taken':
+        case 'heal-self':
+          synth = { id, kind: cmd.event, amount: 25, maxHp: 100 }
+          break
+        case 'damage-dealt':
+          synth = { id, kind: 'damage-dealt', amount: 12 }
+          break
+        case 'level-up':
+        case 'death':
+        case 'loot':
+        case 'enter-fight':
+        case 'llm-connected':
+        case 'generating-area':
+          synth = { id, kind: cmd.event } as EffectEvent
+          break
+        case 'new-area':
+          synth = { id, kind: 'new-area', name: 'Preview' }
+          break
+        case 'new-mob':
+          synth = { id, kind: 'new-mob', name: 'Preview' }
+          break
+        case 'new-item':
+          synth = { id, kind: 'new-item', name: 'Preview' }
+          break
+        case 'gold-windfall':
+          synth = { id, kind: 'gold-windfall', amount: 100 } as EffectEvent
+          break
+        case 'gold-jackpot':
+          synth = { id, kind: 'gold-jackpot', amount: 1000 } as EffectEvent
+          break
+        default:
+          synth = { id, kind: cmd.event } as EffectEvent
+      }
+      soundManager.unlock()
+      // forcePlay bypasses mute / disabled / per-event toggles so the dev
+      // panel's Sound tab can preview any SFX even during a muted session.
+      soundManager.forcePlay(synth)
       return
     }
 
@@ -910,6 +1336,7 @@ export default function App() {
         case 'resume':
           return p.paused ? { ...p, paused: false } : p
 
+
         case 'tick-once': {
           if (!p.paused) return p
           const next = runTick(
@@ -920,7 +1347,7 @@ export default function App() {
         }
 
         case 'level-up': {
-          const result = applyOneLevel(p.character, { logPrefix: '[dev] ' })
+          const result = applyOneLevel(p.character, { logPrefix: '[dev] ', rng: Rng.random() })
           return {
             ...p,
             character: { ...result.character, xp: 0 },
@@ -930,38 +1357,32 @@ export default function App() {
 
         case 'spawn-fight': {
           if (world.mobs.length === 0) return p
-          const template = world.mobs[Math.floor(Math.random() * world.mobs.length)]
+          const devRng = Rng.random()
+          const template = world.mobs[devRng.nextInt(world.mobs.length)]
           const mob = spawn(template)
-          return {
-            ...p,
-            state: { kind: 'fighting', mob },
-            log: appendLog({
-              kind: 'narrative',
-              text: `[dev] A ${mob.name} appears. ${mob.description}`,
-              meta: { mobName: mob.name },
-            }),
-          }
+          // Route through the shared encounter opener so ambush rolls and
+          // narrative wording stay identical to a live-tick spawn.
+          const started = beginFight(p.character, p.log, mob, {
+            logPrefix: '[dev] ',
+            rng: devRng,
+          })
+          return { ...p, state: started.state, log: started.log }
         }
 
         case 'spawn-fight-at': {
           const template = world.mobs.find((m) => m.id === cmd.mobId)
           if (!template) return p
           const mob = spawn(template, cmd.rarity)
-          return {
-            ...p,
-            state: { kind: 'fighting', mob },
-            log: appendLog({
-              kind: 'narrative',
-              text: `[dev] A ${mob.name} appears. ${mob.description}`,
-              meta: { mobName: mob.name },
-            }),
-          }
+          const started = beginFight(p.character, p.log, mob, {
+            logPrefix: '[dev] ',
+            rng: Rng.random(),
+          })
+          return { ...p, state: started.state, log: started.log }
         }
 
         case 'give-item': {
           const def = world.items.find((i) => i.id === cmd.itemId)
           if (!def) return p
-          const stackable = !!def.stackable
           const rarity: Rarity = cmd.rarity
           // Dev gifts use the character's level so they're useful immediately
           // without needing a level slider on the panel — match-the-character
@@ -970,33 +1391,17 @@ export default function App() {
             def.kind === 'equipment' || def.kind === 'scroll'
               ? Math.max(1, p.character.level)
               : 1
-          const inventory = (() => {
-            if (stackable) {
-              const idx = p.character.inventory.findIndex(
-                (i) =>
-                  i.archetypeId === def.id &&
-                  (i.rarity ?? 'common') === rarity &&
-                  (i.level ?? 1) === itemLevel,
-              )
-              if (idx >= 0) {
-                return p.character.inventory.map((v, i) =>
-                  i === idx ? { ...v, quantity: (v.quantity ?? 1) + 1 } : v,
-                )
-              }
-            }
-            const item: InventoryItem = {
-              id: uuid(),
-              archetypeId: def.id,
-              name: def.name,
-              description: def.description,
-              quantity: 1,
-              rarity,
-              level: itemLevel,
-              acquired: { at: Date.now(), source: 'dev' },
-            }
-            return [...p.character.inventory, item]
-          })()
-          const scaledValue = Math.round((def.value ?? 0) * rarityValueMult(rarity))
+          // Shared stacking helper — identical path to a live loot drop so a
+          // future fix to stack semantics (e.g. level/rarity matching) covers
+          // both the game and dev panel at once.
+          const inventory = addItemToInventory(
+            p.character.inventory,
+            def,
+            1,
+            rarity,
+            itemLevel,
+            { at: Date.now(), source: 'dev' },
+          )
           return {
             ...p,
             character: { ...p.character, inventory },
@@ -1011,7 +1416,22 @@ export default function App() {
               },
             }),
           }
-          void scaledValue
+        }
+
+        case 'set-ticks': {
+          // Lifetime tick counter — clamp to non-negative integers. Pure
+          // state override: runTick's auto-ramp checks and the save
+          // cadence key off character.ticks organically, so we let them
+          // notice the change on the next live tick instead of
+          // retroactively firing their side effects here. A big forward
+          // jump will trip the every-50-ticks save exactly once the next
+          // time the save effect runs — that's the desired read (persist
+          // the manually-scrubbed state), not a thrash.
+          const target = Math.max(0, Math.round(cmd.value))
+          return {
+            ...p,
+            character: { ...p.character, ticks: target },
+          }
         }
 
         case 'set-value': {
@@ -1051,9 +1471,11 @@ export default function App() {
                 // doesn't try to reverse gains — out of scope for a dev knob.
                 let character = c
                 let log = p.log
+                const devRng = Rng.random()
                 while (character.level < target) {
                   const result = applyOneLevel(character, {
                     logPrefix: '[dev] ',
+                    rng: devRng,
                   })
                   character = result.character
                   log = [...log, ...result.logEntries].slice(-200)
@@ -1114,6 +1536,11 @@ export default function App() {
                 areaId: area.id,
                 roomKey: roomKey(respawn.x, respawn.y, respawn.z),
                 roomName: respawnRoom?.name,
+                // Flag drives the death EffectEvent — without it the
+                // fullscreen banner / SFX stinger / death panel never
+                // fire because derive.ts only synthesizes a death
+                // event on entries with meta.isDeath set.
+                isDeath: true,
               },
             }),
           }
@@ -1227,6 +1654,28 @@ export default function App() {
           const addVisited = (rooms: string[], key: string): string[] =>
             rooms.includes(key) ? rooms : [...rooms, key]
 
+          // Portal Hub — step onto the tile and immediately open the
+          // multi-destination selection dialog. Skips the
+          // areaFullyExplored gate the tick loop applies to auto-walked
+          // gateways because the D-pad is an explicit user choice.
+          if (targetRoom.portalHub) {
+            const visitedRooms = addVisited(
+              p.character.visitedRooms,
+              visitedKey(area.id, target.x, target.y, target.z),
+            )
+            const movedChar = { ...p.character, position: target, visitedRooms }
+            const rk = roomKey(target.x, target.y, target.z)
+
+            return {
+              ...p,
+              character: movedChar,
+              state: {
+                kind: 'using-room',
+                action: { kind: 'portal-hub-select', roomKey: rk },
+              },
+            }
+          }
+
           // If the target cell is a portal (or a wired exit), traverse it in
           // one step rather than landing on the portal tile. Mirrors the tick
           // loop's traversal so the map + position end up where the player
@@ -1254,14 +1703,14 @@ export default function App() {
             movedChar = { ...p.character, position: target, visitedRooms }
           }
 
-          // The D-pad is a dev movement aid but it should still feel like a
-          // game action — run one tick on the post-move state so drives,
-          // cooldowns, combat, and encounter rolls advance with the step.
-          const next = runTick(
-            { character: movedChar, log: p.log, state: p.state },
-            world,
-          )
-          return { ...p, ...next }
+          // The D-pad is authoritative: move where the dev clicked and stop.
+          // It used to call `runTick` to "feel like a game action," but the
+          // tick's own `explore` step would call `moveByGoal` from the new
+          // position and immediately walk the character somewhere else,
+          // making the D-pad feel like it didn't control movement. Use
+          // `tick-once` afterwards if you want drives / cooldowns / encounter
+          // rolls to advance with the step.
+          return { ...p, character: movedChar }
         }
 
         case 'purge-generated-areas': {
@@ -1357,6 +1806,53 @@ export default function App() {
           }
         }
 
+        case 'travel-to-portal-hub': {
+          // Dev-only teleport directly to the portal hub tile. Scans every
+          // area for the room flagged `portalHub: true` and lands the
+          // character on that exact cell (not the area's start). Reveals
+          // every room in the host area for dev convenience and drops
+          // straight into the portal-hub-select dialog state — without
+          // this the player would land on the tile but the tick's
+          // `explore()` only checks the *next* room, so the dialog
+          // would never fire until they D-padded off and back on.
+          for (const area of world.areas ?? []) {
+            const hubEntry = Object.entries(area.rooms).find(
+              ([, r]) => r.portalHub === true,
+            )
+            if (!hubEntry) continue
+            const [, hubRoom] = hubEntry
+            const destPos = {
+              areaId: area.id,
+              x: hubRoom.x,
+              y: hubRoom.y,
+              z: hubRoom.z,
+            }
+            const existing = new Set(p.character.visitedRooms)
+            for (const room of Object.values(area.rooms)) {
+              existing.add(visitedKey(area.id, room.x, room.y, room.z))
+            }
+            const visitedRooms = Array.from(existing)
+            const destName = hubRoom.name ?? 'the portal hub'
+            const rk = roomKey(destPos.x, destPos.y, destPos.z)
+
+            return {
+              ...p,
+              character: { ...p.character, position: destPos, visitedRooms },
+              state: {
+                kind: 'using-room',
+                action: { kind: 'portal-hub-select', roomKey: rk },
+              },
+              log: appendLog({
+                kind: 'narrative',
+                text: `[dev] ${p.character.name} is whisked away to the ${destName} (${area.name}).`,
+                meta: { name: p.character.name, areaId: area.id },
+              }),
+            }
+          }
+
+          return p
+        }
+
         case 'reset-location': {
           // Teleport home — world's startingArea + starting (x, y, z).
           // In fantasy that lands the character in The Crow & Cup. Drops
@@ -1442,16 +1938,102 @@ export default function App() {
 
   const playingCharacter = phase.kind === 'playing' ? phase.character : null
 
+  // Save cadence: every 50 ticks + immediately on milestone events
+  // (level-up, death, new area visited). Tracking the last successful
+  // save lets the boot indicator read "just saved X ticks ago" without
+  // thrashing IndexedDB on every frame of a combat round.
+  const lastSavedTickRef = useRef<number>(0)
+  const lastSavedCountsRef = useRef<{ deaths: number; levelUps: number; areas: number }>({
+    deaths: 0,
+    levelUps: 0,
+    areas: 0,
+  })
+  // Tracks which character the auto-save baseline has been seeded for.
+  // The first effect run for a freshly-created character would otherwise
+  // see `areas: 1` (their starting room) against the default-zero
+  // baseline, fire a milestone save at tick 0, and drop the ambient
+  // "Things seem safer now…" line before the player has even moved.
+  // Seeding without saving on the first run per character keeps the
+  // first save line aligned with the 50-tick cadence.
+  const baselineSeededIdRef = useRef<string | null>(null)
+  const [savingFlash, setSavingFlash] = useState(false)
+  const savingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Actual save routine — writes the character, pulses the topbar
+  // saving indicator, and drops a narrative echo in the log. Called
+  // from the auto-save effect (on milestone / cadence) and from the
+  // dev "Save" button (always, regardless of cadence).
+  const doSave = useCallback((character: Character) => {
+    lastSavedTickRef.current = character.ticks ?? 0
+    const areaIds = new Set(character.visitedRooms.map((k) => k.split(':')[0]))
+    lastSavedCountsRef.current = {
+      deaths: character.deaths.length,
+      levelUps: character.levelUps.length,
+      areas: areaIds.size,
+    }
+    void storage.saves.save({
+      id: character.id,
+      name: character.name,
+      createdAt: character.createdAt,
+      updatedAt: Date.now(),
+      data: character,
+    })
+    // Flash the "saving" indicator for ~1.4s — long enough to read,
+    // short enough to feel transient. Clear any pending timeout so
+    // back-to-back saves don't shorten the flash.
+    setSavingFlash(true)
+    if (savingTimerRef.current) clearTimeout(savingTimerRef.current)
+    savingTimerRef.current = setTimeout(() => setSavingFlash(false), 1400)
+    // Textual echo in the log — system-style italic ambient line so it
+    // reads like the "Something unseen shifts in the dark." atmospheric
+    // openers rather than a plain narrative beat.
+    setPhase((prev) => {
+      if (prev.kind !== 'playing') return prev
+      return {
+        ...prev,
+        log: [
+          ...prev.log,
+          {
+            kind: 'system' as const,
+            text: 'Things seem safer now, to a point…',
+          },
+        ].slice(-200),
+      }
+    })
+  }, [storage])
+
+  // Mirror doSave into the forward ref so handleDevCommand (declared
+  // up-file) can invoke it from the 'save' dev button.
+  useEffect(() => {
+    doSaveRef.current = doSave
+  }, [doSave])
+
   useEffect(() => {
     if (!playingCharacter) return
-    void storage.saves.save({
-      id: playingCharacter.id,
-      name: playingCharacter.name,
-      createdAt: playingCharacter.createdAt,
-      updatedAt: Date.now(),
-      data: playingCharacter,
-    })
-  }, [playingCharacter, storage])
+    const ticks = playingCharacter.ticks ?? 0
+    const deaths = playingCharacter.deaths.length
+    const levelUps = playingCharacter.levelUps.length
+    const areaIds = new Set(playingCharacter.visitedRooms.map((k) => k.split(':')[0]))
+    const areas = areaIds.size
+    // First run for this character — sync the baseline silently so the
+    // 50-tick cadence is the first thing that fires a save / log line.
+    // Handles fresh creates (where the starting room counts as +1 area)
+    // and roster switches (where the on-disk save is already current).
+    if (baselineSeededIdRef.current !== playingCharacter.id) {
+      baselineSeededIdRef.current = playingCharacter.id
+      lastSavedTickRef.current = ticks
+      lastSavedCountsRef.current = { deaths, levelUps, areas }
+      return
+    }
+    const last = lastSavedCountsRef.current
+    const milestone =
+      deaths !== last.deaths ||
+      levelUps !== last.levelUps ||
+      areas !== last.areas
+    const onCadence = ticks - lastSavedTickRef.current >= 50
+    if (!milestone && !onCadence) return
+    doSave(playingCharacter)
+  }, [playingCharacter, doSave])
 
   // On-demand title generation past level 100. If the playing character is
   // wearing a title index beyond the hand-authored ladder and no LLM result
@@ -1540,7 +2122,7 @@ export default function App() {
       suppressFxOnceRef.current = false
       lastSnapRef.current = {
         characterId: phase.character.id,
-        logLength: phase.log.length,
+        log: phase.log,
         stateKind: phase.state.kind,
         character: phase.character,
       }
@@ -1549,10 +2131,17 @@ export default function App() {
     const prev = lastSnapRef.current
     const sameRun = prev && prev.characterId === phase.character.id
     if (sameRun) {
+      // Set-identity diff instead of a length-based slice. Once the log
+      // reaches its 200-entry cap every append evicts an older entry, so
+      // `prev.log.length === phase.log.length` even when new entries
+      // landed — a length diff silently drops them and the sound/effect
+      // pipeline goes silent. This matches the fix already in place for
+      // `deriveJournalEntries` inside runTick.
+      const prevSet = new Set(prev.log)
+      const newLogEntries = phase.log.filter((e) => !prevSet.has(e))
       const fresh = deriveEvents({
-        prevLogLength: prev.logLength,
         prevStateKind: prev.stateKind,
-        nextLog: phase.log,
+        newLogEntries,
         nextStateKind: phase.state.kind,
         characterName: phase.character.name,
         character: phase.character,
@@ -1561,12 +2150,21 @@ export default function App() {
         setEvents((es) => [...es, ...fresh].slice(-EVENT_CAP))
         for (const ev of fresh) {
           soundManager.play(ev)
-          // Pause ticking during fullscreen effects.
+          // Pause ticking for the duration of every blocking fullscreen
+          // effect. Durations buffer a bit past the visual animation so a
+          // tight follow-up event doesn't fire under the tail of the
+          // card. Level-up pulls from the same per-level ladder used to
+          // drive the card's CSS duration so the two stay in sync. A user
+          // clicking the Continue button clears this pause early via the
+          // onBlockingDismiss callback on EffectsOverlay.
           const pauseMs =
             ev.kind === 'new-area' ? 2700
             : ev.kind === 'new-mob' ? 2000
             : ev.kind === 'new-item' ? 2000
             : ev.kind === 'generating-area' ? 3700
+            : ev.kind === 'level-up' ? levelUpDurationMs(ev.record.to) + 400
+            : ev.kind === 'death' ? deathDurationMs(ev.deathCount) + 400
+            : ev.kind === 'llm-connected' ? 2000
             : 0
           if (pauseMs > 0) {
             effectPauseUntilRef.current = Math.max(
@@ -1574,40 +2172,96 @@ export default function App() {
               Date.now() + pauseMs,
             )
           }
+          // First-drop hook for curated items: stubbed LLM bespoke-
+          // description request. Looks up the item by name in the
+          // current world and fires the cache hook only if the item
+          // has `curated: true`. No-op today (see curatedItemFlavor.ts
+          // TODO) — the schema + cache plumbing is wired so the LLM
+          // layer is drop-in when it's ready.
+          if (ev.kind === 'new-item') {
+            const world = getWorldContent(phase.character.worldId)
+            const def = world?.items.find((i) => i.name === ev.name)
+            if (def?.curated) {
+              requestCuratedItemFlavor(
+                storage.entities,
+                phase.character.worldId,
+                def,
+              )
+            }
+          }
         }
       }
       const freshFields = deriveFieldEvents(prev.character, phase.character)
       if (freshFields.length > 0) {
         setFieldEvents((fs) => [...fs, ...freshFields].slice(-EVENT_CAP))
       }
-      const freshElements = deriveElementEvents(prev.logLength, phase.log)
+      const freshElements = deriveElementEvents(newLogEntries)
       if (freshElements.length > 0) {
         setElementEvents((es) => [...es, ...freshElements].slice(-EVENT_CAP))
       }
     }
     lastSnapRef.current = {
       characterId: phase.character.id,
-      logLength: phase.log.length,
+      log: phase.log,
       stateKind: phase.state.kind,
       character: phase.character,
     }
-  }, [phase])
+  }, [phase, storage.entities])
 
-  const handleCreated = async (character: Character) => {
+  const handleCreated = async (
+    character: Character,
+    options?: { simulateTicks?: number },
+  ) => {
+    const world = getWorldContent(character.worldId)!
+    let p: { character: Character; log: LogEntry[]; state: GameState } = {
+      character,
+      log: seedLog(character, world, { discovery: true }),
+      state: INITIAL_STATE,
+    }
+
+    // Quick Start hands the character forward with `simulateTicks: 100` so
+    // the player drops in lived-in — already wandered, maybe scuffled with
+    // a rat, drives partway up the gauge — instead of a blank slate. The
+    // simulation is fully deterministic from `character.rngState`, so a
+    // saved Quick Start replays identically. We bail on `generating-area`
+    // because that state waits on an LLM callback that's only wired in the
+    // playing phase — running ticks against it would just spin the
+    // countdown without ever resolving. Authored starting areas are wired,
+    // so the early ticks won't trigger LLM gen unless the simulated
+    // character walks all the way to an unwired exit.
+    if (options?.simulateTicks && options.simulateTicks > 0) {
+      for (let i = 0; i < options.simulateTicks; i++) {
+        if (p.state.kind === 'generating-area') break
+        p = runTick(p, world)
+      }
+      // Trim the log so the player isn't dropped into a wall of history
+      // they didn't witness. Keep the recent ~30 entries for context.
+      p = { ...p, log: p.log.slice(-30) }
+    }
+
     const now = Date.now()
     await storage.saves.save({
-      id: character.id,
-      name: character.name,
+      id: p.character.id,
+      name: p.character.name,
       createdAt: now,
       updatedAt: now,
-      data: character,
+      data: p.character,
     })
     await reload()
-    setPhase({ kind: 'playing', character, log: seedLog(character, getWorldContent(character.worldId)!, { discovery: true }), state: INITIAL_STATE, paused: false })
+    setPhase({ kind: 'playing', ...p, paused: false })
   }
 
   const handleCancelCreate = () => setPhase({ kind: 'roster' })
   const handleNew = () => setPhase({ kind: 'creating' })
+
+  // Landing CTA: record the dismissal so future boots skip past, then
+  // route to the same creating / roster split the boot effect would
+  // have picked. Reading `entries` here is safe because the boot effect
+  // populated `entries` before transitioning to landing.
+  const handleEnterLanding = useCallback(() => {
+    markLandingSeen()
+    setPhase(entries.length === 0 ? { kind: 'creating' } : { kind: 'roster' })
+  }, [entries.length])
 
   const handlePlay = async (character: Character) => {
     const migrated = migrateCharacter(character)
@@ -1641,6 +2295,188 @@ export default function App() {
     setPhase({ kind: 'settings', returnTo: phase })
   }
 
+  // Area-transition dialog handlers — invoked when the player interacts
+  // with the NoLLMDialog or FirstTimeDialog.
+
+  /** Flag the target exit room as skipGeneration, dismiss the dialog,
+   *  and transition back to exploring (empty reveal). */
+  const handleAreaGateContinueWithout = useCallback(() => {
+    setAreaGateDialog(null)
+    areaGateDialogRef.current = null
+    setPhase((p) => {
+      if (p.kind !== 'playing' || p.state.kind !== 'generating-area') {
+        return p
+      }
+      const world = getWorldContent(p.character.worldId)
+      if (!world) {
+        return { ...p, state: { kind: 'exploring' } }
+      }
+      // Parse the exit key to find the source area + room coords.
+      const [srcAreaId, coords] = p.state.exitRoomKey.split('::')
+      if (srcAreaId && coords) {
+        const srcArea = world.areas?.find((a) => a.id === srcAreaId)
+        if (srcArea) {
+          const exitRoom = srcArea.rooms[coords]
+          if (exitRoom) {
+            exitRoom.skipGeneration = true
+          }
+        }
+      }
+
+      return { ...p, state: { kind: 'exploring' } }
+    })
+  }, [])
+
+  /** Open Settings from the NoLLMDialog — dismiss the dialog first, then
+   *  bounce back to exploring so the player can return after configuring. */
+  const handleAreaGateOpenSettings = useCallback(() => {
+    setAreaGateDialog(null)
+    areaGateDialogRef.current = null
+    // Bounce back to exploring and open Settings in one phase update so
+    // the player doesn't return to a frozen generating-area state.
+    setPhase((p) => {
+      if (p.kind !== 'playing') {
+        return p
+      }
+      const playing = p.state.kind === 'generating-area'
+        ? { ...p, state: { kind: 'exploring' as const } }
+        : p
+
+      return { kind: 'settings', returnTo: playing }
+    })
+  }, [])
+
+  /** First-time dialog "Continue" — dismiss dialog, mark session flag,
+   *  and let the next tick cycle proceed with generation. */
+  const handleAreaGateFirstTimeContinue = useCallback(() => {
+    firstTransitionShownRef.current = true
+    setAreaGateDialog(null)
+    areaGateDialogRef.current = null
+    // Don't change phase — stay in 'generating-area' so the next tick
+    // picks up LLM generation.
+  }, [])
+
+  /** First-time dialog "Continue without generation" — same as the
+   *  NoLLM version but also stamps the session flag. */
+  const handleAreaGateFirstTimeWithout = useCallback(() => {
+    firstTransitionShownRef.current = true
+    handleAreaGateContinueWithout()
+  }, [handleAreaGateContinueWithout])
+
+  // ── Portal Hub handlers ──────────────────────────────────────────
+
+  /** "Forge a new path" — dismiss portal dialog and drop into the
+   *  standard permanentFrontier generation flow (gateway guardian fight
+   *  → LLM gen → reveal). */
+  const handlePortalForge = useCallback(() => {
+    setAreaGateDialog(null)
+    areaGateDialogRef.current = null
+    setPhase((p) => {
+      if (p.kind !== 'playing') {
+        return p
+      }
+      if (p.state.kind !== 'using-room' || p.state.action.kind !== 'portal-hub-select') {
+        return p
+      }
+      const rk = p.state.action.roomKey
+      const exitKey = `${p.character.position.areaId}::${rk}`
+
+      return {
+        ...p,
+        state: { kind: 'generating-area', exitRoomKey: exitKey, ticksLeft: AREA_GEN_TIMEOUT_TICKS },
+      }
+    })
+  }, [])
+
+  /** "Travel to [name]" — dismiss portal dialog and traverse to the
+   *  selected area's start position. No fight, no LLM gen. */
+  const handlePortalTravel = useCallback((dest: PortalDestination) => {
+    setAreaGateDialog(null)
+    areaGateDialogRef.current = null
+    setPhase((p) => {
+      if (p.kind !== 'playing') {
+        return p
+      }
+      const world = getWorldContent(p.character.worldId)
+      if (!world) {
+        return p
+      }
+      const destArea = world.areas?.find((a) => a.id === dest.areaId)
+      if (!destArea) {
+        return p
+      }
+
+      return {
+        ...p,
+        state: {
+          kind: 'using-room',
+          action: {
+            kind: 'traverse-portal',
+            destination: {
+              areaId: destArea.id,
+              x: destArea.startX,
+              y: destArea.startY,
+              z: destArea.startZ,
+            },
+          },
+        },
+      }
+    })
+  }, [])
+
+  /** "Step back" — dismiss portal dialog and return to exploring. */
+  const handlePortalDismiss = useCallback(() => {
+    setAreaGateDialog(null)
+    areaGateDialogRef.current = null
+    setPhase((p) => {
+      if (p.kind !== 'playing') {
+        return p
+      }
+
+      return { ...p, state: { kind: 'exploring' } }
+    })
+  }, [])
+
+
+  /** Finding-path countdown timed out — flag the target room as
+   *  skipGeneration, emit a meta log entry, cancel in-flight LLM
+   *  request, and reveal as empty. */
+  const handleFindingPathTimeout = useCallback(() => {
+    setFindingPathStart(null)
+    // Abort any in-flight area generation requests.
+    for (const ctrl of areaGenAbortRef.current.values()) {
+      ctrl.abort()
+    }
+    setPhase((p) => {
+      if (p.kind !== 'playing' || p.state.kind !== 'generating-area') {
+        return p
+      }
+      const world = getWorldContent(p.character.worldId)
+      if (!world) {
+        return { ...p, state: { kind: 'exploring' } }
+      }
+      const [srcAreaId, coords] = p.state.exitRoomKey.split('::')
+      if (srcAreaId && coords) {
+        const srcArea = world.areas?.find((a) => a.id === srcAreaId)
+        if (srcArea) {
+          const exitRoom = srcArea.rooms[coords]
+          if (exitRoom) {
+            exitRoom.skipGeneration = true
+          }
+        }
+      }
+
+      return {
+        ...p,
+        log: [...p.log, {
+          kind: 'meta' as const,
+          text: 'The path ahead did not take shape. Perhaps another time.',
+        }].slice(-200),
+        state: { kind: 'exploring' },
+      }
+    })
+  }, [])
+
   // Topbar speed picker writes to the playing character. Flips
   // tickSpeedAuto off so the next runTick won't bump the value back up
   // through the ramp schedule. Persistence rides on the same save effect
@@ -1660,31 +2496,40 @@ export default function App() {
   // volume) and persists alongside the rest of the sound settings so the
   // value sticks across reloads.
   const handleSetVolume = useCallback((volume: number) => {
-    setSound((prev) => {
-      const next: SoundSettings = {
-        ...prev,
-        volume: Math.max(0, Math.min(1, volume)),
-      }
-      soundManager.configure(next)
-      saveSoundSettings(next)
-      // Slider drag counts as a user gesture — perfect spot to make sure
-      // the AudioContext is unlocked before the next event fires.
-      soundManager.unlock()
-      return next
-    })
+    // Read current sound via ref — doing this in a setSound((prev) =>
+    // ...) updater would run the side effects (configure, save, unlock)
+    // twice under StrictMode double-invocation. Slider drag counts as a
+    // user gesture, so this is a safe spot to unlock the AudioContext.
+    // Dragging the volume also auto-unmutes: we want the slider to be a
+    // one-gesture way to bring sound back after a mute, matching the
+    // "I just didn't realize it was muted" case where the user doesn't
+    // think to hunt for a separate mute button.
+    const prev = soundRef.current ?? loadSoundSettings()
+    const next: SoundSettings = {
+      ...prev,
+      volume: Math.max(0, Math.min(1, volume)),
+      muted: false,
+    }
+    setSound(next)
+    soundManager.configure(next)
+    saveSoundSettings(next)
+    soundManager.unlock()
+    // Trailing-debounced preview so the player hears the new level.
+    // 200ms feels instant at the end of a drag but still coalesces
+    // mid-drag updates into a single chime.
+    soundManager.previewVolume(200)
   }, [])
 
   // Mute toggle — flips sound.muted (distinct from the Settings-tab
   // `enabled` flag). Volume setting and slider visibility are preserved
   // so the user can silence audio without losing their volume choice.
   const handleToggleMute = useCallback(() => {
-    setSound((prev) => {
-      const next: SoundSettings = { ...prev, muted: !prev.muted }
-      soundManager.configure(next)
-      saveSoundSettings(next)
-      soundManager.unlock()
-      return next
-    })
+    const prev = soundRef.current ?? loadSoundSettings()
+    const next: SoundSettings = { ...prev, muted: !prev.muted }
+    setSound(next)
+    soundManager.configure(next)
+    saveSoundSettings(next)
+    soundManager.unlock()
   }, [])
 
   // Pause toggle — only meaningful while playing. Routes a topbar click
@@ -1707,10 +2552,19 @@ export default function App() {
     setPhase(phase.returnTo)
   }
 
+  // Settings → About exposes this as "Show landing again". Clears the
+  // one-shot dismissal flag so a subsequent reload would show the
+  // landing on its own, and routes the current session straight there
+  // so the user doesn't have to refresh to see it.
+  const handleShowLanding = useCallback(() => {
+    clearLandingSeen()
+    setPhase({ kind: 'landing' })
+  }, [])
+
   if (phase.kind === 'loading') return <div className="boot" />
 
   return (
-    <div className="shell">
+    <div className="shell scanlines">
       <Topbar
         onExit={phase.kind === 'playing' ? handleExit : undefined}
         onSettings={phase.kind !== 'settings' ? openSettings : undefined}
@@ -1724,6 +2578,7 @@ export default function App() {
         onSetVolume={phase.kind === 'playing' && sound.enabled ? handleSetVolume : undefined}
         muted={phase.kind === 'playing' && sound.enabled ? sound.muted : undefined}
         onToggleMute={phase.kind === 'playing' && sound.enabled ? handleToggleMute : undefined}
+        saving={phase.kind === 'playing' ? savingFlash : undefined}
       />
       <div className="shell__body">
         {phase.kind === 'settings' && (
@@ -1734,7 +2589,11 @@ export default function App() {
             }
             characterCount={entries.length}
             storage={storage}
+            onShowLanding={handleShowLanding}
           />
+        )}
+        {phase.kind === 'landing' && (
+          <Landing onEnter={handleEnterLanding} />
         )}
         {phase.kind === 'roster' && (
           <CharacterRoster
@@ -1785,6 +2644,7 @@ export default function App() {
                   world={getWorldContent(phase.character.worldId)}
                   fieldEvents={fieldEvents}
                   fields={effects.fields}
+                  sheetNumbers={effects.sheetNumbers}
                 />
               </div>
             </div>
@@ -1798,6 +2658,7 @@ export default function App() {
                 <div className="game__map">
                   <MapPanel
                     character={phase.character}
+                    state={phase.state}
                   />
                 </div>
               </div>
@@ -1814,8 +2675,56 @@ export default function App() {
           </div>
         )}
       </div>
-      <EffectsOverlay events={events} effects={effects} />
+      <EffectsOverlay
+        events={events}
+        effects={effects}
+        interruptCounter={fxInterruptCounter}
+        onBlockingDismiss={() => { effectPauseUntilRef.current = 0 }}
+        onBlockingHoverChange={(hovered) => { blockingHoverRef.current = hovered }}
+      />
       <TooltipLayer />
+      <NoLLMDialog
+        open={areaGateDialog === 'no-llm'}
+        onContinueWithout={handleAreaGateContinueWithout}
+        onOpenSettings={handleAreaGateOpenSettings}
+      />
+      <FirstTimeDialog
+        open={areaGateDialog === 'first-time'}
+        onContinue={handleAreaGateFirstTimeContinue}
+        onContinueWithout={handleAreaGateFirstTimeWithout}
+      />
+      {(() => {
+        if (areaGateDialog !== 'portal-hub' || phase.kind !== 'playing') {
+          return null
+        }
+        if (phase.state.kind !== 'using-room' || phase.state.action.kind !== 'portal-hub-select') {
+          return null
+        }
+        const world = getWorldContent(phase.character.worldId)
+        const area = world?.areas?.find((a) => a.id === phase.character.position.areaId)
+        const hubRoom = area?.rooms[phase.state.action.roomKey]
+        if (!hubRoom) {
+          return null
+        }
+
+        return (
+          <PortalSelectDialog
+            open
+            title={hubRoom.name}
+            description={hubRoom.description}
+            destinations={hubRoom.portalDestinations ?? []}
+            onForge={handlePortalForge}
+            onTravel={handlePortalTravel}
+            onDismiss={handlePortalDismiss}
+          />
+        )
+      })()}
+      {findingPathStart !== null && (
+        <FindingPathOverlay
+          startedAt={findingPathStart}
+          onTimeout={handleFindingPathTimeout}
+        />
+      )}
       {phase.kind === 'playing' && devOpen && (
         <DevPanel
           paused={phase.paused}

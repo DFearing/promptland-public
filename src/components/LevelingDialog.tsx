@@ -19,6 +19,11 @@ interface Props {
    *  up the same item/mob popovers the log uses. Caller is responsible for
    *  rendering the popover itself. */
   onSubjectClick?: SubjectClickHandler
+  /** When provided and the dialog opens, the entry whose .to === this
+   *  level is expanded by default. Used by the Journal panel so
+   *  clicking a level-up entry jumps straight to that level's detail.
+   *  Absent ⇒ dialog opens with everything collapsed. */
+  initialLevel?: number
 }
 
 function formatDuration(ms: number): string {
@@ -68,6 +73,7 @@ export default function LevelingDialog({
   character,
   onClose,
   onSubjectClick,
+  initialLevel,
 }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const titleId = useId()
@@ -76,9 +82,23 @@ export default function LevelingDialog({
   const creationVerb = manifest?.creationVerb ?? 'Born'
   const content = getWorldContent(character.worldId)
 
+  const entries = buildEntries(character)
+
   useEffect(() => {
     if (!open) return
     closeRef.current?.focus()
+    // Pre-expand the entry matching initialLevel on open. Fires once
+    // per open edge so toggling an entry manually afterwards doesn't
+    // get snapped back. Unknown / creation levels fall to null.
+    if (typeof initialLevel === 'number') {
+      const idx = entries.findIndex(
+        (e) => e.kind === 'level' && e.record?.to === initialLevel,
+      )
+      // Same justification as EffectsOverlay: this is a genuine state
+      // transition on open-edge, not a derivation to hoist to render.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setExpanded(idx >= 0 ? idx : null)
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' || e.key === 'Enter') {
         e.preventDefault()
@@ -87,11 +107,12 @@ export default function LevelingDialog({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
+    // entries depends on character; we only want the re-pick to fire on
+    // open transitions, not on every character tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, onClose, initialLevel])
 
   if (!open) return null
-
-  const entries = buildEntries(character)
 
   return (
     <div
@@ -158,6 +179,14 @@ export default function LevelingDialog({
               const goldDelta = (r.goldAtLevelUp ?? 0) - entry.previousGold
               const best = r.bestItem
               const enemy = r.baddestEnemy
+              // Prefer the snapshotted count; fall back to recomputing from
+              // the death timestamps for records written before the field
+              // existed.
+              const deathsThisLevel =
+                r.deathsThisLevel ??
+                character.deaths.filter(
+                  (d) => d.at > entry.previousAt && d.at <= entry.at,
+                ).length
               const titleIdx = titleIndexForLevel(r.to)
               const earnedTitle =
                 titleIdx != null ? resolveTitle(character, titleIdx).text : null
@@ -199,6 +228,10 @@ export default function LevelingDialog({
                         <span className="lvld__v lvld__v--gold">
                           {goldDelta > 0 ? `+${goldDelta}` : goldDelta}
                         </span>
+                      </div>
+                      <div>
+                        <span className="lvld__k">Deaths</span>
+                        <span className="lvld__v">{deathsThisLevel}</span>
                       </div>
                       {(() => {
                         const g = r.gains
@@ -255,7 +288,7 @@ export default function LevelingDialog({
                             )
                           })()
                         ) : (
-                          <span className="lvld__v lvld__v--muted">—</span>
+                          <span className="lvld__v lvld__v--muted">nothing found</span>
                         )}
                       </div>
                       <div>
@@ -380,8 +413,10 @@ export default function LevelingDialog({
         .lvld__v--link {
           /* justify-self keeps a short button flush-left with the other
              value spans in the grid; text-align overrides the user-agent
-             center-alignment that buttons pick up by default. Plain text
-             styling — rarity color alone carries the link affordance. */
+             center-alignment that buttons pick up by default. Rarity color
+             carries the base identity; hover underline + glow land the
+             clickability — matches the .logp__tok--link convention the
+             log uses for mob/item/room tokens. */
           justify-self: start;
           text-align: left;
           display: inline;
@@ -391,10 +426,17 @@ export default function LevelingDialog({
           font: inherit;
           color: inherit;
           cursor: pointer;
-          text-decoration: none;
+          text-decoration: underline;
+          text-decoration-style: dotted;
+          text-decoration-color: currentColor;
+          text-underline-offset: 3px;
+          transition: text-shadow var(--dur-fast) var(--ease-crt);
         }
+        .lvld__v--link:hover,
         .lvld__v--link:focus-visible {
           outline: none;
+          text-shadow: var(--glow-sm);
+          text-decoration-style: solid;
         }
         .lvld__rarity { color: var(--fg-3); font-variant-caps: all-small-caps; letter-spacing: 0.06em; }
         .lvld__item--creation .lvld__tag { color: var(--magic); }

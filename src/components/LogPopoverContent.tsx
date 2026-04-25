@@ -4,7 +4,15 @@ import type { Character, InventoryItem } from '../character'
 import { describeCharacter, xpToNextLevel } from '../character'
 import type { BonusBreakdown } from '../game'
 import type { ItemDef } from '../items'
-import { parseMobDisplayName, rarityColor, rarityLabel } from '../items'
+import {
+  parseMobDisplayName,
+  potionEffectAmount,
+  potionFraction,
+  potionSizeLabel,
+  rarityColor,
+  rarityLabel,
+  scrollLevelLabel,
+} from '../items'
 import type { MobTemplate } from '../mobs'
 import { mobLevel } from '../mobs'
 import { formatRelative } from '../util/time'
@@ -73,7 +81,11 @@ function RoomContent({
 
   return (
     <>
-      <h3 className="popover__title popover__title--room">{room?.name ?? subject.name}</h3>
+      {/* Room popover drops the log-token magic tint here — in the log
+          line the tint is a token cue ("this is a room"), but in the
+          popover the heading is unambiguously the subject, so the tint
+          reads as decorative rather than informative. */}
+      <h3 className="popover__title">{room?.name ?? subject.name}</h3>
       <p className="popover__meta">
         Room
         {room?.type ? ` · ${ROOM_TYPE_VISUALS[room.type].label}` : ''}
@@ -149,7 +161,11 @@ function ItemContent({
   // describes a representative example. Equipped slots are inspected too
   // because a worn item won't appear in the loose inventory list.
   const owned = findOwnedItem(ctx.character, subject.id)
-  const rarity = owned?.rarity
+  // Consumables / scrolls have no rarity axis — their progression is
+  // size / level. Suppress the rarity color and label entirely so the
+  // popover doesn't lie about a tier the item never rolled.
+  const hasRarityAxis = !def || def.kind !== 'consumable' && def.kind !== 'scroll'
+  const rarity = hasRarityAxis ? owned?.rarity : undefined
   return (
     <>
       <h3
@@ -159,8 +175,18 @@ function ItemContent({
         {def?.name ?? subject.name}
       </h3>
       <p className="popover__meta">
-        Item
-        {owned?.level ? ` · Lv ${owned.level}` : ''}
+        {def?.kind === 'consumable' && def.size
+          ? (() => {
+              const max =
+                def.effect.kind === 'heal' ? ctx.character.maxHp : ctx.character.maxMagic
+              const pct = Math.round(potionFraction(def.size) * 100)
+              const amt = potionEffectAmount(def.size, max)
+              return `${potionSizeLabel(def.size)} potion · ${pct}% (≈${amt})`
+            })()
+          : def?.kind === 'scroll' && def.level
+            ? `Level ${scrollLevelLabel(def.level)} scroll`
+            : 'Item'}
+        {hasRarityAxis && owned?.level ? ` · Lv ${owned.level}` : ''}
         {rarity ? ` · ${rarityLabel(rarity)}` : ''}
         {def?.value != null ? ` · worth ${def.value}` : ''}
         {def?.stackable ? ' · stackable' : ''}
