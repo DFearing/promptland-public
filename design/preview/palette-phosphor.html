@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="phosphor">
+<head>
+<meta charset="utf-8">
+<title>Palette — Phosphor</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 16px; background: var(--bg-0); }
+  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .sw { height: 96px; border: 1px solid var(--line-2); padding: 8px; display: flex; flex-direction: column; justify-content: space-between; font-family: var(--font-mono); font-size: 10px;}
+  .sw .name { font-family: var(--font-display); font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .sw .hex { color: var(--fg-3); }
+</style>
+</head>
+<body>
+<div class="grid">
+  <div class="sw" style="background:var(--bg-0);"><span class="name" style="color:var(--fg-1)">bg-0</span><span class="hex" style="color:var(--fg-2)">#08080a</span></div>
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--fg-1)">bg-1</span><span class="hex" style="color:var(--fg-2)">#10101a</span></div>
+  <div class="sw" style="background:var(--bg-2);"><span class="name" style="color:var(--fg-1)">bg-2</span><span class="hex" style="color:var(--fg-2)">#181820</span></div>
+  <div class="sw" style="background:var(--bg-3);"><span class="name" style="color:var(--fg-1)">bg-3</span><span class="hex" style="color:var(--fg-2)">#22222c</span></div>
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--link)">link</span><span class="hex">#8ab6ff</span></div>
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--fg-1)">fg-1</span><span class="hex">#e8e8ea</span></div>
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--fg-2)">fg-2</span><span class="hex">#a8a8b0</span></div>
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--fg-3)">fg-3</span><span class="hex">#6e6e78</span></div>
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--fg-dim)">fg-dim</span><span class="hex">#2a2a34</span></div>
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--accent-hot)">accent</span><span class="hex">#ffffff</span></div>
+</div>
+</body>
+</html>

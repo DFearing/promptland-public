@@ -1,0 +1,29 @@
+/* ============================================================================
+   Understudy — text scale
+   Base token sizes are ~30% larger than the raw design system values, which
+   read too small in a browser window. A --scale multiplier adjusts from there.
+   Switched via [data-scale] on <html>. Default (no attribute) is 1.
+
+   Selectors use [data-theme] to match the specificity of the design system's
+   :root[data-theme="mud"] rules (which set the base text tokens). Without this,
+   the design system's hardcoded px sizes outrank our calc() values.
+   ============================================================================ */
+
+:root[data-theme] {
+  --scale: 1;
+  --text-xs:      calc(14px * var(--scale));
+  --text-sm:      calc(16px * var(--scale));
+  --text-base:    calc(18px * var(--scale));
+  --text-md:      calc(20px * var(--scale));
+  --text-lg:      calc(24px * var(--scale));
+  --text-xl:      calc(28px * var(--scale));
+  --text-2xl:     calc(36px * var(--scale));
+  --text-3xl:     calc(48px * var(--scale));
+  --text-display: calc(64px * var(--scale));
+}
+
+:root[data-theme][data-scale='90']  { --scale: 0.9; }
+:root[data-theme][data-scale='100'] { --scale: 1; }
+:root[data-theme][data-scale='115'] { --scale: 1.15; }
+:root[data-theme][data-scale='130'] { --scale: 1.3; }
+:root[data-theme][data-scale='150'] { --scale: 1.5; }

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mud">
+<head>
+<meta charset="utf-8">
+<title>Map cells</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 16px; background: var(--bg-0); }
+  .grid { display: grid; grid-template-columns: repeat(9, 28px); gap: 2px; font-family: var(--font-mono); font-size: 14px; }
+  .c { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line-1); }
+  .fog { background: var(--bg-0); color: var(--fg-dim); border-color: transparent; }
+  .vis { background: var(--bg-1); color: var(--fg-3); }
+  .here { background: var(--bg-3); color: var(--accent-hot); border-color: var(--line-3); box-shadow: var(--glow-sm); }
+  .item { background: var(--bg-1); color: var(--magic); }
+  .dead { background: var(--bg-1); color: var(--bad); }
+  .door { background: var(--bg-2); color: var(--fg-2); }
+</style>
+</head>
+<body>
+<div class="grid">
+  <div class="c fog">·</div><div class="c fog">·</div><div class="c vis">◯</div><div class="c vis">◯</div><div class="c door">□</div><div class="c vis">◯</div><div class="c fog">·</div><div class="c fog">·</div><div class="c fog">·</div>
+  <div class="c fog">·</div><div class="c vis">◯</div><div class="c vis">◯</div><div class="c here">◎</div><div class="c vis">◯</div><div class="c item">✶</div><div class="c vis">◯</div><div class="c fog">·</div><div class="c fog">·</div>
+  <div class="c fog">·</div><div class="c vis">◯</div><div class="c dead">†</div><div class="c vis">◯</div><div class="c door">□</div><div class="c vis">◯</div><div class="c vis">◯</div><div class="c fog">·</div><div class="c fog">·</div>
+</div>
+</body>
+</html>

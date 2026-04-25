@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mud">
+<head>
+<meta charset="utf-8">
+<title>Type — Mono & Labels</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 16px; background: var(--bg-0); }
+  .wrap { border: 1px solid var(--line-2); padding: 14px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .meta { font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 8px; }
+  .lbl { font-family: var(--font-display); font-size: 18px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-2); }
+  .cap { font-family: var(--font-body); font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--fg-3); margin-top: 4px;}
+  table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+  td { padding: 2px 0; }
+  td.k { color: var(--fg-3); }
+  td.v { text-align: right; color: var(--fg-1); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div>
+    <div class="meta">VT323 labels · body captions</div>
+    <div class="lbl">INVENTORY</div>
+    <div class="cap">worn · 3 / 8 slots</div>
+    <div class="lbl" style="margin-top:10px">SHEET</div>
+    <div class="cap">fenra · level 4 · ranger</div>
+  </div>
+  <div>
+    <div class="meta">JetBrains Mono · stats · tabular</div>
+    <table>
+      <tr><td class="k">HP</td><td class="v">38 / 42</td></tr>
+      <tr><td class="k">MP</td><td class="v">11 / 20</td></tr>
+      <tr><td class="k">STR</td><td class="v">14</td></tr>
+      <tr><td class="k">DEX</td><td class="v">17</td></tr>
+      <tr><td class="k">XP</td><td class="v">1,204</td></tr>
+    </table>
+  </div>
+</div>
+</body>
+</html>

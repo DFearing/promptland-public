@@ -1,0 +1,203 @@
+/* ============================================================================
+   Understudy — extra themes
+   Layered on top of design/colors_and_type.css. Same token shape, new palettes.
+   ============================================================================ */
+
+/* ----------------------------------------------------------------------------
+   Theme: Neon — purple on slate. Preserves the scaffold look.
+   ---------------------------------------------------------------------------- */
+:root[data-theme='neon'] {
+  --bg-0:         #0b0b10;
+  --bg-1:         #15151c;
+  --bg-2:         #1d1d26;
+  --bg-3:         #2a2a36;
+  --bg-inset:     #08080c;
+
+  --fg-1:         #e6e6ea;
+  --fg-2:         #c7c7d4;
+  --fg-3:         #8a8a9a;
+  --fg-dim:       #3d3d4d;
+
+  --accent:       #c084fc;
+  --accent-hot:   #e9d5ff;
+  --link:         #8ab6ff;
+
+  --good:         #86efac;
+  --warn:         #fbbf24;
+  --bad:          #f87171;
+  --magic:        #c084fc;
+  --speech:       #fde68a;
+
+  --line-1:       #2a2a36;
+  --line-2:       #3d3d4d;
+  --line-3:       #c084fc;
+
+  --glow-sm:      0 0 2px rgba(192, 132, 252, 0.35);
+  --glow-md:      0 0 6px rgba(192, 132, 252, 0.25), 0 0 1px rgba(192, 132, 252, 0.6);
+  --glow-lg:      0 0 12px rgba(192, 132, 252, 0.35), 0 0 2px rgba(192, 132, 252, 0.8);
+
+  --scanline:     repeating-linear-gradient(
+                    to bottom,
+                    rgba(0, 0, 0, 0) 0px,
+                    rgba(0, 0, 0, 0) 2px,
+                    rgba(20, 10, 30, 0.35) 3px,
+                    rgba(20, 10, 30, 0.35) 3px
+                  );
+}
+
+/* ----------------------------------------------------------------------------
+   Theme: Cyber — magenta and cyan on near-black.
+   ---------------------------------------------------------------------------- */
+:root[data-theme='cyber'] {
+  --bg-0:         #04040c;
+  --bg-1:         #0a0a1e;
+  --bg-2:         #12122e;
+  --bg-3:         #1a1a42;
+  --bg-inset:     #020208;
+
+  --fg-1:         #aee8ff;
+  --fg-2:         #6fc3e0;
+  --fg-3:         #3f7e99;
+  --fg-dim:       #1a3a4a;
+
+  --accent:       #ff3df8;
+  --accent-hot:   #ff9de8;
+  --link:         #00d9ff;
+
+  --good:         #5afff0;
+  --warn:         #ffaa33;
+  --bad:          #ff2e6a;
+  --magic:        #ff3df8;
+  --speech:       #ffe58a;
+
+  --line-1:       #1e1e38;
+  --line-2:       #2e2e55;
+  --line-3:       #ff3df8;
+
+  --glow-sm:      0 0 2px rgba(174, 232, 255, 0.4);
+  --glow-md:      0 0 6px rgba(255, 61, 248, 0.3), 0 0 1px rgba(174, 232, 255, 0.6);
+  --glow-lg:      0 0 12px rgba(255, 61, 248, 0.4), 0 0 2px rgba(0, 217, 255, 0.8);
+
+  --scanline:     repeating-linear-gradient(
+                    to bottom,
+                    rgba(0, 0, 0, 0) 0px,
+                    rgba(0, 0, 0, 0) 2px,
+                    rgba(10, 0, 30, 0.4) 3px,
+                    rgba(10, 0, 30, 0.4) 3px
+                  );
+}
+
+/* ----------------------------------------------------------------------------
+   Theme: Vacuum — ice-white on deep navy. Vault, cold, clinical.
+   ---------------------------------------------------------------------------- */
+:root[data-theme='vacuum'] {
+  --bg-0:         #030918;
+  --bg-1:         #07132a;
+  --bg-2:         #0d1f40;
+  --bg-3:         #162d56;
+  --bg-inset:     #020611;
+
+  --fg-1:         #e8f2ff;
+  --fg-2:         #a8c5e8;
+  --fg-3:         #6a87b0;
+  --fg-dim:       #2a3f5c;
+
+  --accent:       #5ed6ff;
+  --accent-hot:   #b8ecff;
+  --link:         #9bb8ff;
+
+  --good:         #8af0c8;
+  --warn:         #ffd27a;
+  --bad:          #ff8585;
+  --magic:        #c0a8ff;
+  --speech:       #fff2c4;
+
+  --line-1:       #1a2d4c;
+  --line-2:       #2a4370;
+  --line-3:       #4a6ca0;
+
+  --glow-sm:      0 0 2px rgba(232, 242, 255, 0.3);
+  --glow-md:      0 0 6px rgba(94, 214, 255, 0.25), 0 0 1px rgba(232, 242, 255, 0.6);
+  --glow-lg:      0 0 12px rgba(94, 214, 255, 0.3), 0 0 2px rgba(184, 236, 255, 0.8);
+
+  --scanline:     repeating-linear-gradient(
+                    to bottom,
+                    rgba(0, 0, 0, 0) 0px,
+                    rgba(0, 0, 0, 0) 2px,
+                    rgba(0, 10, 30, 0.3) 3px,
+                    rgba(0, 10, 30, 0.3) 3px
+                  );
+}
+
+/* ----------------------------------------------------------------------------
+   Theme: Vellum — ink on parchment. The only light theme.
+   Inverts the background/foreground relationship but keeps the same semantics.
+   ---------------------------------------------------------------------------- */
+:root[data-theme='vellum'] {
+  --bg-0:         #f3e9d0;   /* parchment page */
+  --bg-1:         #ece1c0;   /* panel */
+  --bg-2:         #e3d6ab;   /* raised */
+  --bg-3:         #d9c992;   /* pressed */
+  --bg-inset:     #faf1dc;   /* sunken field — lighter than page */
+
+  --fg-1:         #2a1e10;   /* ink */
+  --fg-2:         #4a3720;   /* secondary */
+  --fg-3:         #735839;   /* metadata */
+  --fg-dim:       #a8956e;   /* fog */
+
+  --accent:       #8b2500;   /* burnt sienna */
+  --accent-hot:   #a82c00;
+  --link:         #1e5a8a;   /* indigo ink */
+
+  --good:         #2f6b2f;
+  --warn:         #a86a1f;
+  --bad:          #8b1a1a;
+  --magic:        #5b2e82;
+  --speech:       #3f2b63;
+
+  --line-1:       #c5b58a;   /* subtle line */
+  --line-2:       #9a8659;   /* panel */
+  --line-3:       #6b5a36;   /* focus */
+
+  --glow-sm:      none;       /* no phosphor in a paper theme */
+  --glow-md:      none;
+  --glow-lg:      none;
+
+  --shadow-panel: 0 0 0 1px var(--line-2);
+  --shadow-inset: inset 0 1px 0 rgba(0, 0, 0, 0.08), inset 0 0 0 1px var(--line-1);
+
+  --scanline:     none;
+}
+
+/* In vellum, headings keep their display face but drop the glow. */
+:root[data-theme='vellum'] h1,
+:root[data-theme='vellum'] h2,
+:root[data-theme='vellum'] h3,
+:root[data-theme='vellum'] h4,
+:root[data-theme='vellum'] h5 {
+  text-shadow: none;
+}
+
+/* ----------------------------------------------------------------------------
+   Effect toggles — gated by classes on <html>
+
+   When on, we override the design-system scanline rendering with a
+   normal-blend dark-band pattern. The design token uses a theme-tinted
+   color with mix-blend-mode: multiply, which is physically-correct but
+   near-invisible on the app's already-dark panel backgrounds.
+   ---------------------------------------------------------------------------- */
+html:not(.fx-scanlines) .scanlines::after {
+  display: none;
+}
+
+html.fx-scanlines .scanlines::after {
+  mix-blend-mode: normal;
+  opacity: 1;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.4) 3px,
+    rgba(0, 0, 0, 0.4) 3px
+  );
+}

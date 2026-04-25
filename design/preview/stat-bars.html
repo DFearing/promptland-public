@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mud">
+<head>
+<meta charset="utf-8">
+<title>Stat bars</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 16px; background: var(--bg-0); font-family: var(--font-mono); font-size: 12px; color: var(--fg-1); font-variant-numeric: tabular-nums;}
+  .bar { display: grid; grid-template-columns: 40px 1fr 70px; gap: 10px; align-items: center; margin-bottom: 8px; }
+  .k { font-family: var(--font-display); font-size: 16px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-2);}
+  .track { height: 14px; background: var(--bg-inset); border: 1px solid var(--line-1); box-shadow: var(--shadow-inset); position: relative; }
+  .fill { position: absolute; top: 0; left: 0; bottom: 0; background: var(--fg-2); box-shadow: var(--glow-sm); }
+  .fill.hp { background: var(--good); }
+  .fill.low { background: var(--warn); }
+  .fill.mp { background: var(--magic); }
+  .fill.xp { background: var(--accent); }
+  .n { text-align: right; color: var(--fg-2);}
+</style>
+</head>
+<body>
+<div class="bar"><span class="k">HP</span><div class="track"><div class="fill hp" style="width: 90%"></div></div><span class="n">38 / 42</span></div>
+<div class="bar"><span class="k">MP</span><div class="track"><div class="fill mp" style="width: 55%"></div></div><span class="n">11 / 20</span></div>
+<div class="bar"><span class="k">XP</span><div class="track"><div class="fill xp" style="width: 30%"></div></div><span class="n">1,204</span></div>
+<div class="bar"><span class="k">HUN</span><div class="track"><div class="fill low" style="width: 25%"></div></div><span class="n">hungry</span></div>
+</body>
+</html>

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mud">
+<head>
+<meta charset="utf-8">
+<title>Palette — MUD</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .sw {
+    height: 96px;
+    position: relative;
+    border: 1px solid var(--line-2);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .sw .name {
+    font-family: var(--font-display);
+    font-size: 14px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .sw .hex { color: var(--fg-3); }
+</style>
+</head>
+<body>
+<div class="grid">
+  <div class="sw" style="background:var(--bg-0);"><span class="name" style="color:var(--fg-1)">bg-0</span><span class="hex" style="color:var(--fg-2)">#050807</span></div>
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--fg-1)">bg-1</span><span class="hex" style="color:var(--fg-2)">#0a110d</span></div>
+  <div class="sw" style="background:var(--bg-2);"><span class="name" style="color:var(--fg-1)">bg-2</span><span class="hex" style="color:var(--fg-2)">#0f1913</span></div>
+  <div class="sw" style="background:var(--bg-3);"><span class="name" style="color:var(--fg-1)">bg-3</span><span class="hex" style="color:var(--fg-2)">#152219</span></div>
+  <div class="sw" style="background:var(--bg-inset);"><span class="name" style="color:var(--fg-1)">bg-inset</span><span class="hex" style="color:var(--fg-2)">#030504</span></div>
+
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--fg-1)">fg-1</span><span class="hex">#a8ffb0</span></div>
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--fg-2)">fg-2</span><span class="hex">#6fd37a</span></div>
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--fg-3)">fg-3</span><span class="hex">#3f8c4a</span></div>
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--fg-dim)">fg-dim</span><span class="hex">#1f4a28</span></div>
+  <div class="sw" style="background:var(--bg-1);"><span class="name" style="color:var(--accent-hot)">accent-hot</span><span class="hex">#c4ffcb</span></div>
+</div>
+</body>
+</html>

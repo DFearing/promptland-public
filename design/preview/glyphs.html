@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mud">
+<head>
+<meta charset="utf-8">
+<title>ASCII glyphs</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 16px; background: var(--bg-0); font-family: var(--font-mono); font-size: 12px; color: var(--fg-2);}
+  .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+  .g { display: flex; flex-direction: column; align-items: center; padding: 10px 6px; border: 1px solid var(--line-1); background: var(--bg-1); gap: 4px;}
+  .c { font-size: 24px; color: var(--fg-1); }
+  .n { font-size: 10px; color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.1em;}
+</style>
+</head>
+<body>
+<div class="grid">
+  <div class="g"><span class="c" style="color:var(--accent-hot)">◎</span><span class="n">you</span></div>
+  <div class="g"><span class="c">◯</span><span class="n">visited</span></div>
+  <div class="g"><span class="c" style="color:var(--fg-dim)">·</span><span class="n">fog</span></div>
+  <div class="g"><span class="c" style="color:var(--magic)">✶</span><span class="n">rare</span></div>
+  <div class="g"><span class="c" style="color:var(--bad)">†</span><span class="n">dead</span></div>
+  <div class="g"><span class="c">□</span><span class="n">door</span></div>
+  <div class="g"><span class="c">[+]</span><span class="n">new</span></div>
+  <div class="g"><span class="c">[x]</span><span class="n">filled</span></div>
+  <div class="g"><span class="c">[ ]</span><span class="n">empty</span></div>
+  <div class="g"><span class="c">&gt;</span><span class="n">system</span></div>
+  <div class="g"><span class="c">—</span><span class="n">scene</span></div>
+  <div class="g"><span class="c">▲▼◄►</span><span class="n">dirs</span></div>
+</div>
+</body>
+</html>
