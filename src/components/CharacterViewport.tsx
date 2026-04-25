@@ -2,12 +2,14 @@ import { useEffect, useRef } from 'react'
 import { Application, Graphics, type Filter } from 'pixi.js'
 import { CRTFilter, GlowFilter, RGBSplitFilter, ShockwaveFilter } from 'pixi-filters'
 import type { GameState } from '../game'
-import type { EffectEvent } from '../effects'
+import { ElementOverlay, type EffectEvent, type ElementFxEvent } from '../effects'
+import type { Effects } from '../themes'
 
 interface Props {
   stateKind: GameState['kind']
   events: EffectEvent[]
-  filtersEnabled: boolean
+  elementEvents?: ElementFxEvent[]
+  viewport: Effects['viewport']
 }
 
 interface Pulse {
@@ -28,19 +30,20 @@ function readCssColor(varName: string, fallback: number): number {
 }
 
 interface ViewportApi {
-  handlePulse: (kind: EffectEvent['kind']) => void
+  handleEvent: (e: EffectEvent) => void
   syncAmbient: () => void
 }
 
-export default function CharacterViewport({ stateKind, events, filtersEnabled }: Props) {
+export default function CharacterViewport({ stateKind, events, elementEvents, viewport }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
-  const propsRef = useRef({ stateKind, filtersEnabled })
+  const propsRef = useRef({ stateKind, viewport })
   const seenRef = useRef<Set<string>>(new Set())
+  const primedRef = useRef(false)
   const apiRef = useRef<ViewportApi | null>(null)
 
   useEffect(() => {
-    propsRef.current = { stateKind, filtersEnabled }
-  }, [stateKind, filtersEnabled])
+    propsRef.current = { stateKind, viewport }
+  }, [stateKind, viewport])
 
   useEffect(() => {
     const host = hostRef.current
@@ -105,31 +108,41 @@ export default function CharacterViewport({ stateKind, events, filtersEnabled }:
 
       const allFilters: Filter[] = [rgb, shockwave, glow, crt]
       const applyFilters = () => {
-        app.stage.filters = propsRef.current.filtersEnabled ? allFilters : []
+        const v = propsRef.current.viewport
+        const anyOn =
+          v.enabled && (v.damage || v.heal || v.levelUp || v.death || v.fightAmbient)
+        app.stage.filters = anyOn ? allFilters : []
       }
       applyFilters()
 
-      const ambient = { rgb: 0, crtLine: 0.18 }
+      const ambient = { rgb: 0, crtLine: 0.18, deathAlpha: 0 }
       const targetAmbient = () => {
-        const sk = propsRef.current.stateKind
+        const v = propsRef.current.viewport
+        const fighting =
+          propsRef.current.stateKind === 'fighting' && v.enabled && v.fightAmbient
         return {
-          rgb: sk === 'fighting' ? 1 : 0,
-          crtLine: sk === 'fighting' ? 0.35 : 0.18,
+          rgb: fighting ? 1 : 0,
+          crtLine: fighting ? 0.35 : 0.18,
         }
       }
       let target = targetAmbient()
 
       const pulses: Pulse[] = []
 
-      const handlePulse: ViewportApi['handlePulse'] = (kind) => {
-        if (!propsRef.current.filtersEnabled) return
-        if (kind === 'damage-taken') {
+      const handleEvent: ViewportApi['handleEvent'] = (e) => {
+        const v = propsRef.current.viewport
+        if (!v.enabled) return
+        if (e.kind === 'damage-taken' && v.damage) {
+          // Amplitude scales with the damage-to-maxHp ratio so weak nicks
+          // barely wobble and critical hits thump the whole viewport.
+          const ratio = e.maxHp > 0 ? Math.min(1, e.amount / e.maxHp) : 0.5
+          const amp = 14 + Math.sqrt(Math.max(0, ratio)) * 30
           shockwave.center = { x: figure.x, y: figure.y }
           pulses.push({
             start: performance.now(),
             duration: 700,
             update: (t) => {
-              shockwave.amplitude = 24 * (1 - t)
+              shockwave.amplitude = amp * (1 - t)
               shockwave.time = t * 0.7
             },
             done: () => {
@@ -137,7 +150,24 @@ export default function CharacterViewport({ stateKind, events, filtersEnabled }:
               shockwave.time = 999
             },
           })
-        } else if (kind === 'level-up') {
+        } else if (e.kind === 'heal-self' && v.heal) {
+          glow.color = readCssColor('--good', 0x9bf57a)
+          const ratio = e.maxHp > 0 ? Math.min(1, e.amount / e.maxHp) : 0.3
+          const peak = 3 + Math.sqrt(Math.max(0, ratio)) * 6
+          pulses.push({
+            start: performance.now(),
+            duration: 900,
+            update: (t) => {
+              const env = Math.sin(t * Math.PI)
+              glow.outerStrength = peak * env
+              glow.innerStrength = 0.8 * env
+            },
+            done: () => {
+              glow.outerStrength = 0
+              glow.innerStrength = 0
+            },
+          })
+        } else if (e.kind === 'level-up' && v.levelUp) {
           glow.color = readCssColor('--accent-hot', 0xffd27a)
           pulses.push({
             start: performance.now(),
@@ -152,11 +182,27 @@ export default function CharacterViewport({ stateKind, events, filtersEnabled }:
               glow.innerStrength = 0
             },
           })
+        } else if (e.kind === 'death' && v.death) {
+          // Desaturate + dim the viewport briefly — the fullscreen death
+          // banner handles the main beat; this is its canvas echo.
+          pulses.push({
+            start: performance.now(),
+            duration: 2000,
+            update: (t) => {
+              // Slam in, hold, drift back.
+              const up = Math.min(1, t * 4)
+              const hold = t < 0.75 ? 1 : 1 - (t - 0.75) * 4
+              ambient.deathAlpha = up * Math.max(0, hold)
+            },
+            done: () => {
+              ambient.deathAlpha = 0
+            },
+          })
         }
       }
 
       apiRef.current = {
-        handlePulse,
+        handleEvent,
         syncAmbient: () => {
           target = targetAmbient()
           applyFilters()
@@ -182,6 +228,9 @@ export default function CharacterViewport({ stateKind, events, filtersEnabled }:
         rgb.blue = { x: 1.5 * ambient.rgb, y: 0 }
         crt.lineContrast = ambient.crtLine
         crt.time = ticker.lastTime / 80
+        // During a death pulse, darken the sprite's alpha — a quick "lights
+        // out" on the character that reads as felled even without audio.
+        figure.alpha = 1 - Math.min(0.85, ambient.deathAlpha * 0.85)
 
         const now = performance.now()
         for (let i = pulses.length - 1; i >= 0; i--) {
@@ -212,19 +261,26 @@ export default function CharacterViewport({ stateKind, events, filtersEnabled }:
 
   useEffect(() => {
     apiRef.current?.syncAmbient()
-  }, [stateKind, filtersEnabled])
+  }, [stateKind, viewport])
 
   useEffect(() => {
     const fresh = events.filter((e) => !seenRef.current.has(e.id))
     if (fresh.length === 0) return
     for (const e of fresh) seenRef.current.add(e.id)
+    // Drop the buffer on first render so we don't replay every event that
+    // piled up during tab-switch or before this component mounted.
+    if (!primedRef.current) {
+      primedRef.current = true
+      return
+    }
     if (!apiRef.current) return
-    for (const e of fresh) apiRef.current.handlePulse(e.kind)
+    for (const e of fresh) apiRef.current.handleEvent(e)
   }, [events])
 
   return (
     <div className="viewport scanlines">
       <div ref={hostRef} className="viewport__canvas" />
+      {elementEvents && <ElementOverlay events={elementEvents} target="character" />}
 
       <style>{`
         .viewport { position: relative; height: 100%; min-height: 0; background: radial-gradient(ellipse at center, var(--bg-1) 0%, var(--bg-0) 100%); border: 1px solid var(--line-2); overflow: hidden; }

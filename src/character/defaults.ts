@@ -29,6 +29,7 @@ export function makeDefaults(worldId?: string): Pick<
   | 'lastSafePosition'
   | 'equipped'
   | 'conditions'
+  | 'spells'
 > {
   const area = resolveStartingArea(worldId)
   const start = { areaId: area.id, x: area.startX, y: area.startY, z: area.startZ }
@@ -42,6 +43,7 @@ export function makeDefaults(worldId?: string): Pick<
     lastSafePosition: start,
     equipped: {},
     conditions: [],
+    spells: [],
   }
 }
 

@@ -1,4 +1,4 @@
-export type EntityKind = 'item' | 'mob' | 'location' | 'lore'
+export type EntityKind = 'item' | 'mob' | 'location' | 'lore' | 'title'
 
 export interface EntityCacheEntry {
   hash: string
@@ -10,6 +10,10 @@ export interface EntityCacheEntry {
 export interface EntityCache {
   get(hash: string): Promise<EntityCacheEntry | null>
   put(entry: EntityCacheEntry): Promise<void>
+  /** Purge every entry whose hash starts with `${templateId}:${worldId}:`.
+   *  Used when author-editable context changes make prior generations stale.
+   *  Returns the count removed so callers can show "N entries purged". */
+  deleteByTemplateAndWorld(templateId: string, worldId: string): Promise<number>
 }
 
 export interface SaveMetadata {

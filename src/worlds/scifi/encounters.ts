@@ -7,4 +7,10 @@ export const SCIFI_ENCOUNTERS: Record<RoomType, string[]> = {
   chamber: ['maintenance_bot', 'vent_crawler', 'boarding_drone'],
   crypt: ['boarding_drone', 'reactor_wraith'],
   storage: ['maintenance_bot', 'vent_crawler'],
+  inn: [],
+  water: ['vent_crawler'],
+  portal: [],
+  entrance: ['maintenance_bot'],
+  shop: [],
+  shrine: [],
 }

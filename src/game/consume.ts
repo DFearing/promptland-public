@@ -1,10 +1,17 @@
 import type { Character, InventoryItem } from '../character'
 import type { ConsumableArchetype, ConsumableEffect, ItemDef } from '../items'
 import type { LogEntry } from '../log'
+import { getSpell } from '../spells'
 import type { WorldContent } from '../worlds'
 
 const HEAL_THRESHOLD = 0.35
 const MAGIC_THRESHOLD = 0.35
+/** Magic users grab a mana tincture earlier than non-casters — staying topped
+ *  up matters because their entire combat plan hinges on having spells to
+ *  cast. Tuned just below "force meditate" so the potion goes first when
+ *  one's in inventory, and the meditate fallback covers the empty-pockets
+ *  case. */
+const MAGIC_USER_MAGIC_THRESHOLD = 0.5
 
 interface ResolvedConsumable {
   inventoryIdx: number
@@ -65,13 +72,28 @@ export function maybeAutoConsume(
           effect: 'heal',
           amount: heal,
           text: `${character.name} drinks a ${match.def.name}.`,
-          meta: { name: character.name, itemName: match.def.name },
+          meta: {
+            name: character.name,
+            itemId: match.def.id,
+            itemName: match.def.name,
+            potionEffect: match.def.effect.kind,
+          },
         },
       }
     }
   }
 
-  if (character.maxMagic > 0 && character.magic < character.maxMagic * MAGIC_THRESHOLD) {
+  // Magic users (any character carrying a damage spell) get a higher MP-restore
+  // threshold so they replenish well before they have to fall back to melee.
+  const isMagicUser = (character.spells ?? []).some((id) => {
+    const s = getSpell(character.worldId, id)
+    return (
+      !!s &&
+      (s.effect.kind === 'damage' || s.effect.kind === 'damage-over-time')
+    )
+  })
+  const magicThreshold = isMagicUser ? MAGIC_USER_MAGIC_THRESHOLD : MAGIC_THRESHOLD
+  if (character.maxMagic > 0 && character.magic < character.maxMagic * magicThreshold) {
     const match = findConsumable(character.inventory, world, 'restore-magic')
     if (match) {
       const effect = match.def.effect as Extract<ConsumableEffect, { kind: 'restore-magic' }>
@@ -87,7 +109,12 @@ export function maybeAutoConsume(
           effect: 'restore-magic',
           amount: restore,
           text: `${character.name} drinks a ${match.def.name}.`,
-          meta: { name: character.name, itemName: match.def.name },
+          meta: {
+            name: character.name,
+            itemId: match.def.id,
+            itemName: match.def.name,
+            potionEffect: match.def.effect.kind,
+          },
         },
       }
     }

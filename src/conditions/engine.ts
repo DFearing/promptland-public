@@ -45,7 +45,11 @@ export function tickConditions(
             text: `${character.name} suffers from ${def.name}.`,
             amount: taken,
             conditionId: def.id,
-            meta: { name: character.name, conditionName: def.name },
+            meta: {
+              name: character.name,
+              conditionName: def.name,
+              element: def.element,
+            },
           })
         }
         break
@@ -103,17 +107,64 @@ export function applyCondition(
     remainingTicks: def.defaultDuration,
     source,
   }
+  // Active voice when we know who did it AND the condition has a verb:
+  //   "Goblin poisons Aerin." — reads like an action, not a status.
+  // Intensity (light/heavy) rides the duration vs. default duration: a long-
+  // lived stack leads with "heavily", a short one with "lightly".
+  // Capitalize the source so "the cave rat poisons Aerin." → "The Cave Rat …"
+  // while leaving the passive form ("— the cave rat") untouched — dashes read
+  // as apposition there.
+  const capSource = source
+    ? source.charAt(0).toUpperCase() + source.slice(1)
+    : source
+  const activeText =
+    source && def.verb
+      ? `${capSource} ${intensityPrefix(def)}${def.verb} ${character.name}.`
+      : source
+        ? `${character.name} is ${def.name.toLowerCase()} — ${source}.`
+        : `${character.name} is ${def.name.toLowerCase()}.`
   return {
     character: { ...character, conditions: [...character.conditions, newActive] },
     entry: {
       kind: 'condition-gain',
-      text: source
-        ? `${character.name} is ${def.name.toLowerCase()} — ${source}.`
-        : `${character.name} is ${def.name.toLowerCase()}.`,
+      text: activeText,
       conditionId: def.id,
       polarity: def.polarity,
-      meta: { name: character.name, conditionName: def.name },
+      meta: {
+        name: character.name,
+        conditionName: def.name,
+        element: def.element,
+      },
     },
+  }
+}
+
+// Rough severity cue from the dot damage / skip chance / stat-mod magnitude.
+// Returns "" for middling severity so the verb stands alone, or an adverb
+// with trailing space so it slots straight into the sentence.
+function intensityPrefix(def: ConditionDef): string {
+  switch (def.kind) {
+    case 'dot': {
+      const dmg = def.params.damagePerTick ?? 0
+      if (dmg >= 3) return 'severely '
+      if (dmg <= 1) return 'lightly '
+      return ''
+    }
+    case 'skip': {
+      const chance = def.params.skipChance ?? 0
+      if (chance >= 0.9) return 'fully '
+      if (chance <= 0.4) return 'lightly '
+      return ''
+    }
+    case 'stat-mod': {
+      const mag = Math.max(
+        Math.abs(def.params.attack ?? 0),
+        Math.abs(def.params.defense ?? 0),
+      )
+      if (mag >= 3) return 'powerfully '
+      if (mag <= 1) return 'faintly '
+      return ''
+    }
   }
 }
 

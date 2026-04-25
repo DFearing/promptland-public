@@ -4,6 +4,116 @@
    ============================================================================ */
 
 /* ----------------------------------------------------------------------------
+   Theme: MUD (Classic) — pure green on black, no color accents.
+   Every semantic token (good, bad, warn, magic, speech, link, player, dir,
+   heat, rarity spans) collapses to a single phosphor shade so the UI reads
+   like an authentic VT-100 MUD session. Rarity tier colors are overridden
+   per-element below — since rarity hues come from inline styles rather than
+   tokens, they need explicit rules to bend back to green.
+   ---------------------------------------------------------------------------- */
+:root[data-theme='mud-classic'] {
+  --bg-0:         #000000;
+  --bg-1:         #000000;
+  --bg-2:         #020504;
+  --bg-3:         #061a0e;
+  --bg-inset:     #000000;
+
+  --fg-1:         #7bff88;
+  --fg-2:         #4fcf5d;
+  --fg-3:         #2f8a38;
+  --fg-dim:       #194421;
+  --fg-body:      #4fcf5d;
+  --player:       #7bff88;
+  --dir:          #7bff88;
+  --heat:         #7bff88;
+
+  --accent:       #7bff88;
+  --accent-hot:   #7bff88;
+  --link:         #7bff88;
+
+  --good:         #7bff88;
+  --warn:         #7bff88;
+  --bad:          #7bff88;
+  --magic:        #7bff88;
+  --hp:           #7bff88;
+  --mp:           #7bff88;
+  --speech:       #7bff88;
+  --verb-emph:    #7bff88;
+
+  --line-1:       #133a1a;
+  --line-2:       #1d5a25;
+  --line-3:       #2d8a38;
+
+  --glow-sm:      0 0 2px rgba(123, 255, 136, 0.45);
+  --glow-md:      0 0 6px rgba(123, 255, 136, 0.35), 0 0 1px rgba(123, 255, 136, 0.8);
+  --glow-lg:      0 0 12px rgba(123, 255, 136, 0.45), 0 0 2px rgba(123, 255, 136, 0.9);
+
+  --scanline:     repeating-linear-gradient(
+                    to bottom,
+                    rgba(0, 0, 0, 0) 0px,
+                    rgba(0, 0, 0, 0) 2px,
+                    rgba(0, 20, 10, 0.45) 3px,
+                    rgba(0, 20, 10, 0.45) 3px
+                  );
+}
+
+/* Any element with an inline color declaration (rarity spans on item/mob
+   names, the map area-name, level-up card entries, leveling-history entries,
+   etc.) gets flattened to the single phosphor shade. Matches "color:" and
+   "background-color:" alike — that's fine, we only override the color
+   property. */
+:root[data-theme='mud-classic'] [style*="color"] {
+  color: var(--fg-1) !important;
+}
+
+/* Component CSS that hardcodes off-palette hex (gold pile ochre, XP white,
+   white shrine glyph hints baked into source). Override back to green. */
+:root[data-theme='mud-classic'] .logp__tok--gold,
+:root[data-theme='mud-classic'] .logp__tok--xp,
+:root[data-theme='mud-classic'] .sheet__bar-label--xp,
+:root[data-theme='mud-classic'] .sheet__bar-val--xp,
+:root[data-theme='mud-classic'] .lvld__v--xp,
+:root[data-theme='mud-classic'] .lvld__v--gold,
+:root[data-theme='mud-classic'] .lvld__v--gains,
+:root[data-theme='mud-classic'] .fx-levelup-xp,
+:root[data-theme='mud-classic'] .fx-levelup-gold,
+:root[data-theme='mud-classic'] .fx-levelup-gains,
+:root[data-theme='mud-classic'] .dev__slider-val,
+:root[data-theme='mud-classic'] .dev__rbtn--common,
+:root[data-theme='mud-classic'] .dev__rbtn--uncommon,
+:root[data-theme='mud-classic'] .dev__rbtn--rare,
+:root[data-theme='mud-classic'] .dev__rbtn--epic,
+:root[data-theme='mud-classic'] .dev__rbtn--legendary {
+  color: var(--fg-1) !important;
+  text-shadow: 0 0 4px rgba(123, 255, 136, 0.4) !important;
+}
+
+/* XP bar fill is a hardcoded white background — drop it back to green. */
+:root[data-theme='mud-classic'] .sheet__bar-fill--xp {
+  background: var(--fg-1) !important;
+  box-shadow: 0 0 4px rgba(123, 255, 136, 0.4) !important;
+}
+
+/* Map room-type glyphs receive their color through an inline
+   --mapp-glyph-color CSS custom property whose value is sometimes a literal
+   hex (crypt purple, storage amber, inn gold, water blue, shrine white).
+   Override the paint rule itself so the glyph always renders green
+   regardless of which value was injected. */
+:root[data-theme='mud-classic'] .mapp__glyph {
+  color: var(--fg-1) !important;
+  text-shadow: 0 0 3px var(--fg-1) !important;
+}
+
+/* Roster "ticks" readout uses hardcoded green hex (#9effa0 / #4cff6a) —
+   already a phosphor green, but bind it to the theme token for consistency
+   with the rest of the classic palette. */
+:root[data-theme='mud-classic'] .roster__ticks-val,
+:root[data-theme='mud-classic'] .topbar__ticks-val {
+  color: var(--fg-1) !important;
+  text-shadow: 0 0 4px var(--fg-1), 0 0 8px rgba(123, 255, 136, 0.45) !important;
+}
+
+/* ----------------------------------------------------------------------------
    Theme: Neon — purple on slate. Preserves the scaffold look.
    ---------------------------------------------------------------------------- */
 :root[data-theme='neon'] {
@@ -26,6 +136,7 @@
   --warn:         #fbbf24;
   --bad:          #f87171;
   --magic:        #c084fc;
+  --hp:           #ef4444;
   --speech:       #fde68a;
 
   --line-1:       #2a2a36;
@@ -68,6 +179,7 @@
   --warn:         #ffaa33;
   --bad:          #ff2e6a;
   --magic:        #ff3df8;
+  --hp:           #ff2e6a;
   --speech:       #ffe58a;
 
   --line-1:       #1e1e38;
@@ -110,6 +222,7 @@
   --warn:         #ffd27a;
   --bad:          #ff8585;
   --magic:        #c0a8ff;
+  --hp:           #ff5a6a;
   --speech:       #fff2c4;
 
   --line-1:       #1a2d4c;
@@ -153,7 +266,10 @@
   --warn:         #a86a1f;
   --bad:          #8b1a1a;
   --magic:        #5b2e82;
+  --hp:           #8b1a1a;
+  --mp:           #1e3a8a;
   --speech:       #3f2b63;
+  --verb-emph:    #6b1313;
 
   --line-1:       #c5b58a;   /* subtle line */
   --line-2:       #9a8659;   /* panel */
@@ -176,6 +292,66 @@
 :root[data-theme='vellum'] h4,
 :root[data-theme='vellum'] h5 {
   text-shadow: none;
+}
+
+/* ----------------------------------------------------------------------------
+   Theme: Paper — plain white page, black text, saturated semantics.
+   Debugging aid: every span that relies on a semantic token stands out hard
+   against a neutral body copy, so it's obvious when a rule isn't landing.
+   ---------------------------------------------------------------------------- */
+:root[data-theme='paper'] {
+  --bg-0:         #ffffff;
+  --bg-1:         #ffffff;
+  --bg-2:         #f2f2f2;
+  --bg-3:         #e4e4e4;
+  --bg-inset:     #fafafa;
+
+  --fg-1:         #101010;   /* primary text */
+  --fg-2:         #555555;   /* secondary / narrative body */
+  --fg-3:         #888888;   /* metadata / tertiary */
+  --fg-dim:       #bcbcbc;   /* fog / disabled */
+
+  --accent:       #1e5ab8;
+  --accent-hot:   #0f3a87;
+  --link:         #1450b8;
+
+  --good:         #0b8a3e;
+  --warn:         #b86a00;
+  --bad:          #c02020;
+  --magic:        #7a1ab8;
+  --hp:           #c02020;
+  --mp:           #1450b8;
+  --speech:       #8a6a00;
+  --verb-emph:    #5a0000;
+
+  --line-1:       #dcdcdc;
+  --line-2:       #b8b8b8;
+  --line-3:       #6e6e6e;
+
+  --glow-sm:      none;
+  --glow-md:      none;
+  --glow-lg:      none;
+
+  --shadow-panel: 0 0 0 1px var(--line-2);
+  --shadow-inset: inset 0 1px 0 rgba(0, 0, 0, 0.05), inset 0 0 0 1px var(--line-1);
+
+  --scanline:     none;
+}
+
+/* Paper strips glow and CRT effects so the color hierarchy is unambiguous. */
+:root[data-theme='paper'] h1,
+:root[data-theme='paper'] h2,
+:root[data-theme='paper'] h3,
+:root[data-theme='paper'] h4,
+:root[data-theme='paper'] h5 {
+  text-shadow: none;
+}
+
+/* Paper forces scanlines off even when the user has them globally enabled.
+   Purely visual — the user's scanlines preference is preserved and reapplies
+   as soon as they switch to any other theme. */
+html[data-theme='paper'].fx-scanlines .scanlines::after {
+  display: none;
 }
 
 /* ----------------------------------------------------------------------------

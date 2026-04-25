@@ -1,14 +1,30 @@
 import type { Character, Equipped } from '../character'
-import type { EquipSlot } from '../items'
 import type { LogEntry } from '../log'
 
 const EQUIPMENT_LOSS_CHANCE = 1.0
 const XP_LOSS_PERCENT = 0.25
 
-function pickLostSlot(equipped: Equipped): EquipSlot | null {
-  const slots: EquipSlot[] = []
-  if (equipped.weapon) slots.push('weapon')
-  if (equipped.armor) slots.push('armor')
+/** Wear-slot name as it appears on `Equipped` — superset of EquipSlot because
+ *  offhand / ring1 / ring2 are distinct from their archetype slot. */
+type WearKey = keyof Equipped
+
+const WEAR_KEYS: WearKey[] = [
+  'weapon',
+  'offhand',
+  'armor',
+  'head',
+  'arms',
+  'hands',
+  'legs',
+  'feet',
+  'cape',
+  'amulet',
+  'ring1',
+  'ring2',
+]
+
+function pickLostSlot(equipped: Equipped): WearKey | null {
+  const slots = WEAR_KEYS.filter((k) => equipped[k])
   if (slots.length === 0) return null
   return slots[Math.floor(Math.random() * slots.length)]
 }

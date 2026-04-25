@@ -1,30 +1,25 @@
 import { useState } from 'react'
 import type { Character } from '../character'
 import type { FieldFxEvent } from '../effects'
+import type { Effects } from '../themes'
 import type { WorldContent } from '../worlds'
 import SheetPanel from './SheetPanel'
-import EffectsPanel from './EffectsPanel'
 import InventoryPanel from './InventoryPanel'
-import DevPanel, { type DevCommand } from './DevPanel'
 
-type Tab = 'sheet' | 'effects' | 'inventory' | 'dev'
+type Tab = 'sheet' | 'inventory'
 
 interface Props {
   character: Character
   world?: WorldContent
-  paused?: boolean
-  onDevCommand?: (cmd: DevCommand) => void
-  fieldEvents?: FieldFxEvent[]
-  fieldIndicatorsEnabled?: boolean
+  fieldEvents: FieldFxEvent[]
+  fields: Effects['fields']
 }
 
 export default function CharacterTabs({
   character,
   world,
-  paused,
-  onDevCommand,
   fieldEvents,
-  fieldIndicatorsEnabled,
+  fields,
 }: Props) {
   const [tab, setTab] = useState<Tab>('sheet')
 
@@ -43,51 +38,22 @@ export default function CharacterTabs({
         <button
           type="button"
           role="tab"
-          aria-selected={tab === 'effects'}
-          className={'chartabs__tab' + (tab === 'effects' ? ' chartabs__tab--active' : '')}
-          onClick={() => setTab('effects')}
-        >
-          Effects
-        </button>
-        <button
-          type="button"
-          role="tab"
           aria-selected={tab === 'inventory'}
           className={'chartabs__tab' + (tab === 'inventory' ? ' chartabs__tab--active' : '')}
           onClick={() => setTab('inventory')}
         >
           Inventory
         </button>
-        {onDevCommand && (
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'dev'}
-            title="Dev shortcuts"
-            className={'chartabs__tab chartabs__tab--dev' + (tab === 'dev' ? ' chartabs__tab--active' : '')}
-            onClick={() => setTab('dev')}
-          >
-            !
-          </button>
-        )}
       </div>
       <div className="chartabs__body">
         {tab === 'sheet' && (
           <SheetPanel
             character={character}
-            fieldEvents={fieldEvents ?? []}
-            fieldIndicatorsEnabled={fieldIndicatorsEnabled ?? false}
+            fieldEvents={fieldEvents}
+            fields={fields}
           />
         )}
-        {tab === 'effects' && <EffectsPanel character={character} />}
         {tab === 'inventory' && <InventoryPanel character={character} world={world} />}
-        {tab === 'dev' && onDevCommand && (
-          <DevPanel
-            paused={paused ?? false}
-            onCommand={onDevCommand}
-            conditions={world?.conditions}
-          />
-        )}
       </div>
 
       <style>{`
@@ -96,9 +62,6 @@ export default function CharacterTabs({
         .chartabs__tab { position: relative; font-family: var(--font-display); font-size: var(--text-md); letter-spacing: 0.08em; text-transform: uppercase; padding: 5px var(--sp-3); color: var(--fg-3); background: transparent; border: 1px solid var(--line-2); border-bottom: 1px solid var(--line-2); margin-right: -1px; margin-bottom: -1px; cursor: pointer; display: inline-flex; align-items: center; gap: var(--sp-1); transition: color var(--dur-fast) var(--ease-crt); }
         .chartabs__tab:hover { color: var(--fg-1); }
         .chartabs__tab--active { color: var(--accent-hot); background: var(--bg-1); border-bottom-color: var(--bg-1); text-shadow: var(--glow-sm); z-index: 1; }
-        .chartabs__tab--dev { margin-left: auto; font-family: var(--font-mono); letter-spacing: 0; padding: 5px 10px; color: var(--warn); }
-        .chartabs__tab--dev:hover { color: var(--warn); text-shadow: var(--glow-sm); }
-        .chartabs__tab--dev.chartabs__tab--active { color: var(--warn); text-shadow: var(--glow-sm); }
         .chartabs__body { flex: 1; min-height: 0; background: var(--bg-1); border: 1px solid var(--line-2); border-top: none; padding: var(--sp-3); display: flex; flex-direction: column; }
       `}</style>
     </div>

@@ -57,12 +57,16 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
       const classDef = world.classes.find((c) => c.id === draft.classId)
       if (!classDef) return
       const stats = { ...classDef.startingStats }
+      const startedAt = Date.now()
       const inventory: InventoryItem[] = classDef.startingInventory.map((t) => ({
         id: uuid(),
         ...t,
+        level: 1,
+        acquired: { at: startedAt, source: 'starting' },
       }))
       const maxHp = maxHpFor(stats)
       const maxMagic = classDef.startingMaxMagic
+      const createdAt = Date.now()
       onComplete({
         ...makeDefaults(world.id),
         id: uuid(),
@@ -72,7 +76,7 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
         speciesId: draft.speciesId,
         genderId: draft.genderId,
         classId: draft.classId,
-        createdAt: Date.now(),
+        createdAt,
         level: 1,
         xp: 0,
         hp: Math.max(1, Math.ceil(maxHp * 0.6)),
@@ -81,6 +85,14 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
         maxMagic,
         stats,
         inventory,
+        spells: [...(classDef.startingSpells ?? [])],
+        segment: { startedAt: createdAt, startGold: 0 },
+        // New characters wake into a slowed world (0.5×) and ramp up to 1×
+        // over their first ~150 ticks. The auto-flag lets the runtime
+        // step the speed up; the topbar control flips it off when the
+        // user picks a speed manually.
+        tickSpeed: '50',
+        tickSpeedAuto: true,
       })
       return
     }

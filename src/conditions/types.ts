@@ -23,6 +23,14 @@ export interface ConditionDef {
   /** Default duration in ticks when applied. Callers may override. */
   defaultDuration: number
   params: ConditionParams
+  /** Optional elemental overlay for application / tick events
+   *  (e.g. poisoned → earth, hacked → hack, irradiated → fire). */
+  element?: 'fire' | 'ice' | 'electric' | 'earth' | 'hack'
+  /** Transitive verb for the active-voice application log when a source is
+   *  known, e.g. "poisons" → "Goblin poisons Aerin.". Falls back to the
+   *  passive form (`is ${name.toLowerCase()}`) when absent or source is
+   *  unknown. Intensity adverbs may be appended by the log layer. */
+  verb?: string
 }
 
 export interface ActiveCondition {

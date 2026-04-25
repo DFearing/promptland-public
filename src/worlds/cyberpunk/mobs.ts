@@ -61,19 +61,19 @@ const ARCHETYPES: MobArchetype[] = [
 
 const FLAVORS: Record<string, MobFlavor> = {
   street_punk: {
-    name: 'street punk',
+    name: 'Street Punk',
     description: 'Hoodie pulled low, grin pulled lower. Cheap knife, cheap attitude.',
   },
   scav_hound: {
-    name: 'scav hound',
+    name: 'Scav Hound',
     description: 'Half dog, half augment, all hunger. Red LED where its left eye was.',
   },
   security_drone: {
-    name: 'security drone',
+    name: 'Security Drone',
     description: 'Corp logo scratched off. Still flies, still shoots, still thinks it owns the hall.',
   },
   netrunner_ghost: {
-    name: 'netrunner ghost',
+    name: 'Netrunner Ghost',
     description: 'A silhouette flickering between the walls. Something of them still runs on the net.',
   },
 }
