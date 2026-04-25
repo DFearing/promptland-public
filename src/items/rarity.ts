@@ -1,3 +1,5 @@
+import type { Rng } from '../rng'
+
 // Five-tier rarity system shared by items and mobs.
 //
 // Items roll a rarity at drop time and persist it on the InventoryItem.
@@ -30,11 +32,17 @@ export interface RarityDef {
   rollWeight: number
 }
 
+// Rarity colors reference theme tokens (defined in design/colors_and_type.css
+// and per-theme overrides in src/themes/extra.css) so each theme can tune
+// the tier palette to its own look. `rarityColor` returns these strings
+// verbatim; browsers resolve `var(--rarity-…)` wherever a CSS color value
+// is expected — inline `style.color`, `style.background`, CSS `color-mix`
+// — so call sites don't need to change.
 export const RARITY_DEFS: Record<Rarity, RarityDef> = {
   common: {
     id: 'common',
     label: 'Common',
-    color: '#c8c8c8',
+    color: 'var(--rarity-common)',
     statMult: 1,
     valueMult: 1,
     mobPrefix: '',
@@ -44,7 +52,7 @@ export const RARITY_DEFS: Record<Rarity, RarityDef> = {
   uncommon: {
     id: 'uncommon',
     label: 'Uncommon',
-    color: '#5fd45f',
+    color: 'var(--rarity-uncommon)',
     statMult: 1.3,
     valueMult: 1.6,
     mobPrefix: 'Strong ',
@@ -54,7 +62,7 @@ export const RARITY_DEFS: Record<Rarity, RarityDef> = {
   rare: {
     id: 'rare',
     label: 'Rare',
-    color: '#5aa7ff',
+    color: 'var(--rarity-rare)',
     statMult: 1.7,
     valueMult: 2.4,
     mobPrefix: 'King ',
@@ -64,7 +72,7 @@ export const RARITY_DEFS: Record<Rarity, RarityDef> = {
   epic: {
     id: 'epic',
     label: 'Epic',
-    color: '#c084fc',
+    color: 'var(--rarity-epic)',
     statMult: 2.2,
     valueMult: 4,
     mobPrefix: 'Strong King ',
@@ -74,7 +82,7 @@ export const RARITY_DEFS: Record<Rarity, RarityDef> = {
   legendary: {
     id: 'legendary',
     label: 'Legendary',
-    color: '#ffb040',
+    color: 'var(--rarity-legendary)',
     statMult: 3,
     valueMult: 8,
     mobPrefix: 'Dread King ',
@@ -141,20 +149,14 @@ export function defeatLingerMs(rarity: Rarity): number {
 // Rolls a rarity using the per-tier weights. Optionally biases upward (for
 // higher-tier mob drops): each step of \`bias\` adds one tier's worth of
 // skew toward the top. Bias of 0 = unbiased.
-export function rollRarity(bias = 0): Rarity {
+export function rollRarity(bias = 0, rng: Rng): Rarity {
   const effective: Array<[Rarity, number]> = RARITIES.map((r, i) => {
     const base = RARITY_DEFS[r].rollWeight
     // A positive bias rotates weight toward higher tiers.
     const shifted = i < bias ? base * 0.3 : base
     return [r, shifted]
   })
-  const total = effective.reduce((acc, [, w]) => acc + w, 0)
-  let roll = Math.random() * total
-  for (const [r, w] of effective) {
-    roll -= w
-    if (roll <= 0) return r
-  }
-  return 'common'
+  return rng.weighted(effective)
 }
 
 // For mobs: rarity distribution skews to common more heavily than items, so
@@ -165,7 +167,7 @@ export function rollRarity(bias = 0): Rarity {
 // the original baseline; each additional level of area difficulty pushes
 // a little more weight into the upper tiers. Capped so a very high-level
 // area still has some commons rolling through.
-export function rollMobRarity(areaLevel: number = 1): Rarity {
+export function rollMobRarity(areaLevel: number = 1, rng: Rng): Rarity {
   const bias = Math.max(0, areaLevel - 1)
   const weights: Array<[Rarity, number]> = [
     ['common', Math.max(30, 72 - bias * 4)],
@@ -174,13 +176,7 @@ export function rollMobRarity(areaLevel: number = 1): Rarity {
     ['epic', 2.5 + bias * 0.75],
     ['legendary', 0.5 + bias * 0.25],
   ]
-  const total = weights.reduce((acc, [, w]) => acc + w, 0)
-  let roll = Math.random() * total
-  for (const [r, w] of weights) {
-    roll -= w
-    if (roll <= 0) return r
-  }
-  return 'common'
+  return rng.weighted(weights)
 }
 
 export function rarityColor(rarity: Rarity): string {

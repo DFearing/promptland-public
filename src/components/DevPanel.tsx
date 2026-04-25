@@ -3,7 +3,12 @@ import { roomKey } from '../areas'
 import type { Character } from '../character'
 import type { ConditionDef } from '../conditions'
 import type { ElementKind, ElementTarget, FieldId } from '../effects'
-import { RARITIES, type Rarity } from '../items'
+import { RARITIES, rarityColor, rarityLabel, type Rarity } from '../items'
+import {
+  SOUND_EVENT_KINDS,
+  SOUND_EVENT_LABELS,
+  type SoundEventKind,
+} from '../sound'
 import {
   THEMES,
   applyTheme,
@@ -11,7 +16,9 @@ import {
   saveTheme,
   type ThemeId,
 } from '../themes'
+import type { Area } from '../areas'
 import type { WorldContent } from '../worlds'
+import DevPanelGen from './DevPanelGen'
 
 export type FullscreenFxKind =
   | 'level-up'
@@ -40,6 +47,7 @@ export type DevCommand =
   | { kind: 'add-gold'; amount: number }
   | { kind: 'give-item'; itemId: string; rarity: Rarity }
   | { kind: 'set-value'; field: SetField; value: number }
+  | { kind: 'set-ticks'; value: number }
   | { kind: 'apply-condition'; conditionId: string }
   | { kind: 'clear-conditions' }
   | { kind: 'sell-items' }
@@ -47,14 +55,17 @@ export type DevCommand =
   | { kind: 'move-direction'; dx: number; dy: number; dz: number }
   | { kind: 'reset-location' }
   | { kind: 'travel-to-area'; areaId: string }
+  | { kind: 'travel-to-portal-hub' }
   | { kind: 'purge-generated-areas' }
   | { kind: 'force-rest' }
   | { kind: 'force-meditate' }
   | { kind: 'clear-log' }
   | { kind: 'log-samples' }
+  | { kind: 'save' }
   | { kind: 'fx-fullscreen'; fx: FullscreenFxKind }
   | { kind: 'fx-field'; field: FieldId; delta: number }
   | { kind: 'fx-element'; element: ElementKind; target: ElementTarget }
+  | { kind: 'play-sound'; event: SoundEventKind }
 
 export type SetField =
   | 'hp'
@@ -79,7 +90,7 @@ interface Props {
   conditions?: ConditionDef[]
 }
 
-type Tab = 'play' | 'spawn' | 'set' | 'cond' | 'fx' | 'log' | 'theme' | 'area'
+type Tab = 'control' | 'set' | 'fx' | 'sound' | 'area' | 'system' | 'gen'
 
 const FULLSCREEN_FX_LABELS: Record<FullscreenFxKind, string> = {
   'level-up': 'Level up',
@@ -119,6 +130,7 @@ const INITIAL_OFFSET = 16
 const PANEL_WIDTH = 385
 const POS_KEY = 'promptland.devPanel.pos'
 const TAB_KEY = 'promptland.devPanel.tab'
+const AREA_BANDS_KEY = 'promptland.devPanel.areaBands'
 
 type ValueRow =
   | { kind: 'single'; field: SetField; label: string }
@@ -179,6 +191,11 @@ const THEME_PREVIEW: Record<ThemeId, { bg: string; fg: string; shadow?: string }
   vacuum:   { bg: '#07132a', fg: '#b8ecff', shadow: '0 0 6px rgba(94,214,255,0.4)' },
   vellum:   { bg: '#ece1c0', fg: '#a82c00' },
   paper:    { bg: '#ffffff', fg: '#101010' },
+  // Custom preview uses the default custom palette as a static swatch.
+  // Live-tracking the user's actual custom colors would require
+  // rendering through CSS vars, which the dev panel's preview grid
+  // doesn't do — so the preview reads as "a generic user palette".
+  custom:   { bg: '#050706', fg: '#a8ffb0', shadow: '0 0 6px rgba(76,255,106,0.4)' },
 }
 
 function currentValue(c: Character, field: SetField): number {
@@ -234,21 +251,26 @@ function loadSavedTab(): Tab {
   try {
     const raw = localStorage.getItem(TAB_KEY)
     if (
-      raw === 'play' ||
-      raw === 'spawn' ||
+      raw === 'control' ||
       raw === 'set' ||
-      raw === 'cond' ||
       raw === 'fx' ||
-      raw === 'log' ||
-      raw === 'theme' ||
-      raw === 'area'
+      raw === 'sound' ||
+      raw === 'area' ||
+      raw === 'system' ||
+      raw === 'gen'
     ) {
       return raw
     }
+    // Migrate old tab ids from before the System/Control/Cond reshuffle so
+    // existing users don't land on a removed tab and see nothing. Theme
+    // moved into the bottom of System.
+    if (raw === 'play') return 'control'
+    if (raw === 'spawn' || raw === 'log' || raw === 'theme') return 'system'
+    if (raw === 'cond') return 'set'
   } catch {
     // ignore
   }
-  return 'play'
+  return 'control'
 }
 
 function saveTab(t: Tab): void {
@@ -315,6 +337,206 @@ function NumStepper({
         </button>
       </span>
     </span>
+  )
+}
+
+// Coarse tier buckets used by the Area tab accordion. Tight enough to read
+// at a glance, wide enough that each band usually has a couple of entries.
+const AREA_BANDS: Array<{ order: number; label: string; test: (lvl: number | undefined) => boolean }> = [
+  { order: 1, label: 'Lvl 1–5', test: (l) => typeof l === 'number' && l <= 5 },
+  { order: 2, label: 'Lvl 6–10', test: (l) => typeof l === 'number' && l > 5 && l <= 10 },
+  { order: 3, label: 'Lvl 11–15', test: (l) => typeof l === 'number' && l > 10 && l <= 15 },
+  { order: 4, label: 'Lvl 16–20', test: (l) => typeof l === 'number' && l > 15 && l <= 20 },
+  { order: 5, label: 'Lvl 21–30', test: (l) => typeof l === 'number' && l > 20 && l <= 30 },
+  { order: 6, label: 'Lvl 31+', test: (l) => typeof l === 'number' && l > 30 },
+  { order: 99, label: 'Lvl ?', test: (l) => typeof l !== 'number' },
+]
+
+function areaBandFor(level: number | undefined): { order: number; label: string } {
+  for (const band of AREA_BANDS) {
+    if (band.test(level)) return { order: band.order, label: band.label }
+  }
+  return { order: 99, label: 'Lvl ?' }
+}
+
+// Short relative-time label for area cards. `formatRelative` in util/time is
+// a touch long for a card footer ("3 minutes ago"); this returns "3m ago"
+// style stamps so the row stays tight.
+function compactRelative(ms: number, now = Date.now()): string {
+  const diff = Math.max(0, now - ms)
+  const sec = Math.floor(diff / 1000)
+  if (sec < 45) return 'just now'
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m ago`
+  const hrs = Math.floor(min / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 14) return `${days}d ago`
+  const weeks = Math.floor(days / 7)
+  if (weeks < 8) return `${weeks}w ago`
+  const months = Math.floor(days / 30)
+  return `${months}mo ago`
+}
+
+interface AreaTabProps {
+  world: WorldContent | undefined
+  character: Character
+  openBands: Set<string>
+  toggleBand: (label: string) => void
+  onCommand: (cmd: DevCommand) => void
+}
+
+function AreaTab({ world, character, openBands, toggleBand, onCommand }: AreaTabProps) {
+  const rawAreas =
+    world?.areas && world.areas.length > 0
+      ? world.areas
+      : world
+        ? [world.startingArea]
+        : []
+  const sorted = [...rawAreas].sort((a, b) => {
+    const ao = areaBandFor(a.level).order
+    const bo = areaBandFor(b.level).order
+    if (ao !== bo) return ao - bo
+    const al = typeof a.level === 'number' ? a.level : Infinity
+    const bl = typeof b.level === 'number' ? b.level : Infinity
+    if (al !== bl) return al - bl
+    return a.name.localeCompare(b.name)
+  })
+  const groups: Array<{ label: string; areas: Area[] }> = []
+  for (const area of sorted) {
+    const band = areaBandFor(area.level)
+    const last = groups[groups.length - 1]
+    if (last && last.label === band.label) {
+      last.areas.push(area)
+    } else {
+      groups.push({ label: band.label, areas: [area] })
+    }
+  }
+  const currentAreaId = character.position.areaId
+  // Seed the accordion with the band containing the character's current area
+  // so the first render shows something useful even if the user has never
+  // expanded anything. Treat an empty set as "auto-open the current band";
+  // once the user explicitly collapses all, they stay collapsed.
+  const autoOpenLabel =
+    openBands.size === 0
+      ? groups.find((g) => g.areas.some((a) => a.id === currentAreaId))?.label
+      : undefined
+  const isOpen = (label: string) =>
+    openBands.has(label) || label === autoOpenLabel
+  const hasPortalHub = sorted.some((a) =>
+    Object.values(a.rooms).some((r) => r.portalHub === true),
+  )
+
+  return (
+    <div className="dev__areas">
+      <div className="dev__area-actions">
+        <button
+          type="button"
+          className="dev__btn dev__btn--compact"
+          disabled={!hasPortalHub}
+          data-tip={
+            hasPortalHub
+              ? 'Travel to the portal hub'
+              : 'No portal hub in this world'
+          }
+          onClick={() => onCommand({ kind: 'travel-to-portal-hub' })}
+        >
+          Travel to portal hub
+        </button>
+      </div>
+      {sorted.length === 0 ? (
+        <div className="dev__empty">No areas loaded for this world.</div>
+      ) : (
+        groups.map((g) => {
+          const open = isOpen(g.label)
+          return (
+            <div key={g.label} className="dev__area-group">
+              <button
+                type="button"
+                className="dev__accordion-head"
+                aria-expanded={open}
+                onClick={() => toggleBand(g.label)}
+              >
+                <span className="dev__accordion-arrow" aria-hidden="true">
+                  {open ? '▾' : '▸'}
+                </span>
+                <span className="dev__accordion-label">{g.label}</span>
+                <span className="dev__accordion-count">{g.areas.length}</span>
+              </button>
+              {open && (
+                <div className="dev__area-cards">
+                  {g.areas.map((a) => {
+                    const active = a.id === currentAreaId
+                    const rarity = a.rarity ?? 'common'
+                    const roomCount = Object.keys(a.rooms).length
+                    const lvl = typeof a.level === 'number' ? a.level : '?'
+                    const generatedAt = a.generatedAt
+                    const isAuthored = typeof generatedAt !== 'number'
+                    return (
+                      <div
+                        key={a.id}
+                        className={'dev__area-card' + (active ? ' dev__area-card--active' : '')}
+                      >
+                        <div className="dev__area-card-head">
+                          <span
+                            className="dev__area-card-name"
+                            style={{ color: rarityColor(rarity) }}
+                          >
+                            {a.name}
+                          </span>
+                          <span className="dev__area-card-lvl">Lvl {lvl}</span>
+                        </div>
+                        <div className="dev__area-card-meta">
+                          <span
+                            className={'dev__area-card-rarity dev__rbtn--' + rarity}
+                          >
+                            {rarityLabel(rarity)}
+                          </span>
+                          <span className="dev__area-card-rooms">
+                            {roomCount} room{roomCount === 1 ? '' : 's'}
+                          </span>
+                          <span className="dev__area-card-age">
+                            {isAuthored
+                              ? 'Authored'
+                              : compactRelative(generatedAt)}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className={
+                            'dev__btn dev__btn--compact' +
+                            (active ? ' dev__btn--active' : '')
+                          }
+                          disabled={active}
+                          data-tip={
+                            active
+                              ? 'Character is already here'
+                              : `Travel to ${a.name}`
+                          }
+                          onClick={() =>
+                            onCommand({ kind: 'travel-to-area', areaId: a.id })
+                          }
+                        >
+                          {active ? 'You are here' : 'Travel'}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })
+      )}
+      <button
+        type="button"
+        className="dev__btn dev__btn--danger"
+        data-tip="Delete every LLM-generated area from the entity cache for this world, plus its exit-to-area graph. Authored areas are untouched."
+        onClick={() => onCommand({ kind: 'purge-generated-areas' })}
+      >
+        Purge generated areas
+      </button>
+    </div>
   )
 }
 
@@ -409,6 +631,39 @@ export default function DevPanel({
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
+  // --- Area-accordion sub-state -----------------------------------------
+  // Remember which level bands are open on the Area tab. Persisted across
+  // tab switches (and across sessions) so a user who lives in 6–10 doesn't
+  // re-open it every time. `null` until first load so we know to seed with
+  // the band that contains the character's current area.
+  const [openBands, setOpenBands] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(AREA_BANDS_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown
+        if (Array.isArray(parsed)) {
+          return new Set(parsed.filter((v): v is string => typeof v === 'string'))
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return new Set<string>()
+  })
+  const toggleBand = useCallback((label: string) => {
+    setOpenBands((prev) => {
+      const next = new Set(prev)
+      if (next.has(label)) next.delete(label)
+      else next.add(label)
+      try {
+        localStorage.setItem(AREA_BANDS_KEY, JSON.stringify([...next]))
+      } catch {
+        // ignore
+      }
+      return next
+    })
+  }, [])
+
   // --- Spawn sub-state ---------------------------------------------------
   const [spawnRarity, setSpawnRarity] = useState<Rarity>('common')
   const [spawnMobId, setSpawnMobId] = useState<string | null>(null)
@@ -446,6 +701,20 @@ export default function DevPanel({
     if (!Number.isFinite(n)) return
     onCommand({ kind: 'set-value', field, value: n })
   }
+
+  // Ticks lives outside the SetField enum because it's a lifetime counter,
+  // not a character stat — it has no max pair, doesn't fit any of the
+  // Vitals / Progression / Drives groupings by meaning, and gets dispatched
+  // through its own command kind. Keeping it in a dedicated draft cell
+  // avoids bloating the SetField union just to hang one dev knob off it.
+  const [tickDraft, setTickDraft] = useState<string>(() =>
+    String(character.ticks ?? 0),
+  )
+  const applyTickDraft = () => {
+    const n = Number(tickDraft)
+    if (!Number.isFinite(n)) return
+    onCommand({ kind: 'set-ticks', value: n })
+  }
   // Apply a paired row (current + max). Max lands first so the current-value
   // handler (which clamps to character.maxX) uses the new ceiling when the
   // follow-up set-value for the current field runs. Each branch only
@@ -462,16 +731,13 @@ export default function DevPanel({
   }
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'play', label: 'Play' },
-    { id: 'spawn', label: 'Spawn' },
+    { id: 'control', label: 'CTRL' },
     { id: 'set', label: 'Set' },
-    ...(conditions && conditions.length > 0
-      ? [{ id: 'cond' as const, label: 'Cond' }]
-      : []),
     { id: 'fx', label: 'FX' },
-    { id: 'log', label: 'Log' },
-    { id: 'theme', label: 'Theme' },
+    { id: 'sound', label: 'SND' },
     { id: 'area', label: 'Area' },
+    { id: 'gen', label: 'Gen' },
+    { id: 'system', label: 'SYS' },
   ]
 
   return (
@@ -485,9 +751,20 @@ export default function DevPanel({
       <div className="dev__bar" onMouseDown={onHeaderMouseDown}>
         <span className="dev__drag-grip" aria-hidden="true">⋮⋮</span>
         <span className="dev__title">Developer</span>
-        <span className={'dev__status' + (paused ? ' dev__status--paused' : '')}>
-          {paused ? 'Paused' : 'Running'}
-        </span>
+        <button
+          type="button"
+          className={'dev__status' + (paused ? ' dev__status--paused' : '')}
+          aria-pressed={paused}
+          aria-label={paused ? 'Resume ticks' : 'Pause ticks'}
+          data-tip={paused ? 'Click to resume' : 'Click to pause'}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => onCommand(paused ? { kind: 'resume' } : { kind: 'pause' })}
+        >
+          <span className="dev__status-glyph" aria-hidden="true">
+            {paused ? '▶' : '❚❚'}
+          </span>
+          <span className="dev__status-label">{paused ? 'Paused' : 'Running'}</span>
+        </button>
         <button
           type="button"
           className="dev__close"
@@ -515,7 +792,7 @@ export default function DevPanel({
       </div>
 
       <div className="dev__scroll">
-        {tab === 'play' && (() => {
+        {tab === 'control' && (() => {
           // Probe each compass + vertical direction against the current area's
           // rooms so the D-pad can dim directions that would no-op.
           const pos = character.position
@@ -563,16 +840,10 @@ export default function DevPanel({
             <div className="dev__grid">
               <button
                 type="button"
-                className="dev__btn dev__btn--compact"
-                onClick={() => onCommand(paused ? { kind: 'resume' } : { kind: 'pause' })}
-              >
-                {paused ? 'Resume' : 'Pause'}
-              </button>
-              <button
-                type="button"
                 className="dev__btn"
                 disabled={!paused}
                 onClick={() => onCommand({ kind: 'tick-once' })}
+                data-tip={paused ? 'Advance one tick' : 'Pause from the toolbar title first'}
               >
                 Tick once
               </button>
@@ -606,6 +877,14 @@ export default function DevPanel({
               <button
                 type="button"
                 className="dev__btn"
+                data-tip="Force a save immediately, regardless of cadence"
+                onClick={() => onCommand({ kind: 'save' })}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                className="dev__btn"
                 data-tip="Teleport back to the world's starting room"
                 onClick={() => onCommand({ kind: 'reset-location' })}
               >
@@ -630,72 +909,6 @@ export default function DevPanel({
           </>
           )
         })()}
-
-        {tab === 'spawn' && (
-          <>
-            <div className="dev__rarity-row">
-              {RARITIES.map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  className={'dev__rbtn dev__rbtn--' + r + (spawnRarity === r ? ' dev__rbtn--sel' : '')}
-                  onClick={() => setSpawnRarity(r)}
-                  data-tip={r}
-                >
-                  {r}
-                </button>
-              ))}
-            </div>
-            {world && world.mobs.length > 0 && (
-              <div className="dev__row">
-                <span className="dev__row-label">Mob</span>
-                <select
-                  className="dev__select"
-                  value={effectiveMobId}
-                  onChange={(e) => setSpawnMobId(e.target.value)}
-                >
-                  {world.mobs.map((m) => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="dev__btn dev__btn--compact"
-                  disabled={!effectiveMobId}
-                  onClick={() =>
-                    onCommand({ kind: 'spawn-fight-at', mobId: effectiveMobId, rarity: spawnRarity })
-                  }
-                >
-                  Fight
-                </button>
-              </div>
-            )}
-            {world && world.items.length > 0 && (
-              <div className="dev__row">
-                <span className="dev__row-label">Item</span>
-                <select
-                  className="dev__select"
-                  value={effectiveItemId}
-                  onChange={(e) => setSpawnItemId(e.target.value)}
-                >
-                  {world.items.map((i) => (
-                    <option key={i.id} value={i.id}>{i.name}</option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="dev__btn dev__btn--compact"
-                  disabled={!effectiveItemId}
-                  onClick={() =>
-                    onCommand({ kind: 'give-item', itemId: effectiveItemId, rarity: spawnRarity })
-                  }
-                >
-                  Give
-                </button>
-              </div>
-            )}
-          </>
-        )}
 
         {tab === 'set' && (
           <div className="dev__values">
@@ -763,35 +976,70 @@ export default function DevPanel({
                 })}
               </div>
             ))}
-          </div>
-        )}
-
-        {tab === 'cond' && conditions && conditions.length > 0 && (
-          <>
-            <div className="dev__grid">
-              {conditions.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  className={
-                    'dev__btn dev__btn--cond ' +
-                    (c.polarity === 'buff' ? 'dev__btn--buff' : 'dev__btn--debuff')
-                  }
-                  data-tip={c.description}
-                  onClick={() => onCommand({ kind: 'apply-condition', conditionId: c.id })}
+            {/* Ticks lives outside the SetField groups — it's a lifetime
+                counter, not a stat — but the Set tab is the natural home
+                for "override this character value" knobs, so it gets its
+                own tiny section here at the bottom. Useful for jumping a
+                character past an auto-ramp threshold or winding back to
+                replay a save cadence. */}
+            <div className="dev__value-group">
+              <div className="dev__row-label dev__value-group-title">
+                Timeline
+              </div>
+              <div className="dev__value-row">
+                <span
+                  className="dev__value-label"
+                  data-tip={`Live: ${character.ticks ?? 0}`}
                 >
-                  {c.name}
+                  Ticks
+                </span>
+                <NumStepper
+                  value={tickDraft}
+                  onChange={setTickDraft}
+                  onCommit={applyTickDraft}
+                  step={100}
+                  aria-label="Ticks"
+                />
+                <button
+                  type="button"
+                  className="dev__btn dev__btn--compact"
+                  onClick={applyTickDraft}
+                >
+                  Set
                 </button>
-              ))}
+              </div>
             </div>
-            <button
-              type="button"
-              className="dev__btn"
-              onClick={() => onCommand({ kind: 'clear-conditions' })}
-            >
-              Clear all
-            </button>
-          </>
+            {conditions && conditions.length > 0 && (
+              <div className="dev__value-group">
+                <div className="dev__row-label dev__value-group-title">
+                  Conditions
+                </div>
+                <div className="dev__grid">
+                  {conditions.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={
+                        'dev__btn dev__btn--cond ' +
+                        (c.polarity === 'buff' ? 'dev__btn--buff' : 'dev__btn--debuff')
+                      }
+                      data-tip={c.description}
+                      onClick={() => onCommand({ kind: 'apply-condition', conditionId: c.id })}
+                    >
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="dev__btn"
+                  onClick={() => onCommand({ kind: 'clear-conditions' })}
+                >
+                  Clear all
+                </button>
+              </div>
+            )}
+          </div>
         )}
 
         {tab === 'fx' && (
@@ -860,127 +1108,133 @@ export default function DevPanel({
           </>
         )}
 
-        {tab === 'log' && (
-          <div className="dev__grid">
-            <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'clear-log' })}>
-              Clear log
-            </button>
-            <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'log-samples' })}>
-              Sample log
-            </button>
-          </div>
-        )}
+        {tab === 'system' && (
+          <div className="dev__system">
+            <div className="dev__row-label dev__fx-heading">Spawn</div>
+            <div className="dev__rarity-row">
+              {RARITIES.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  className={'dev__rbtn dev__rbtn--' + r + (spawnRarity === r ? ' dev__rbtn--sel' : '')}
+                  onClick={() => setSpawnRarity(r)}
+                  data-tip={r}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+            {world && world.mobs.length > 0 && (
+              <div className="dev__row">
+                <span className="dev__row-label">Mob</span>
+                <select
+                  className="dev__select"
+                  value={effectiveMobId}
+                  onChange={(e) => setSpawnMobId(e.target.value)}
+                >
+                  {world.mobs.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="dev__btn dev__btn--compact"
+                  disabled={!effectiveMobId}
+                  onClick={() =>
+                    onCommand({ kind: 'spawn-fight-at', mobId: effectiveMobId, rarity: spawnRarity })
+                  }
+                >
+                  Fight
+                </button>
+              </div>
+            )}
+            {world && world.items.length > 0 && (
+              <div className="dev__row">
+                <span className="dev__row-label">Item</span>
+                <select
+                  className="dev__select"
+                  value={effectiveItemId}
+                  onChange={(e) => setSpawnItemId(e.target.value)}
+                >
+                  {world.items.map((i) => (
+                    <option key={i.id} value={i.id}>{i.name}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="dev__btn dev__btn--compact"
+                  disabled={!effectiveItemId}
+                  onClick={() =>
+                    onCommand({ kind: 'give-item', itemId: effectiveItemId, rarity: spawnRarity })
+                  }
+                >
+                  Give
+                </button>
+              </div>
+            )}
 
-        {tab === 'area' && (() => {
-          const rawAreas =
-            world?.areas && world.areas.length > 0
-              ? world.areas
-              : world
-                ? [world.startingArea]
-                : []
-          // Coarse tier buckets — tight enough to read at a glance, wide
-          // enough that each band usually has a couple of entries. Areas
-          // without a level don't reach this code path — rehydration
-          // drops them from both world.areas and the cache, and fresh
-          // generations always stamp the character's level.
-          const bandFor = (
-            level: number | undefined,
-          ): { order: number; label: string } => {
-            if (typeof level !== 'number') return { order: 99, label: 'Lvl ?' }
-            if (level <= 5) return { order: 1, label: 'Lvl 1–5' }
-            if (level <= 10) return { order: 2, label: 'Lvl 6–10' }
-            if (level <= 15) return { order: 3, label: 'Lvl 11–15' }
-            if (level <= 20) return { order: 4, label: 'Lvl 16–20' }
-            if (level <= 30) return { order: 5, label: 'Lvl 21–30' }
-            return { order: 6, label: 'Lvl 31+' }
-          }
-          const sorted = [...rawAreas].sort((a, b) => {
-            const ao = bandFor(a.level).order
-            const bo = bandFor(b.level).order
-            if (ao !== bo) return ao - bo
-            const al = typeof a.level === 'number' ? a.level : Infinity
-            const bl = typeof b.level === 'number' ? b.level : Infinity
-            if (al !== bl) return al - bl
-            return a.name.localeCompare(b.name)
-          })
-          // Group in sorted order — preserves the tier ordering while
-          // producing one section per populated band.
-          const groups: Array<{ label: string; areas: typeof sorted }> = []
-          for (const area of sorted) {
-            const band = bandFor(area.level)
-            const last = groups[groups.length - 1]
-            if (last && last.label === band.label) {
-              last.areas.push(area)
-            } else {
-              groups.push({ label: band.label, areas: [area] })
-            }
-          }
-          const currentAreaId = character.position.areaId
-          return (
-            <div className="dev__areas">
-              {sorted.length === 0 ? (
-                <div className="dev__empty">No areas loaded for this world.</div>
-              ) : (
-                groups.map((g) => (
-                  <div key={g.label} className="dev__area-group">
-                    <div className="dev__area-group-label">{g.label}</div>
-                    {g.areas.map((a) => {
-                      const active = a.id === currentAreaId
-                      const lvl = typeof a.level === 'number' ? a.level : '?'
-                      return (
-                        <button
-                          key={a.id}
-                          type="button"
-                          className={'dev__btn' + (active ? ' dev__btn--active' : '')}
-                          data-tip={
-                            active
-                              ? 'Character is already here'
-                              : `Travel to ${a.name}`
-                          }
-                          onClick={() => onCommand({ kind: 'travel-to-area', areaId: a.id })}
-                        >
-                          {a.name} <span className="dev__area-lvl">(lvl {lvl})</span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                ))
-              )}
-              <button
-                type="button"
-                className="dev__btn dev__btn--danger"
-                data-tip="Delete every LLM-generated area from the entity cache for this world, plus its exit-to-area graph. Authored areas are untouched."
-                onClick={() => onCommand({ kind: 'purge-generated-areas' })}
-              >
-                Purge generated areas
+            <div className="dev__row-label dev__fx-heading">Log</div>
+            <div className="dev__grid">
+              <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'clear-log' })}>
+                Clear log
+              </button>
+              <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'log-samples' })}>
+                Sample log
               </button>
             </div>
-          )
-        })()}
 
-        {tab === 'theme' && (
-          <div className="dev__themes">
-            {THEMES.map((t) => {
-              const preview = THEME_PREVIEW[t.id]
-              const active = theme === t.id
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  className={'dev__theme' + (active ? ' dev__theme--active' : '')}
-                  onClick={() => pickTheme(t.id)}
-                  style={{
-                    background: preview.bg,
-                    color: preview.fg,
-                    textShadow: preview.shadow ?? 'none',
-                  }}
-                >
-                  {t.name}
-                </button>
-              )
-            })}
+            <div className="dev__row-label dev__fx-heading">Theme</div>
+            <div className="dev__themes">
+              {THEMES.map((t) => {
+                const preview = THEME_PREVIEW[t.id]
+                const active = theme === t.id
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={'dev__theme' + (active ? ' dev__theme--active' : '')}
+                    onClick={() => pickTheme(t.id)}
+                    style={{
+                      background: preview.bg,
+                      color: preview.fg,
+                      textShadow: preview.shadow ?? 'none',
+                    }}
+                  >
+                    {t.name}
+                  </button>
+                )
+              })}
+            </div>
           </div>
         )}
+
+        {tab === 'sound' && (
+          <div className="dev__fx-grid">
+            {SOUND_EVENT_KINDS.map((k) => (
+              <button
+                key={k}
+                type="button"
+                className="dev__btn dev__btn--compact"
+                onClick={() => onCommand({ kind: 'play-sound', event: k })}
+                data-tip={`Play ${SOUND_EVENT_LABELS[k]}`}
+              >
+                {SOUND_EVENT_LABELS[k]}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {tab === 'area' && (
+          <AreaTab
+            world={world}
+            character={character}
+            openBands={openBands}
+            toggleBand={toggleBand}
+            onCommand={onCommand}
+          />
+        )}
+
+        {tab === 'gen' && <DevPanelGen />}
       </div>
 
       <style>{`
@@ -1010,8 +1264,46 @@ export default function DevPanel({
         .dev__bar:active { cursor: grabbing; }
         .dev__drag-grip { color: var(--fg-3); font-family: var(--font-mono); font-size: var(--text-md); padding: 0 2px; letter-spacing: -2px; }
         .dev__title { font-family: var(--font-display); font-size: var(--text-sm); letter-spacing: 0.12em; text-transform: uppercase; color: var(--warn); text-shadow: var(--glow-sm); }
-        .dev__status { font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-2); padding: 0 var(--sp-2); border: 1px dashed var(--line-2); }
-        .dev__status--paused { color: var(--warn); border-style: solid; border-color: var(--warn); text-shadow: var(--glow-sm); }
+        /* Status doubles as the pause/resume button — clicking toggles the
+           game tick. Sits in the title bar but stopPropagation on mousedown
+           so a click here does not start a drag. Running = dashed border +
+           play glyph; Paused = solid warn border + ❚❚ glyph. */
+        .dev__status {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          line-height: 1;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          color: var(--fg-2);
+          padding: 3px var(--sp-2);
+          background: transparent;
+          border: 1px dashed var(--line-2);
+          cursor: pointer;
+          transition: color var(--dur-fast) var(--ease-crt),
+                      border-color var(--dur-fast) var(--ease-crt);
+        }
+        .dev__status:hover, .dev__status:focus-visible {
+          outline: none;
+          color: var(--accent-hot);
+          border-color: var(--accent-hot);
+          border-style: solid;
+          text-shadow: var(--glow-sm);
+        }
+        .dev__status--paused {
+          color: var(--warn);
+          border-style: solid;
+          border-color: var(--warn);
+          text-shadow: var(--glow-sm);
+        }
+        .dev__status--paused:hover, .dev__status--paused:focus-visible {
+          color: var(--warn);
+          border-color: var(--warn);
+        }
+        .dev__status-glyph { font-size: 10px; line-height: 1; }
+        .dev__status-label { font-variant-numeric: tabular-nums; }
         .dev__close { width: 22px; height: 22px; padding: 0; background: transparent; border: 1px solid var(--line-2); color: var(--fg-2); cursor: pointer; font-family: var(--font-mono); font-size: var(--text-base); line-height: 1; transition: color var(--dur-fast) var(--ease-crt), border-color var(--dur-fast) var(--ease-crt); }
         .dev__close:hover, .dev__close:focus-visible { outline: none; color: var(--bad); border-color: var(--bad); text-shadow: var(--glow-sm); }
 
@@ -1122,11 +1414,11 @@ export default function DevPanel({
           cursor: pointer;
         }
         .dev__rbtn:hover { border-color: var(--line-3); }
-        .dev__rbtn--common { color: #c8c8c8; }
-        .dev__rbtn--uncommon { color: #5fd45f; }
-        .dev__rbtn--rare { color: #5aa7ff; }
-        .dev__rbtn--epic { color: #c084fc; }
-        .dev__rbtn--legendary { color: #ffb040; }
+        .dev__rbtn--common { color: var(--rarity-common); }
+        .dev__rbtn--uncommon { color: var(--rarity-uncommon); }
+        .dev__rbtn--rare { color: var(--rarity-rare); }
+        .dev__rbtn--epic { color: var(--rarity-epic); }
+        .dev__rbtn--legendary { color: var(--rarity-legendary); }
         .dev__rbtn--sel { box-shadow: inset 0 0 0 1px currentColor; border-color: currentColor; text-shadow: 0 0 4px currentColor; }
 
         .dev__select { background: var(--bg-inset); color: var(--fg-1); border: 1px solid var(--line-2); padding: 3px var(--sp-1); font-family: var(--font-mono); font-size: var(--text-xs); outline: none; min-width: 0; }
@@ -1291,6 +1583,99 @@ export default function DevPanel({
           text-shadow: var(--glow-sm);
         }
         .dev__empty { color: var(--fg-3); font-style: italic; padding: var(--sp-2); text-align: center; }
+
+        /* Level-band accordion row. Looks like a pressable header with an
+           open/closed arrow, the band label, and a small count badge on the
+           right. Aligns with the Settings > Effects accordion styling so the
+           dev panel reads with the same visual language. */
+        .dev__accordion-head {
+          display: grid;
+          grid-template-columns: auto 1fr auto;
+          align-items: center;
+          gap: var(--sp-2);
+          width: 100%;
+          padding: 4px var(--sp-2);
+          background: var(--bg-inset);
+          border: 1px solid var(--line-2);
+          color: var(--fg-2);
+          cursor: pointer;
+          font-family: var(--font-display);
+          font-size: var(--text-xs);
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          transition: border-color var(--dur-fast) var(--ease-crt),
+                      color var(--dur-fast) var(--ease-crt);
+        }
+        .dev__accordion-head:hover { border-color: var(--line-3); color: var(--accent-hot); text-shadow: var(--glow-sm); }
+        .dev__accordion-arrow { font-family: var(--font-mono); color: var(--fg-3); width: 10px; text-align: center; }
+        .dev__accordion-label { text-align: left; }
+        .dev__accordion-count {
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          color: var(--fg-3);
+          background: var(--bg-2);
+          border: 1px solid var(--line-1);
+          padding: 0 var(--sp-1);
+          font-variant-numeric: tabular-nums;
+        }
+
+        /* Per-area card — replaces the plain button row. Shows the area
+           name in its rarity color, a level badge, then a meta line with
+           rarity + room count + generation age. Travel button anchors the
+           card's bottom-right. Active card gets the accent glow. */
+        .dev__area-cards { display: flex; flex-direction: column; gap: var(--sp-1); margin-top: 4px; }
+        .dev__area-card {
+          display: grid;
+          gap: 4px;
+          padding: var(--sp-2);
+          background: var(--bg-inset);
+          border: 1px solid var(--line-1);
+        }
+        .dev__area-card--active {
+          border-color: var(--accent-hot);
+          box-shadow: inset 0 0 0 1px var(--accent-hot);
+        }
+        .dev__area-card-head {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: var(--sp-2);
+        }
+        .dev__area-card-name {
+          font-family: var(--font-display);
+          font-size: var(--text-sm);
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          text-shadow: 0 0 4px currentColor;
+          /* Long names truncate rather than wrap the card into two lines. */
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          min-width: 0;
+        }
+        .dev__area-card-lvl {
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          color: var(--fg-3);
+          font-variant-numeric: tabular-nums;
+          flex-shrink: 0;
+        }
+        .dev__area-card-meta {
+          display: flex;
+          gap: var(--sp-2);
+          flex-wrap: wrap;
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          color: var(--fg-3);
+        }
+        .dev__area-card-rarity {
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+        }
+        .dev__area-card-rooms,
+        .dev__area-card-age {
+          font-variant-numeric: tabular-nums;
+        }
 
         .dev__themes { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--sp-1); }
         .dev__theme {

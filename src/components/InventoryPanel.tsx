@@ -1,14 +1,21 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Character, InventoryItem, ItemAcquisition } from '../character'
 import {
+  potionEffectAmount,
+  potionFraction,
+  potionSizeLabel,
   rarityColor,
   rarityLabel,
   rarityValueMult,
   scaledRequirements,
+  scrollLevelLabel,
   type EquipBonuses,
   type EquipRequirements,
   type EquipSlot,
+  type ItemKind,
+  type PotionSize,
   type Rarity,
+  type ScrollLevel,
   type WeaponHands,
 } from '../items'
 import { equipBonusesFor } from '../game/equip'
@@ -37,6 +44,16 @@ interface DisplayItem {
   requirements?: EquipRequirements
   /** Per-unit sell value, rarity-scaled. Undefined for items with no archetype value. */
   unitValue?: number
+  /** Kind of item — drives the filter dropdown. Unknown/un-archetyped items
+   *  fall into 'junk' so the filter still has somewhere to put them. */
+  kind: ItemKind
+  /** Potion size — present on consumables, drives the displayed amount and
+   *  the "Lesser / Greater / …" badge in the popover. */
+  potionSize?: PotionSize
+  /** Resolved heal/restore amount for a sized consumable. */
+  potionAmount?: number
+  /** Scroll power level (I-V) — present on scrolls. */
+  scrollLevel?: ScrollLevel
 }
 
 const BONUS_KEYS = [
@@ -53,12 +70,20 @@ const BONUS_KEYS = [
 // Archetyped items resolve live from world.items so future LLM-generated flavor
 // updates the UI without mutating stored inventory. Un-archetyped items (starting
 // inventory) use their frozen character-creation flavor.
-function displayOf(item: InventoryItem, world?: WorldContent): DisplayItem {
+function displayOf(
+  item: InventoryItem,
+  world: WorldContent | undefined,
+  character: Character,
+): DisplayItem {
   const rarity: Rarity = item.rarity ?? 'common'
   const level = item.level ?? 1
   if (item.archetypeId && world) {
     const def = world.items.find((i) => i.id === item.archetypeId)
     if (def) {
+      // Sale value scales with rarity ONLY for items that actually roll
+      // rarity (equipment). Scrolls and consumables have no rarity axis,
+      // so the archetype's printed `value` is the final sale price.
+      const valueMult = def.kind === 'equipment' ? rarityValueMult(rarity) : 1
       const base: DisplayItem = {
         id: item.id,
         name: def.name,
@@ -68,7 +93,8 @@ function displayOf(item: InventoryItem, world?: WorldContent): DisplayItem {
         level,
         weight: def.weight,
         acquired: item.acquired,
-        unitValue: def.value != null ? def.value * rarityValueMult(rarity) : undefined,
+        unitValue: def.value != null ? def.value * valueMult : undefined,
+        kind: def.kind,
       }
       if (def.kind === 'equipment') {
         base.slot = def.slot
@@ -78,6 +104,16 @@ function displayOf(item: InventoryItem, world?: WorldContent): DisplayItem {
         base.bonuses = equipBonusesFor(item, world)
         if (def.slot === 'weapon') base.hands = def.hands === 2 ? 2 : 1
         base.requirements = scaledRequirements(def.requirements, rarity)
+      } else if (def.kind === 'consumable') {
+        // Resolve the size against the CURRENT character's max so the
+        // popover preview matches what consume.ts will actually deliver
+        // when this character drinks it. A second character with a
+        // different maxHp will see a different number for the same item.
+        base.potionSize = def.size
+        const max = def.effect.kind === 'heal' ? character.maxHp : character.maxMagic
+        base.potionAmount = potionEffectAmount(def.size, max)
+      } else if (def.kind === 'scroll') {
+        base.scrollLevel = def.level
       }
       return base
     }
@@ -90,6 +126,7 @@ function displayOf(item: InventoryItem, world?: WorldContent): DisplayItem {
     rarity,
     level,
     acquired: item.acquired,
+    kind: 'junk',
   }
 }
 
@@ -136,6 +173,30 @@ const SLOT_TIPS = {
   ring2: 'Ring — second of two ring slots.',
 } as const
 
+// Items with their own progression axis (consumables → size, scrolls →
+// level) opt out of the rarity color so the name doesn't get painted with
+// a tier the item never actually rolled. Equipment / junk keep the
+// rarity tint as before. Returning `undefined` lets the React inline-style
+// fall back to the neutral text color from the surrounding panel.
+function nameColorFor(d: DisplayItem): string | undefined {
+  if (d.kind === 'consumable' || d.kind === 'scroll') return undefined
+  return rarityColor(d.rarity)
+}
+
+// Trailing meta after the item name in inventory rows. Equipment shows
+// its level (rarity is in the color). Consumables show their size.
+// Scrolls show their level as a Roman numeral. Keeping this in one helper
+// so the carried-list and equipped-slot rows render the same way.
+function nameSuffixFor(d: DisplayItem): string {
+  if (d.kind === 'consumable' && d.potionSize) {
+    return ` · ${potionSizeLabel(d.potionSize)}`
+  }
+  if (d.kind === 'scroll' && d.scrollLevel) {
+    return ` · ${scrollLevelLabel(d.scrollLevel)}`
+  }
+  return ` · Lv ${d.level}`
+}
+
 function SlotRow({
   slotLabel,
   slotTip,
@@ -165,9 +226,9 @@ function SlotRow({
       >
         <span className="inv__eq-label">{slotLabel}</span>
         <span className="inv__eq-body">
-          <span className="inv__name" style={{ color: rarityColor(item.rarity) }}>
+          <span className="inv__name" style={{ color: nameColorFor(item) }}>
             {item.name}
-            <span className="inv__lv"> · Lv {item.level}</span>
+            <span className="inv__lv">{nameSuffixFor(item)}</span>
           </span>
           {stats && <span className="inv__eq-stats">{stats}</span>}
         </span>
@@ -220,13 +281,150 @@ function RequirementsLine({
   )
 }
 
+// Sort mode + filter mode for the carried-items list. Persisted to
+// localStorage so the player's choice survives a reload. Filter targets
+// the coarse item families the player usually wants to triage by;
+// 'armor' buckets every non-weapon equipment slot together so the
+// dropdown stays four options wide instead of eleven.
+type SortMode = 'rarity' | 'type' | 'name' | 'value'
+type FilterMode = 'all' | 'weapon' | 'armor' | 'consumable' | 'junk'
+
+const SORT_STORAGE_KEY = 'promptland.inventory.sort'
+const FILTER_STORAGE_KEY = 'promptland.inventory.filter'
+
+const RARITY_RANK: Record<Rarity, number> = {
+  legendary: 0,
+  epic: 1,
+  rare: 2,
+  uncommon: 3,
+  common: 4,
+}
+
+// Integer order so the "type" sort groups items predictably — equipment
+// first (weapon, armor/etc), then consumables, scrolls, and junk at the
+// bottom. Within the same kind we fall back to rarity, then name.
+function typeRank(d: DisplayItem): number {
+  if (d.kind === 'equipment') {
+    return d.slot === 'weapon' ? 0 : 1
+  }
+  if (d.kind === 'consumable') return 2
+  if (d.kind === 'scroll') return 3
+  return 4
+}
+
+function matchesFilter(d: DisplayItem, filter: FilterMode): boolean {
+  if (filter === 'all') return true
+  if (filter === 'weapon') {
+    return d.kind === 'equipment' && d.slot === 'weapon'
+  }
+  if (filter === 'armor') {
+    // Every equipment slot other than the weapon itself — helmets, rings,
+    // amulets, etc. all roll up here so the filter stays simple.
+    return d.kind === 'equipment' && d.slot !== 'weapon'
+  }
+  if (filter === 'consumable') {
+    return d.kind === 'consumable' || d.kind === 'scroll'
+  }
+  if (filter === 'junk') return d.kind === 'junk'
+  return true
+}
+
+function comparator(mode: SortMode): (a: DisplayItem, b: DisplayItem) => number {
+  switch (mode) {
+    case 'rarity':
+      return (a, b) =>
+        RARITY_RANK[a.rarity] - RARITY_RANK[b.rarity] ||
+        b.level - a.level ||
+        a.name.localeCompare(b.name)
+    case 'type':
+      return (a, b) =>
+        typeRank(a) - typeRank(b) ||
+        RARITY_RANK[a.rarity] - RARITY_RANK[b.rarity] ||
+        a.name.localeCompare(b.name)
+    case 'name':
+      return (a, b) => a.name.localeCompare(b.name)
+    case 'value':
+    default:
+      return (a, b) => stackValue(b) - stackValue(a) || a.name.localeCompare(b.name)
+  }
+}
+
+function readStored<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+  if (typeof window === 'undefined') return fallback
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (raw && (allowed as readonly string[]).includes(raw)) return raw as T
+  } catch {
+    // localStorage access can throw in private-browsing / sandboxed modes —
+    // treat it as "no stored preference" rather than crashing the panel.
+  }
+  return fallback
+}
+
+const SORT_MODES: readonly SortMode[] = ['rarity', 'type', 'name', 'value']
+const FILTER_MODES: readonly FilterMode[] = [
+  'all',
+  'weapon',
+  'armor',
+  'consumable',
+  'junk',
+]
+
+const SORT_LABELS: Record<SortMode, string> = {
+  rarity: 'Rarity',
+  type: 'Type',
+  name: 'Name',
+  value: 'Value',
+}
+
+const FILTER_LABELS: Record<FilterMode, string> = {
+  all: 'All',
+  weapon: 'Weapons',
+  armor: 'Armor',
+  consumable: 'Consumables',
+  junk: 'Junk',
+}
+
 export default function InventoryPanel({ character, world }: Props) {
-  const rawItems = character.inventory ?? []
-  const items = rawItems
-    .map((i) => displayOf(i, world))
-    .sort((a, b) => stackValue(b) - stackValue(a))
+  const [sortMode, setSortMode] = useState<SortMode>(() =>
+    readStored<SortMode>(SORT_STORAGE_KEY, SORT_MODES, 'value'),
+  )
+  const [filterMode, setFilterMode] = useState<FilterMode>(() =>
+    readStored<FilterMode>(FILTER_STORAGE_KEY, FILTER_MODES, 'all'),
+  )
+  // Persist separately so switching one doesn't clobber the other.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SORT_STORAGE_KEY, sortMode)
+    } catch {
+      // ignore
+    }
+  }, [sortMode])
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FILTER_STORAGE_KEY, filterMode)
+    } catch {
+      // ignore
+    }
+  }, [filterMode])
+
+  // `character.inventory` is a stable reference from the game-state reducer
+  // between ticks, so memoizing directly on it keeps the display/sort work
+  // off the render hot path. Reading it inside useMemo (instead of into a
+  // local `rawItems` const) avoids the react-hooks/exhaustive-deps warning
+  // about logical-expression deps changing every render.
+  const displayed = useMemo(
+    () => (character.inventory ?? []).map((i) => displayOf(i, world, character)),
+    [world, character],
+  )
+  const items = useMemo(() => {
+    const filtered = displayed.filter((d) => matchesFilter(d, filterMode))
+    filtered.sort(comparator(sortMode))
+    return filtered
+  }, [displayed, filterMode, sortMode])
+  const hiddenByFilter = displayed.length - items.length
   const equipped = character.equipped ?? {}
-  const disp = (it?: InventoryItem) => (it ? displayOf(it, world) : null)
+  const disp = (it?: InventoryItem) => (it ? displayOf(it, world, character) : null)
   const weapon = disp(equipped.weapon)
   const offhand = disp(equipped.offhand)
   const armor = disp(equipped.armor)
@@ -251,6 +449,9 @@ export default function InventoryPanel({ character, world }: Props) {
     setPopover({ item, anchor })
   }
 
+  const chest = character.lockedChest
+  const chestItemCount = chest?.items.reduce((sum, it) => sum + (it.quantity ?? 1), 0) ?? 0
+
   const hasAnything =
     !!weapon ||
     !!offhand ||
@@ -264,7 +465,8 @@ export default function InventoryPanel({ character, world }: Props) {
     !!amulet ||
     !!ring1 ||
     !!ring2 ||
-    items.length > 0
+    displayed.length > 0 ||
+    !!chest
 
   if (!hasAnything) {
     return (
@@ -282,6 +484,32 @@ export default function InventoryPanel({ character, world }: Props) {
   return (
     <div className="inv">
       <ul className="inv__list">
+        {chest && (
+          <>
+            <li
+              className="inv__group inv__group--chest"
+              data-tip="Loot won in combat sits in a strange chest until it unlatches. Items can't be used or equipped until then."
+            >
+              Locked Spoils
+            </li>
+            <li className="inv__chest">
+              <span className="inv__chest-icon" aria-hidden="true">▣</span>
+              <span className="inv__chest-body">
+                <span className="inv__chest-summary">
+                  {chestItemCount > 0
+                    ? `${chestItemCount} item${chestItemCount !== 1 ? 's' : ''}`
+                    : 'empty'}
+                  {chest.gold > 0 ? ` · ${chest.gold} gold` : ''}
+                </span>
+                <span className="inv__chest-status">
+                  {chest.ticksLeft > 1
+                    ? `Unlatches in ${chest.ticksLeft} ticks`
+                    : 'About to open…'}
+                </span>
+              </span>
+            </li>
+          </>
+        )}
         <li className="inv__group" data-tip="Currently worn and wielded. Auto-equipped as better gear drops.">
           Equipped
         </li>
@@ -309,8 +537,46 @@ export default function InventoryPanel({ character, world }: Props) {
         <SlotRow slotLabel="Feet" slotTip={SLOT_TIPS.feet} item={feet} onOpen={openPopover} />
         <SlotRow slotLabel="Ring I" slotTip={SLOT_TIPS.ring1} item={ring1} onOpen={openPopover} />
         <SlotRow slotLabel="Ring II" slotTip={SLOT_TIPS.ring2} item={ring2} onOpen={openPopover} />
-        {items.length > 0 && (
-          <li className="inv__group" data-tip="Stashed items. Click any for full details.">Carried</li>
+        {displayed.length > 0 && (
+          <li className="inv__group inv__group--carried" data-tip="Stashed items. Click any for full details.">
+            <span>Carried</span>
+            <span className="inv__controls">
+              <label className="inv__control">
+                <span className="inv__control-label">Sort</span>
+                <select
+                  value={sortMode}
+                  onChange={(e) => setSortMode(e.target.value as SortMode)}
+                  aria-label="Sort carried items"
+                >
+                  {SORT_MODES.map((m) => (
+                    <option key={m} value={m}>
+                      {SORT_LABELS[m]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="inv__control">
+                <span className="inv__control-label">Filter</span>
+                <select
+                  value={filterMode}
+                  onChange={(e) => setFilterMode(e.target.value as FilterMode)}
+                  aria-label="Filter carried items"
+                >
+                  {FILTER_MODES.map((m) => (
+                    <option key={m} value={m}>
+                      {FILTER_LABELS[m]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </span>
+          </li>
+        )}
+        {displayed.length > 0 && items.length === 0 && (
+          <li className="inv__empty-filter">
+            No carried items match this filter.
+            {hiddenByFilter > 0 && ` (${hiddenByFilter} hidden)`}
+          </li>
         )}
         {items.map((item) => (
           <li key={item.id}>
@@ -323,11 +589,11 @@ export default function InventoryPanel({ character, world }: Props) {
             >
               <span
                 className="inv__name"
-                style={{ color: rarityColor(item.rarity) }}
+                style={{ color: nameColorFor(item) }}
               >
                 {item.name}
                 {item.quantity && item.quantity > 1 ? ` (x${item.quantity})` : ''}
-                <span className="inv__lv"> · Lv {item.level}</span>
+                <span className="inv__lv">{nameSuffixFor(item)}</span>
               </span>
               <span className="inv__qty">
                 {item.weight != null && (
@@ -342,22 +608,51 @@ export default function InventoryPanel({ character, world }: Props) {
       </ul>
 
       <Popover
+        // Key on the displayed item so switching between items (click
+        // legendary → click common) unmounts + remounts the Popover
+        // rather than reusing its DOM node. Inline style reconciliation
+        // was leaving the previous rarity's background / border tint in
+        // place on some renders; a fresh instance per item guarantees a
+        // clean DOM with no stale inline styles.
+        key={popover ? `item:${popover.item.id}` : 'closed'}
         open={popover != null}
         anchor={popover?.anchor ?? null}
         onClose={() => setPopover(null)}
+        // Don't tint the popover for items without a rarity axis
+        // (consumables / scrolls) — their visual identity is size / level,
+        // not tier.
+        rarity={
+          popover && (popover.item.kind === 'consumable' || popover.item.kind === 'scroll')
+            ? undefined
+            : popover?.item.rarity
+        }
       >
         {popover && (
           <>
             <h3
               className="popover__title"
-              style={{ color: rarityColor(popover.item.rarity) }}
+              style={{ color: nameColorFor(popover.item) }}
             >
               {popover.item.name}
             </h3>
             <p className="popover__meta">
-              Lv {popover.item.level}
-              {' · '}
-              {rarityLabel(popover.item.rarity)}
+              {popover.item.kind === 'consumable' && popover.item.potionSize ? (
+                <>
+                  {potionSizeLabel(popover.item.potionSize)} potion ·{' '}
+                  {Math.round(potionFraction(popover.item.potionSize) * 100)}%
+                  {popover.item.potionAmount != null
+                    ? ` (≈${popover.item.potionAmount})`
+                    : ''}
+                </>
+              ) : popover.item.kind === 'scroll' && popover.item.scrollLevel ? (
+                <>Level {scrollLevelLabel(popover.item.scrollLevel)} scroll</>
+              ) : (
+                <>
+                  Lv {popover.item.level}
+                  {' · '}
+                  {rarityLabel(popover.item.rarity)}
+                </>
+              )}
               {popover.item.hands === 2 ? ' · Two-handed' : ''}
               {popover.item.weight != null ? ` · ${popover.item.weight} wt` : ''}
             </p>
@@ -407,6 +702,55 @@ export default function InventoryPanel({ character, world }: Props) {
         .inv__list { list-style: none; margin: 0; padding: 0; flex: 1; min-height: 0; overflow-y: auto; font-family: var(--font-mono); font-size: var(--text-sm); }
         .inv__group { font-family: var(--font-display); font-size: var(--text-xs); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding: var(--sp-2) var(--sp-3) 2px; border-bottom: 1px solid var(--line-2); }
         .inv__group:first-child { padding-top: 0; }
+        /* Carried header doubles as the sort/filter control strip. Flex row
+           so the section label sits on the left and the dropdowns collapse
+           to the right edge, matching the panel's padding. */
+        .inv__group--carried {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: var(--sp-2);
+          padding-top: var(--sp-2);
+        }
+        .inv__controls {
+          display: inline-flex;
+          align-items: center;
+          gap: var(--sp-2);
+        }
+        .inv__control {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          color: var(--fg-3);
+        }
+        .inv__control-label { color: var(--fg-3); }
+        .inv__control select {
+          background: var(--bg-1);
+          color: var(--fg-1);
+          border: 1px solid var(--line-2);
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          letter-spacing: 0.04em;
+          padding: 2px 4px;
+          cursor: pointer;
+          text-transform: none;
+        }
+        .inv__control select:hover,
+        .inv__control select:focus-visible {
+          border-color: var(--line-3);
+          outline: none;
+        }
+        .inv__empty-filter {
+          padding: var(--sp-2) var(--sp-3);
+          color: var(--fg-3);
+          font-family: var(--font-body);
+          font-size: var(--text-xs);
+          font-style: italic;
+        }
         .inv__row { width: 100%; align-items: center; gap: var(--sp-2); padding: 4px var(--sp-3); background: transparent; border: none; border-bottom: 1px solid var(--line-1); cursor: pointer; color: var(--fg-1); font: inherit; text-align: left; }
         .inv__row:hover, .inv__row:focus-visible { background: var(--bg-2); outline: none; }
         .inv__row:focus-visible { box-shadow: inset 0 0 0 1px var(--line-3); }
@@ -448,6 +792,44 @@ export default function InventoryPanel({ character, world }: Props) {
         .inv__eq-label { color: var(--fg-3); font-family: var(--font-body); font-size: var(--text-xs); letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; }
         .inv__eq-empty { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: var(--sp-2); padding: 4px var(--sp-3); border-bottom: 1px solid var(--line-1); color: var(--fg-3); font-family: var(--font-mono); font-size: var(--text-sm); }
         .inv__eq-none { color: var(--fg-3); font-style: italic; }
+        /* Locked-chest section. Sits above Equipped so the player notices
+           the pending reveal. Names of the items inside stay hidden by
+           design — the unlock is the satisfying-curiosity beat (issue #75). */
+        .inv__group--chest { color: var(--accent, var(--fg-2)); }
+        .inv__chest {
+          display: flex;
+          align-items: center;
+          gap: var(--sp-2);
+          padding: var(--sp-2) var(--sp-3);
+          background: var(--bg-inset);
+          border-bottom: 1px solid var(--line-1);
+          font-family: var(--font-mono);
+          font-size: var(--text-sm);
+        }
+        .inv__chest-icon {
+          font-size: var(--text-lg);
+          color: var(--accent, var(--fg-2));
+          /* Slow pulse so the chest reads as "active" / "waiting" without
+             being distracting. */
+          animation: inv-chest-pulse 1.6s ease-in-out infinite;
+        }
+        @keyframes inv-chest-pulse {
+          0%, 100% { opacity: 0.7; }
+          50% { opacity: 1; }
+        }
+        .inv__chest-body {
+          display: flex;
+          flex-direction: column;
+          gap: 1px;
+          min-width: 0;
+        }
+        .inv__chest-summary { color: var(--fg-1); }
+        .inv__chest-status {
+          color: var(--fg-3);
+          font-size: var(--text-xs);
+          letter-spacing: 0.04em;
+          font-variant-numeric: tabular-nums;
+        }
       `}</style>
     </div>
   )

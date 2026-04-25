@@ -17,6 +17,9 @@ export interface GenerateOptions {
   maxTokens?: number
   /** When provided, stored alongside the cached entry for provenance. */
   meta?: GenerationMeta
+  /** Optional AbortSignal — cancels the in-flight LLM request when
+   *  aborted (e.g. on generation timeout or player death). */
+  signal?: AbortSignal
 }
 
 export interface GenerateResult<TPayload> {
@@ -73,6 +76,7 @@ export async function generate<TParams, TPayload>(
       messages,
       temperature: opts.temperature ?? 0.7,
       maxTokens: opts.maxTokens,
+      signal: opts.signal,
     })
   } catch (err) {
     console.timeEnd('llm-response')

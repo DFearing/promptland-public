@@ -55,6 +55,17 @@
   --glow-md:      0 0 6px rgba(123, 255, 136, 0.35), 0 0 1px rgba(123, 255, 136, 0.8);
   --glow-lg:      0 0 12px rgba(123, 255, 136, 0.45), 0 0 2px rgba(123, 255, 136, 0.9);
 
+  /* Rarity tiers on mud-classic are phosphor-only — on any other palette
+   *  they'd clash with the pure monochrome aesthetic (a gold legendary
+   *  card mixed with green body text is what sent us here). Each tier
+   *  steps the brightness instead of the hue, so tier ordering still
+   *  reads visually: dim for common, brightest phosphor for legendary. */
+  --rarity-common:    #2f8a38;
+  --rarity-uncommon:  #4fcf5d;
+  --rarity-rare:      #7bff88;
+  --rarity-epic:      #a8ffb0;
+  --rarity-legendary: #c4ffcb;
+
   --scanline:     repeating-linear-gradient(
                     to bottom,
                     rgba(0, 0, 0, 0) 0px,
@@ -74,7 +85,11 @@
 }
 
 /* Component CSS that hardcodes off-palette hex (gold pile ochre, XP white,
-   white shrine glyph hints baked into source). Override back to green. */
+   white shrine glyph hints baked into source). Override back to green.
+   .dev__rbtn--* used to live here too; now those read from the themed
+   --rarity-* tokens so the dev rarity row keeps its tier gradient on
+   mud-classic (five phosphor shades from dim to bright) rather than
+   flattening to a single green. */
 :root[data-theme='mud-classic'] .logp__tok--gold,
 :root[data-theme='mud-classic'] .logp__tok--xp,
 :root[data-theme='mud-classic'] .sheet__bar-label--xp,
@@ -85,12 +100,7 @@
 :root[data-theme='mud-classic'] .fx-levelup-xp,
 :root[data-theme='mud-classic'] .fx-levelup-gold,
 :root[data-theme='mud-classic'] .fx-levelup-gains,
-:root[data-theme='mud-classic'] .dev__slider-val,
-:root[data-theme='mud-classic'] .dev__rbtn--common,
-:root[data-theme='mud-classic'] .dev__rbtn--uncommon,
-:root[data-theme='mud-classic'] .dev__rbtn--rare,
-:root[data-theme='mud-classic'] .dev__rbtn--epic,
-:root[data-theme='mud-classic'] .dev__rbtn--legendary {
+:root[data-theme='mud-classic'] .dev__slider-val {
   color: var(--fg-1) !important;
   text-shadow: 0 0 4px rgba(123, 255, 136, 0.4) !important;
 }

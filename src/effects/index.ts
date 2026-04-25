@@ -9,5 +9,6 @@ export type {
 } from './types'
 export { deriveElementEvents, deriveEvents, deriveFieldEvents } from './derive'
 export { default as EffectsOverlay } from './EffectsOverlay'
+export { deathDurationMs, levelUpDurationMs } from './durations'
 export { default as ElementOverlay } from './ElementOverlay'
 export { default as FieldIndicator } from './FieldIndicator'

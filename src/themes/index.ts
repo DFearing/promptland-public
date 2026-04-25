@@ -1,4 +1,5 @@
 export type {
+  CustomTheme,
   Effects,
   ScaleId,
   ScaleMeta,
@@ -38,3 +39,9 @@ export {
   saveTheme,
   saveTickSpeed,
 } from './config'
+export {
+  DEFAULT_CUSTOM_THEME,
+  applyCustomThemeTokens,
+  loadCustomTheme,
+  saveCustomTheme,
+} from './customTheme'

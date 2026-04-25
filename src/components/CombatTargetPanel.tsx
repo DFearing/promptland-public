@@ -75,6 +75,35 @@ export default function CombatTargetPanel({ mob, defeated, world, elementEvents 
           ))}
         </ul>
       )}
+      {!defeated && mob.resist && Object.keys(mob.resist).length > 0 && (
+        <ul className="target__resists">
+          {Object.entries(mob.resist).map(([family, value]) => {
+            // Positive entry → resistance (green-ish stripe), negative →
+            // weakness (warn). Magnitude formatted as a percent so the
+            // reader doesn't have to mentally translate `0.5` into "half."
+            // Cap rendered range at 100 % even if a content author goes
+            // higher; the engine clamps the multiplier the same way.
+            if (!value) return null
+            const isWeak = value < 0
+            const pct = Math.min(100, Math.round(Math.abs(value) * 100))
+            const label =
+              value >= 1 ? 'IMMUNE' : `${pct}% ${isWeak ? 'WEAK' : 'RESIST'}`
+            return (
+              <li
+                key={family}
+                className={
+                  'target__resist' +
+                  (isWeak ? ' target__resist--weak' : ' target__resist--resist')
+                }
+                data-tip={`${family} damage: ${label.toLowerCase()}`}
+              >
+                <span className="target__resist-elem">{family}</span>
+                <span className="target__resist-value">{label}</span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
       {mob.description && <p className="target__desc">{mob.description}</p>}
       {elementEvents && !defeated && <ElementOverlay events={elementEvents} target="mob" />}
 
@@ -164,6 +193,32 @@ export default function CombatTargetPanel({ mob, defeated, world, elementEvents 
         .target__cond--debuff { color: var(--warn); border-color: var(--warn); text-shadow: var(--glow-sm); }
         .target__cond-name { text-transform: uppercase; letter-spacing: 0.06em; }
         .target__cond-ticks { color: var(--fg-3); font-variant-numeric: tabular-nums; text-shadow: none; }
+        /* Resists row mirrors .target__conds layout but with its own
+           palette: dimmed accent for resistances (mob shrugs damage off
+           — a quiet "noted" cue, not an active buff), warn for
+           weaknesses so the reader sees "press here." */
+        .target__resists {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+        }
+        .target__resist {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          padding: 1px 6px;
+          border: 1px solid var(--line-2);
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          letter-spacing: 0.04em;
+        }
+        .target__resist--resist { color: var(--fg-3); border-color: var(--line-3); }
+        .target__resist--weak { color: var(--warn); border-color: var(--warn); text-shadow: var(--glow-sm); }
+        .target__resist-elem { text-transform: uppercase; letter-spacing: 0.06em; }
+        .target__resist-value { color: inherit; font-variant-numeric: tabular-nums; }
         .target__desc {
           margin: 0;
           font-family: var(--font-body);

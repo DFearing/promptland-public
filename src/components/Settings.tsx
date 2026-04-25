@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import pkg from '../../package.json'
 import { AREA_KINDS, type AreaKind } from '../areas'
 import {
   KEYLESS_HOSTS,
@@ -22,7 +23,6 @@ import type { Storage } from '../storage'
 import {
   DEFAULT_SOUND_SETTINGS,
   SOUND_EVENT_DESCS,
-  SOUND_EVENT_KINDS,
   SOUND_EVENT_LABELS,
   SOUND_THEMES,
   loadSoundSettings,
@@ -36,6 +36,7 @@ import {
 } from '../sound'
 import { getWorldContent, getWorldManifest } from '../worlds'
 import {
+  DEFAULT_CUSTOM_THEME,
   DEFAULT_EFFECTS,
   DEFAULT_SCALE,
   DEFAULT_THEME,
@@ -45,16 +46,20 @@ import {
   FIELD_DURATION_STEP_MS,
   SCALES,
   THEMES,
+  applyCustomThemeTokens,
   applyEffects,
   applyScale,
   applyTheme,
+  loadCustomTheme,
   loadEffects,
   loadScale,
   loadTheme,
+  saveCustomTheme,
   saveEffects,
   saveScale,
   saveTheme,
   saveTickSpeed,
+  type CustomTheme,
   type Effects,
   type ScaleId,
   type ThemeId,
@@ -91,6 +96,10 @@ interface Props {
   onLlmConnected?: () => void
   characterCount: number
   storage: Storage
+  /** Called from About → "Show landing again". Undefined if the host
+   *  doesn't wire it (e.g. in tests / storybook). When present, About
+   *  renders a small revisit-landing button. */
+  onShowLanding?: () => void
 }
 
 interface ToggleRowProps {
@@ -151,7 +160,9 @@ function previewEvent(kind: SoundEventKind): EffectEvent {
     case 'level-up':
       return { id, kind, record: { at: 0, from: 1, to: 2 }, previousAt: 0, previousGold: 0 }
     case 'death':
-      return { id, kind }
+      // Preview a first-death (long banner) so the Sound tab's preview
+      // always plays the full-length version.
+      return { id, kind, deathCount: 1 }
     case 'enter-fight':
       return { id, kind }
     case 'new-area':
@@ -171,11 +182,48 @@ function previewEvent(kind: SoundEventKind): EffectEvent {
   }
 }
 
+// Sound-event categories — each event belongs to exactly one bucket.
+// Group headings and intros replace the previous per-event descriptions;
+// labels + tooltips carry any extra nuance. Keeps the tab scannable
+// without burying a long single-column list of toggles.
+const SOUND_EVENT_CATEGORIES: {
+  id: string
+  label: string
+  intro: string
+  kinds: SoundEventKind[]
+}[] = [
+  {
+    id: 'combat',
+    label: 'Combat',
+    intro: 'Damage, healing, combat start, and defeat.',
+    kinds: ['damage-taken', 'damage-dealt', 'heal-self', 'enter-fight', 'death'],
+  },
+  {
+    id: 'progress',
+    label: 'Progress',
+    intro: 'Level-ups, loot pickups, and gold rewards.',
+    kinds: ['level-up', 'loot', 'gold-windfall', 'gold-jackpot'],
+  },
+  {
+    id: 'discovery',
+    label: 'Discovery',
+    intro: 'Firsts — new areas, mobs, items, and generation.',
+    kinds: ['new-area', 'new-mob', 'new-item', 'generating-area'],
+  },
+  {
+    id: 'system',
+    label: 'System',
+    intro: 'Confirmation tones outside the game loop.',
+    kinds: ['llm-connected'],
+  },
+]
+
 // Gameplay tab used to live here for tick-speed; the per-character control
 // in the topbar now owns that, so Settings has nothing left in 'gameplay'.
-type SettingsTab = 'appearance' | 'effects' | 'sound' | 'llm' | 'data'
+type SettingsTab = 'about' | 'appearance' | 'effects' | 'sound' | 'llm' | 'data'
 
 const TABS: { id: SettingsTab; label: string }[] = [
+  { id: 'about', label: 'About' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'effects', label: 'Effects' },
   { id: 'sound', label: 'Sound' },
@@ -183,10 +231,60 @@ const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'data', label: 'Data' },
 ]
 
-export default function Settings({ onResetCharacters, onLlmConnected, characterCount, storage }: Props) {
-  const [tab, setTab] = useState<SettingsTab>('appearance')
+// localStorage key for the last-active Settings tab. First-run fallback is
+// the About tab — new users land on repo + dependency info before anything
+// else. Subsequent visits restore the last-used tab.
+const TAB_KEY = 'promptland.settings.tab'
+
+function loadInitialTab(): SettingsTab {
+  try {
+    const raw = localStorage.getItem(TAB_KEY)
+    if (!raw) return 'about'
+    if (TABS.some((t) => t.id === raw)) return raw as SettingsTab
+  } catch {
+    // fall through to default on localStorage errors
+  }
+  return 'about'
+}
+
+function saveTab(tab: SettingsTab): void {
+  try {
+    localStorage.setItem(TAB_KEY, tab)
+  } catch {
+    // localStorage unavailable — tab memory doesn't survive reload, but
+    // the component still works.
+  }
+}
+
+/** Renders the vite-injected build timestamp as "· 2026-04-24 UTC (3d ago)"
+ *  for the About tab's version line. Same cadence ladder as the journal's
+ *  relative time — d/h/m resolution is fine for a version stamp. */
+function formatBuildTime(iso: string): string {
+  const parsed = new Date(iso)
+  if (Number.isNaN(parsed.getTime())) return ''
+  const y = parsed.getUTCFullYear()
+  const m = String(parsed.getUTCMonth() + 1).padStart(2, '0')
+  const d = String(parsed.getUTCDate()).padStart(2, '0')
+  const date = `${y}-${m}-${d} UTC`
+  const diffMs = Date.now() - parsed.getTime()
+  const ago = (() => {
+    if (diffMs < 60_000) return 'just now'
+    if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)}m ago`
+    if (diffMs < 86_400_000) return `${Math.floor(diffMs / 3_600_000)}h ago`
+    const days = Math.floor(diffMs / 86_400_000)
+    if (days < 30) return `${days}d ago`
+    const months = Math.floor(days / 30)
+    if (months < 12) return `${months}mo ago`
+    return `${Math.floor(months / 12)}y ago`
+  })()
+  return ` · Released ${date} (${ago})`
+}
+
+export default function Settings({ onResetCharacters, onLlmConnected, characterCount, storage, onShowLanding }: Props) {
+  const [tab, setTab] = useState<SettingsTab>(loadInitialTab)
   const [config, setConfig] = useState<LLMConfig>(() => loadLLMConfig())
   const [theme, setThemeState] = useState<ThemeId>(() => loadTheme())
+  const [customTheme, setCustomThemeState] = useState<CustomTheme>(() => loadCustomTheme())
   const [scale, setScaleState] = useState<ScaleId>(() => loadScale())
   const [effects, setEffectsState] = useState<Effects>(() => loadEffects())
   const [sound, setSoundState] = useState<SoundSettings>(() => loadSoundSettings())
@@ -222,6 +320,28 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
     setThemeState(id)
     applyTheme(id)
     saveTheme(id)
+  }
+
+  // Update a single token on the custom theme. Writes live to state,
+  // the DOM (via applyCustomThemeTokens), and localStorage so the change
+  // is immediately visible, persists on reload, and doesn't need a
+  // separate "save" button. Only has effect while the custom theme is
+  // active — if the user picks another theme, the inline tokens get
+  // cleared by applyTheme.
+  const pickCustomColor = (key: keyof CustomTheme, value: string) => {
+    const next: CustomTheme = { ...customTheme, [key]: value }
+    setCustomThemeState(next)
+    saveCustomTheme(next)
+    if (theme === 'custom') applyCustomThemeTokens(next)
+  }
+
+  // Reset the custom palette to the shipping defaults in one click.
+  // Matches the Effects tab's "Reset to defaults" pattern — a common
+  // escape hatch when experimenting.
+  const resetCustomTheme = () => {
+    setCustomThemeState({ ...DEFAULT_CUSTOM_THEME })
+    saveCustomTheme({ ...DEFAULT_CUSTOM_THEME })
+    if (theme === 'custom') applyCustomThemeTokens({ ...DEFAULT_CUSTOM_THEME })
   }
 
   const pickScale = (id: ScaleId) => {
@@ -272,6 +392,10 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
     })
   }
 
+  const toggleSheetNumbers = () => {
+    commitEffects({ ...effects, sheetNumbers: !effects.sheetNumbers })
+  }
+
   const commitSound = (next: SoundSettings) => {
     setSoundState(next)
     soundManager.configure(next)
@@ -286,7 +410,14 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
   }
 
   const setSoundVolume = (volume: number) => {
-    commitSound({ ...sound, volume })
+    // Always auto-unmute on volume drag — matches the topbar slider's
+    // behavior so a single gesture brings audio back regardless of
+    // which surface the player uses.
+    commitSound({ ...sound, volume, muted: false })
+    // Trailing-debounced preview so the user hears the new level
+    // without the drag spamming chimes. Shared debounce on the
+    // manager means the topbar slider and this one can't double-fire.
+    soundManager.previewVolume(200)
   }
 
   const toggleSoundEvent = (kind: SoundEventKind) => {
@@ -339,6 +470,7 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
       fullscreen: { ...DEFAULT_EFFECTS.fullscreen },
       viewport: { ...DEFAULT_EFFECTS.viewport },
       fields: { ...DEFAULT_EFFECTS.fields },
+      sheetNumbers: DEFAULT_EFFECTS.sheetNumbers,
     }
     setEffectsState(fresh)
     applyEffects(fresh)
@@ -525,7 +657,10 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
               role="tab"
               aria-selected={tab === t.id}
               className={'settings__tab' + (tab === t.id ? ' settings__tab--active' : '')}
-              onClick={() => setTab(t.id)}
+              onClick={() => {
+                setTab(t.id)
+                saveTab(t.id)
+              }}
             >
               {t.label}
             </button>
@@ -533,6 +668,199 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
         </div>
 
         <div className="settings__body">
+          {tab === 'about' && (
+            <>
+              <section className="settings__section settings__about">
+                <h2>Promptland</h2>
+                <p className="settings__about-pitch">
+                  A browser-based game that plays itself. Pick a world, pick a
+                  character, watch them live. The game is algorithm-driven;
+                  LLMs generate the flavor.
+                </p>
+                <dl className="settings__about-meta">
+                  <dt>Version</dt>
+                  <dd>
+                    v{pkg.version}
+                    <span className="settings__about-build">{formatBuildTime(__BUILD_TIME__)}</span>
+                  </dd>
+                  <dt>Repository</dt>
+                  <dd>
+                    <a
+                      href="https://github.com/DFearing/promptland"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      github.com/DFearing/promptland
+                    </a>
+                  </dd>
+                  <dt>License</dt>
+                  <dd>
+                    <a
+                      href="https://github.com/DFearing/promptland/blob/main/LICENSE"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      See repository LICENSE
+                    </a>
+                  </dd>
+                </dl>
+                {onShowLanding && (
+                  <div className="settings__about-landing">
+                    <button
+                      type="button"
+                      className="settings__about-landing-btn"
+                      onClick={onShowLanding}
+                      data-tip="Re-open the first-run pitch"
+                    >
+                      Show landing again
+                    </button>
+                  </div>
+                )}
+              </section>
+
+              <section className="settings__section settings__about-ai">
+                <h2>AI &amp; content generation</h2>
+                <p className="settings__about-pitch">
+                  Promptland uses a language model — Bring Your Own Key —
+                  to generate in-game flavor: item descriptions, mob lore,
+                  spell names, room descriptions, and the occasional new
+                  area. You supply an API key or point the LLM tab at a
+                  local endpoint; the game does the calls directly from
+                  your browser.
+                </p>
+                <ul className="settings__about-ai-list">
+                  <li>
+                    <strong>Flavor only, not gameplay.</strong> The core
+                    loop — combat math, drives, damage, loot rolls —
+                    is algorithmic and deterministic. The model never
+                    decides a hit, a heal, or a stat. It writes the
+                    sentences around the numbers and names the props.
+                  </li>
+                  <li>
+                    <strong>Cached per entity.</strong> Generated text is
+                    stored under the entity-cache pattern and reused on
+                    repeat encounters. A given mob, item, or area is
+                    written once; you won't see it re-roll next tick.
+                  </li>
+                  <li>
+                    <strong>BYOK, client-side.</strong> Keys live in your
+                    browser's <code className="settings__inline-code">localStorage</code>
+                    and every LLM request goes from your browser directly
+                    to your chosen provider. Nothing routes through a
+                    Promptland server — there isn't one.
+                  </li>
+                  <li>
+                    <strong>Model biases apply.</strong> Generated text
+                    reflects the biases and quirks of whichever model
+                    you point at it, and may occasionally produce
+                    unexpected or off-key output. If a line reads
+                    wrong, that's the model talking.
+                  </li>
+                </ul>
+              </section>
+
+              <section className="settings__section">
+                <h2>Documentation</h2>
+                <ul className="settings__about-links">
+                  <li>
+                    <a
+                      href="https://github.com/DFearing/promptland/blob/main/docs/GAMEPLAY.md"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Gameplay — tick states, combat, drives, worlds
+                    </a>
+                  </li>
+                  <li>
+                    <a
+                      href="https://github.com/DFearing/promptland/blob/main/docs/ARCHITECTURE.md"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Architecture — code layout, storage, LLM pipeline
+                    </a>
+                  </li>
+                  <li>
+                    <a
+                      href="https://github.com/DFearing/promptland/blob/main/docs/LLM-SETUP.md"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      LLM setup — BYOK provider walkthroughs
+                    </a>
+                  </li>
+                  <li>
+                    <a
+                      href="https://github.com/DFearing/promptland/blob/main/docs/STATUS.md"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Status — what's implemented, partial, or missing
+                    </a>
+                  </li>
+                </ul>
+              </section>
+
+              <section className="settings__section">
+                <h2>Runtime dependencies</h2>
+                <p className="settings__about-intro">
+                  Promptland is built on these open-source libraries. Each
+                  ships under its own license — follow the links for the
+                  authoritative text.
+                </p>
+                <ul className="settings__about-deps">
+                  {(Object.entries(pkg.dependencies ?? {}) as Array<[string, string]>)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([name, version]) => (
+                      <li key={name}>
+                        <a
+                          href={`https://www.npmjs.com/package/${name}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <span className="settings__about-dep-name">{name}</span>
+                          <span className="settings__about-dep-ver">{version}</span>
+                        </a>
+                      </li>
+                    ))}
+                </ul>
+              </section>
+
+              <section className="settings__section">
+                <h2>Build dependencies</h2>
+                <p className="settings__about-intro">
+                  Used at build/dev time only — not shipped in the bundle you
+                  run.
+                </p>
+                <ul className="settings__about-deps">
+                  {(Object.entries(pkg.devDependencies ?? {}) as Array<[string, string]>)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([name, version]) => (
+                      <li key={name}>
+                        <a
+                          href={`https://www.npmjs.com/package/${name}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <span className="settings__about-dep-name">{name}</span>
+                          <span className="settings__about-dep-ver">{version}</span>
+                        </a>
+                      </li>
+                    ))}
+                </ul>
+              </section>
+
+              <section className="settings__section">
+                <h2>Credits</h2>
+                <p className="settings__about-intro">
+                  Fonts loaded at runtime from Google Fonts — VT323, IBM Plex
+                  Mono, JetBrains Mono — each under the SIL Open Font License.
+                  Cascadia Mono self-hosted under the same license.
+                </p>
+              </section>
+            </>
+          )}
+
           {tab === 'appearance' && (
             <>
               <section className="settings__section">
@@ -552,6 +880,60 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
                   ))}
                 </div>
               </section>
+
+              {theme === 'custom' && (
+                <section className="settings__section">
+                  <div className="settings__group-head">
+                    <h2>Custom palette</h2>
+                    <button
+                      type="button"
+                      className="settings__reset-btn"
+                      onClick={resetCustomTheme}
+                      data-tip="Reset all eight tokens to the defaults"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                  <p className="settings__group-desc">
+                    Eight colors drive the look — the others are synthesized
+                    automatically. Changes apply live.
+                  </p>
+                  <div className="settings__color-grid">
+                    {(
+                      [
+                        { key: 'bg0', label: 'Background', desc: 'Page base color.' },
+                        { key: 'bg1', label: 'Panel', desc: 'Panel / card backgrounds.' },
+                        { key: 'fg1', label: 'Text', desc: 'Primary text + stat values.' },
+                        { key: 'accentHot', label: 'Accent', desc: 'Wordmark, highlights, hover.' },
+                        { key: 'hp', label: 'HP', desc: 'Health bars + damage.' },
+                        { key: 'mp', label: 'MP / Magic', desc: 'Magic bars + spell lines.' },
+                        { key: 'good', label: 'Good', desc: 'Heal lines + confirmations.' },
+                        { key: 'bad', label: 'Bad', desc: 'Death + error states.' },
+                      ] as Array<{ key: keyof CustomTheme; label: string; desc: string }>
+                    ).map((entry) => (
+                      <label
+                        key={entry.key}
+                        className="settings__color-row"
+                        data-tip={entry.desc}
+                      >
+                        <input
+                          type="color"
+                          className="settings__color-input"
+                          value={customTheme[entry.key]}
+                          onChange={(e) => pickCustomColor(entry.key, e.target.value)}
+                          aria-label={entry.label}
+                        />
+                        <span className="settings__color-copy">
+                          <span className="settings__color-label">{entry.label}</span>
+                          <span className="settings__color-hex">
+                            {customTheme[entry.key].toUpperCase()}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </section>
+              )}
 
               <section className="settings__section">
                 <h2>Text size</h2>
@@ -587,6 +969,12 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
                     desc="Show exact HP / MP / XP amounts in the log instead of descriptive words."
                     on={effects.logNumbers}
                     onClick={toggleLogNumbers}
+                  />
+                  <ToggleRow
+                    title="Sheet numbers"
+                    desc='Show the "12 / 30", "8 / 12", "125 / 300" readouts next to the HP, MP, and XP bars on the sheet. Off leaves just the bars.'
+                    on={effects.sheetNumbers}
+                    onClick={toggleSheetNumbers}
                   />
                 </div>
               </section>
@@ -632,12 +1020,6 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
                     desc='"Level Up" banner and gold radial flash.'
                     on={effects.fullscreen.levelUpBanner}
                     onClick={() => toggleFullscreen('levelUpBanner')}
-                  />
-                  <ToggleRow
-                    title="Level-up confetti"
-                    desc="Themed confetti bursts on level-up."
-                    on={effects.fullscreen.levelUpConfetti}
-                    onClick={() => toggleFullscreen('levelUpConfetti')}
                   />
                   <ToggleRow
                     title="Defeat"
@@ -762,7 +1144,7 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
           )}
 
           {tab === 'sound' && (
-            <>
+            <div className="settings__sound">
               <section className="settings__section">
                 <div className="settings__group-head">
                   <h2>Sound</h2>
@@ -834,42 +1216,63 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
 
               <section className="settings__section">
                 <h2>Per-event toggles</h2>
-                <div className={'settings__fxgrid' + (sound.enabled ? '' : ' settings__fxgrid--dim')}>
-                  {SOUND_EVENT_KINDS.map((kind) => (
-                    <div key={kind} className="settings__toggle-row">
-                      <div className="settings__toggle-copy">
-                        <span className="settings__toggle-title">{SOUND_EVENT_LABELS[kind]}</span>
-                        <span className="settings__toggle-desc">{SOUND_EVENT_DESCS[kind]}</span>
+                <div
+                  className={
+                    'settings__sound-categories' +
+                    (sound.enabled ? '' : ' settings__sound-categories--dim')
+                  }
+                >
+                  {SOUND_EVENT_CATEGORIES.map((cat) => (
+                    <div key={cat.id} className="settings__sound-cat">
+                      <div className="settings__sound-cat-head">
+                        <h3 className="settings__sound-cat-title">{cat.label}</h3>
+                        <span className="settings__sound-cat-intro">{cat.intro}</span>
                       </div>
-                      <div className="settings__toggle-actions">
-                        <button
-                          type="button"
-                          className="settings__play-btn"
-                          disabled={!sound.enabled}
-                          aria-label={`Preview ${SOUND_EVENT_LABELS[kind]}`}
-                          onClick={() => {
-                            soundManager.unlock()
-                            soundManager.play(previewEvent(kind))
-                          }}
-                        >
-                          {'▶'}
-                        </button>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={sound.events[kind]}
-                          className={'settings__toggle' + (sound.events[kind] ? ' settings__toggle--on' : '')}
-                          onClick={() => toggleSoundEvent(kind)}
-                        >
-                          {sound.events[kind] ? 'On' : 'Off'}
-                        </button>
+                      <div className="settings__sound-cat-grid">
+                        {cat.kinds.map((kind) => (
+                          <div
+                            key={kind}
+                            className="settings__sound-cell"
+                            data-tip={SOUND_EVENT_DESCS[kind]}
+                          >
+                            <span className="settings__sound-cell-label">
+                              {SOUND_EVENT_LABELS[kind]}
+                            </span>
+                            <div className="settings__sound-cell-actions">
+                              <button
+                                type="button"
+                                className="settings__play-btn"
+                                disabled={!sound.enabled}
+                                aria-label={`Preview ${SOUND_EVENT_LABELS[kind]}`}
+                                onClick={() => {
+                                  soundManager.unlock()
+                                  soundManager.play(previewEvent(kind))
+                                }}
+                              >
+                                {'▶'}
+                              </button>
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={sound.events[kind]}
+                                className={
+                                  'settings__toggle settings__toggle--compact' +
+                                  (sound.events[kind] ? ' settings__toggle--on' : '')
+                                }
+                                onClick={() => toggleSoundEvent(kind)}
+                              >
+                                {sound.events[kind] ? 'On' : 'Off'}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   ))}
                 </div>
               </section>
               </div>
-            </>
+            </div>
           )}
 
           {tab === 'llm' && (
@@ -1297,6 +1700,312 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
         .settings__result--err { background: var(--bg-2); border-color: var(--bad); color: var(--bad); }
         .settings__result code { background: var(--bg-inset); padding: 1px 4px; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-1); }
         .settings__note { margin: 0; font-family: var(--font-body); font-size: var(--text-xs); color: var(--fg-3); font-style: italic; line-height: 1.6; }
+
+        /* About tab — repo + deps + credits. Read-heavy, no controls, so
+           leans on body font with comfortable line-height. Dep list is a
+           two-column grid with monospaced versions right-aligned so it
+           scans like a lockfile summary. */
+        .settings__about-pitch {
+          margin: 0;
+          font-family: var(--font-body);
+          font-size: var(--text-sm);
+          line-height: 1.7;
+          color: var(--fg-2);
+        }
+        .settings__about-intro {
+          margin: 0;
+          font-family: var(--font-body);
+          font-size: var(--text-xs);
+          line-height: 1.7;
+          color: var(--fg-3);
+        }
+        .settings__about-meta {
+          display: grid;
+          grid-template-columns: max-content 1fr;
+          gap: var(--sp-1) var(--sp-3);
+          margin: 0;
+          font-family: var(--font-mono);
+          font-size: var(--text-sm);
+        }
+        .settings__about-meta dt {
+          color: var(--fg-3);
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          font-size: var(--text-xs);
+          align-self: center;
+        }
+        .settings__about-meta dd {
+          margin: 0;
+          color: var(--fg-1);
+        }
+        .settings__about-build {
+          color: var(--fg-3);
+          font-size: var(--text-xs);
+          margin-left: var(--sp-1);
+        }
+        .settings__about-meta a,
+        .settings__about-links a,
+        .settings__about-deps a {
+          color: var(--accent-hot);
+          text-decoration: none;
+          border-bottom: 1px dotted var(--line-2);
+          transition: color var(--dur-fast) var(--ease-crt),
+                      border-color var(--dur-fast) var(--ease-crt);
+        }
+        .settings__about-meta a:hover,
+        .settings__about-links a:hover,
+        .settings__about-deps a:hover {
+          color: var(--accent);
+          border-bottom-color: var(--accent);
+          text-shadow: var(--glow-sm);
+        }
+        .settings__about-links {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+          display: flex;
+          flex-direction: column;
+          gap: var(--sp-1);
+          font-family: var(--font-body);
+          font-size: var(--text-sm);
+        }
+        .settings__about-deps {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: var(--sp-1) var(--sp-3);
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+        }
+        .settings__about-deps li { min-width: 0; }
+        .settings__about-deps a {
+          display: flex;
+          justify-content: space-between;
+          gap: var(--sp-2);
+          padding: 2px 0;
+          border-bottom: none;
+        }
+        .settings__about-deps a:hover { border-bottom: none; }
+        .settings__about-dep-name { color: var(--fg-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .settings__about-deps a:hover .settings__about-dep-name { color: var(--accent); }
+        .settings__about-dep-ver { color: var(--fg-3); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+        .settings__inline-code { background: var(--bg-inset); padding: 1px 4px; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-1); margin: 0 2px; }
+
+        /* AI disclosure — disclosure bullets inside the About tab. Leans on
+           the same body-font rhythm as the pitch paragraph but with a
+           dimmer bullet hairline so the list reads as supporting copy,
+           not a feature checklist. */
+        .settings__about-ai-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+          display: flex;
+          flex-direction: column;
+          gap: var(--sp-2);
+          font-family: var(--font-body);
+          font-size: var(--text-sm);
+          line-height: 1.7;
+          color: var(--fg-2);
+        }
+        .settings__about-ai-list li {
+          padding-left: var(--sp-3);
+          border-left: 1px solid var(--line-1);
+        }
+        .settings__about-ai-list strong {
+          color: var(--fg-1);
+          font-weight: 400;
+          text-shadow: var(--glow-sm);
+        }
+        .settings__about-landing {
+          margin-top: var(--sp-1);
+        }
+        .settings__about-landing-btn {
+          padding: 4px var(--sp-2);
+          background: transparent;
+          color: var(--fg-3);
+          border: 1px solid var(--line-2);
+          cursor: pointer;
+          font-family: var(--font-display);
+          font-size: var(--text-xs);
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          transition: color var(--dur-fast) var(--ease-crt),
+                      border-color var(--dur-fast) var(--ease-crt);
+        }
+        .settings__about-landing-btn:hover {
+          color: var(--accent-hot);
+          border-color: var(--line-3);
+          text-shadow: var(--glow-sm);
+        }
+
+        /* One-column fallback on narrow viewports — deps list doesn't
+           truncate usefully below ~400px. */
+        @media (max-width: 520px) {
+          .settings__about-deps { grid-template-columns: 1fr; }
+        }
+
+        /* Custom-palette editor — two-column grid of color swatches
+           paired with a label + live hex readout. The color input is
+           sized to read as a big sample swatch; browser chrome around
+           the native picker varies by platform but the overall layout
+           stays legible. */
+        .settings__color-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+          gap: var(--sp-2);
+        }
+        .settings__color-row {
+          display: flex;
+          align-items: center;
+          gap: var(--sp-3);
+          padding: var(--sp-2) var(--sp-3);
+          background: var(--bg-inset);
+          border: 1px solid var(--line-1);
+          cursor: pointer;
+          transition: border-color var(--dur-fast) var(--ease-crt);
+        }
+        .settings__color-row:hover { border-color: var(--line-3); }
+        .settings__color-input {
+          width: 36px;
+          height: 36px;
+          padding: 0;
+          border: 1px solid var(--line-2);
+          background: transparent;
+          cursor: pointer;
+          flex-shrink: 0;
+        }
+        .settings__color-input::-webkit-color-swatch-wrapper { padding: 0; }
+        .settings__color-input::-webkit-color-swatch { border: none; }
+        .settings__color-copy {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          min-width: 0;
+        }
+        .settings__color-label {
+          font-family: var(--font-display);
+          font-size: var(--text-sm);
+          color: var(--fg-1);
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+        }
+        .settings__color-hex {
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          color: var(--fg-3);
+          font-variant-numeric: tabular-nums;
+        }
+        .settings__reset-btn {
+          font-family: var(--font-display);
+          font-size: var(--text-xs);
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          padding: 4px var(--sp-2);
+          background: transparent;
+          color: var(--fg-3);
+          border: 1px solid var(--line-2);
+          cursor: pointer;
+          transition: color var(--dur-fast) var(--ease-crt),
+                      border-color var(--dur-fast) var(--ease-crt);
+        }
+        .settings__reset-btn:hover {
+          color: var(--warn);
+          border-color: var(--warn);
+        }
+
+        /* Sound tab — bucketed per-event toggles. Category sections
+           group the 14 events into Combat / Progress / Discovery /
+           System so the tab reads like a mixer instead of a flat list.
+           Inter-section gap is larger (sp-7) than the rest of Settings
+           to make the category breaks obvious; within a category we use
+           a 2-column responsive grid so the rows stay dense without
+           stretching full-width like descriptive toggle cards. */
+        .settings__sound {
+          display: flex;
+          flex-direction: column;
+          gap: var(--sp-7);
+        }
+        .settings__sound .settings__section { gap: var(--sp-3); }
+        .settings__sound-categories {
+          display: flex;
+          flex-direction: column;
+          gap: var(--sp-6);
+        }
+        .settings__sound-categories--dim { opacity: 0.45; }
+        .settings__sound-cat {
+          display: flex;
+          flex-direction: column;
+          gap: var(--sp-3);
+        }
+        .settings__sound-cat-head {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          padding-bottom: var(--sp-1);
+          border-bottom: 1px dashed var(--line-1);
+        }
+        .settings__sound-cat-title {
+          margin: 0;
+          font-family: var(--font-display);
+          font-size: var(--text-md);
+          font-weight: 400;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: var(--fg-1);
+        }
+        .settings__sound-cat-intro {
+          font-family: var(--font-body);
+          font-size: var(--text-xs);
+          color: var(--fg-3);
+          font-style: italic;
+        }
+        .settings__sound-cat-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+          gap: var(--sp-2);
+        }
+        .settings__sound-cell {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: var(--sp-2);
+          padding: var(--sp-2) var(--sp-3);
+          background: var(--bg-inset);
+          border: 1px solid var(--line-1);
+          cursor: default;
+        }
+        .settings__sound-cell-label {
+          flex: 1;
+          min-width: 0;
+          font-family: var(--font-display);
+          font-size: var(--text-sm);
+          letter-spacing: 0.05em;
+          text-transform: uppercase;
+          color: var(--fg-1);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .settings__sound-cell-actions {
+          display: flex;
+          align-items: center;
+          gap: var(--sp-2);
+          flex-shrink: 0;
+        }
+        /* Compact variant of the toggle used inside sound cells so the
+           On/Off pill doesn't dominate the row. Min-width drops so a
+           one-line cell reads as a single band. */
+        .settings__toggle--compact {
+          padding: 2px var(--sp-2);
+          min-width: 44px;
+          font-size: var(--text-sm);
+          letter-spacing: 0.06em;
+        }
+        @media (max-width: 520px) {
+          .settings__sound-cat-grid { grid-template-columns: 1fr; }
+        }
       `}</style>
     </div>
   )

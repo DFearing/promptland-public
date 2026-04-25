@@ -38,3 +38,15 @@ export {
   ITEM_GENERATION_CAP,
   isGenerationCapReached,
 } from './generationCap'
+export {
+  POTION_SIZES,
+  SCROLL_LEVELS,
+  clampScrollLevel,
+  potionEffectAmount,
+  potionFraction,
+  potionSizeLabel,
+  scrollAmountMultiplier,
+  scrollLevelLabel,
+  type PotionSize,
+  type ScrollLevel,
+} from './sizing'

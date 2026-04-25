@@ -70,6 +70,19 @@ function shouldKeep(
       return true
     }
 
+    // Rangers favor ranged weapons (pierce / shortbow analogs) and DEX
+    // gear; sell heavy armor and STR-only weapons.
+    if (classId === 'ranger') {
+      if (def.slot === 'armor' && (def.bonuses.defense ?? 0) >= 3) return false
+      if (def.slot === 'weapon') {
+        const hasDex = (def.bonuses.dexterity ?? 0) > 0
+        const isPierce = def.damageFamily === 'pierce'
+        const hasAtk = (def.bonuses.attack ?? 0) > 0
+        return hasDex || isPierce || hasAtk
+      }
+      return true
+    }
+
     // Clerics keep WIS/CON gear; sell pure INT-focused and heavy STR gear.
     if (classId === 'cleric') {
       if (def.slot === 'weapon') {

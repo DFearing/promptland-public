@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Character } from '../character'
-import { currentTitle, xpToNextLevel } from '../character'
+import { currentTitle, currentTitleIndex, xpToNextLevel } from '../character'
 import { FieldIndicator, type FieldFxEvent } from '../effects'
 import {
   DRIVES,
@@ -14,6 +14,7 @@ import type { Effects } from '../themes'
 import { getWorldContent, getWorldManifest } from '../worlds'
 import LevelingDialog from './LevelingDialog'
 import LogPopoverContent, { type Subject } from './LogPopoverContent'
+import { resolveSubjectRarity } from './logPopoverRarity'
 import Popover from './Popover'
 
 const DRIVE_LABELS: Record<Drive, string> = {
@@ -39,25 +40,30 @@ const DRIVE_DESCRIPTIONS: Record<Drive, string> = {
     'Computed from inventory weight vs. carrying capacity (base 20 + STR modifier). Satisfied by selling at a shop.',
 }
 
-// Stat tooltips describe what each stat does today. Stats that aren't wired
-// into mechanics yet are flagged so the UI doesn't promise behaviour the game
-// doesn't ship.
+// Stat tooltips describe what each stat does today. Copy is intentionally
+// terse — the goal is an at-a-glance reminder of what the stat hooks into,
+// not a full mechanics treatise.
 const STAT_TIPS = {
-  strength: 'Strength — raw physical power. Adds to melee attack damage.',
+  strength:
+    'Strength — raw physical power. Adds to physical attack power (ATK) and defense (DEF).',
   dexterity:
-    'Dexterity — agility and reflexes. Reduces incoming melee damage (evasion bonus).',
-  constitution: 'Constitution — toughness. Each point adds 2 to max HP.',
+    'Dexterity — agility and reflexes. Increases dodge and dexterity based weapon power.',
+  constitution: 'Constitution — toughness. Opposite of squishy.',
   intelligence:
-    'Intelligence — reasoning. Gates scroll use (each scroll has an INT requirement) and powers spells.',
-  wisdom: 'Wisdom — intuition and willpower. Reserved for future mechanics (saves, divine magic).',
-  charisma:
-    'Charisma — force of personality. Reserved for future mechanics (shop prices, social checks).',
+    'Intelligence — reasoning. Adds to magic attack power (MATK) and defense (MDEF)',
+  wisdom:
+    'Wisdom — intuition and willpower. Not really used, honestly, but even number good.',
+  charisma: 'Charisma — force of personality. Not yet used.',
 } as const
 
 interface Props {
   character: Character
   fieldEvents: FieldFxEvent[]
   fields: Effects['fields']
+  /** Single toggle for the numeric readouts next to HP / MP / XP on
+   *  the sheet. Bars still draw; only the "12 / 30" text disappears.
+   *  Default: true — matches long-standing behavior. */
+  sheetNumbers: boolean
 }
 
 function clamp01(n: number): number {
@@ -108,7 +114,12 @@ function formatCompact(n: number): string {
   return String(Math.round(n))
 }
 
-export default function SheetPanel({ character, fieldEvents, fields }: Props) {
+export default function SheetPanel({
+  character,
+  fieldEvents,
+  fields,
+  sheetNumbers,
+}: Props) {
   const world = getWorldManifest(character.worldId)
   const xpTarget = xpToNextLevel(character.level)
   const hpRatio = character.maxHp > 0 ? clamp01(character.hp / character.maxHp) : 0
@@ -125,6 +136,19 @@ export default function SheetPanel({ character, fieldEvents, fields }: Props) {
   const titleTip = title.text
     ? 'Based on class and level'
     : 'Title pending — the archive is composing one.'
+  // Progression stage drives the honorific's color/opacity/pip count in
+  // the sheet header. Stages mirror the formatActorName thresholds so the
+  // visual tier matches the name form shown in the log.
+  //   1 — dim, no pip          (idx 0–4, levels 1–5)
+  //   2 — medium, ★            (idx 5–14, levels 6–15)
+  //   3 — bright, ★★           (idx 15–24, levels 16–25)
+  //   4 — accent + glow, ★★★   (idx 25–39, levels 26–100)
+  //   5 — layout flip, no pips (idx 40+, levels 110+ — LLM-generated tier)
+  const titleIdx = currentTitleIndex(character.level)
+  const titleStage =
+    titleIdx < 5 ? 1 : titleIdx < 15 ? 2 : titleIdx < 25 ? 3 : titleIdx < 40 ? 4 : 5
+  const pipCount = titleStage === 2 ? 1 : titleStage === 3 ? 2 : titleStage === 4 ? 3 : 0
+  const pipStars = '★'.repeat(pipCount)
 
   const hpTip = `Hit Points — reaches 0 and you fall, then respawn at the last safe room.`
   const magicTip = `${magicLabel} — spent casting spells. Refills on rest, potions, or scrolls.`
@@ -156,25 +180,28 @@ export default function SheetPanel({ character, fieldEvents, fields }: Props) {
     [character],
   )
 
-  // Derived combat stats. Mirrors the formulas in tick.ts/fight():
-  //  - ATK = STR mod + attack bonus from gear & buffs
-  //  - DEF = defense bonus from gear & buffs + DEX mod (DEX cuts incoming hits)
-  //  - MATK = INT mod (spells don't roll vs. INT yet, but it gates scrolls and
-  //          tracks spell potential — exposing it now keeps the panel honest
-  //          about what powers magic in this build)
-  //  - MDEF = WIS mod (reserved for save / resist mechanics on the roadmap)
+  // Derived combat stats. Mirrors the formulas in tick.ts/fight() and
+  // spells/cast.ts:
+  //  - ATK  = STR mod + attack bonus from gear & buffs
+  //  - DEF  = DEX mod + defense bonus from gear & buffs
+  //  - MATK = INT mod + magicAttack bonus from gear & buffs
+  //           (per-cast the engine adds roll(4) + spell.amount on top)
+  //  - MDEF = INT mod + magicDefense bonus from gear & buffs
+  //           (only consumed once mob casters land — reserved, but shown
+  //           so the stat's contribution to future spell saves is visible)
   const statMod = (n: number) => Math.floor((n - 10) / 2)
   const stats = character.stats
   const atkTotal = Math.max(0, statMod(stats.strength)) + (bonuses?.attack.total ?? 0)
   const defTotal = Math.max(0, statMod(stats.dexterity)) + (bonuses?.defense.total ?? 0)
-  const matkTotal = Math.max(0, statMod(stats.intelligence))
-  const mdefTotal = Math.max(0, statMod(stats.wisdom))
+  const matkTotal =
+    Math.max(0, statMod(stats.intelligence)) + (bonuses?.magicAttack?.total ?? 0)
+  const mdefTotal =
+    Math.max(0, statMod(stats.intelligence)) + (bonuses?.magicDefense?.total ?? 0)
   const COMBAT_TIPS = {
-    atk: 'Attack — adds to melee damage. STR mod + equipped attack bonuses.',
-    matk: 'Magic Attack — drives spell potency and scroll-use gating. Currently shows your INT mod; spell damage will scale with this in a future revision.',
-    def: 'Defense — reduces incoming melee damage. DEX mod (evasion) + equipped defense bonuses.',
-    mdef:
-      'Magic Defense — willpower vs. hostile magic. Currently shows your WIS mod; saves and resists will draw from it as the spell mechanics expand.',
+    atk: 'Physical Attack Power',
+    matk: 'Magic Attack Power',
+    def: 'Physical Defense',
+    mdef: 'Magic Defense',
   } as const
 
   const openStatPopover = (
@@ -224,10 +251,14 @@ export default function SheetPanel({ character, fieldEvents, fields }: Props) {
   return (
     <div className="sheet">
       <header className="sheet__header">
-        <div className="sheet__title">
+        <div className="sheet__title" data-stage={titleStage}>
           <span className="sheet__name">{character.name}</span>
           {title.text && (
-            <span className="sheet__honorific" data-tip={titleTip}>{title.text}</span>
+            <span className="sheet__honorific" data-tip={titleTip}>
+              {pipCount > 0 && <span className="sheet__pip sheet__pip--lead">{pipStars}</span>}
+              {title.text}
+              {pipCount > 0 && <span className="sheet__pip sheet__pip--trail">{pipStars}</span>}
+            </span>
           )}
           <span className="sheet__subtitle">
             {species ? (
@@ -258,49 +289,91 @@ export default function SheetPanel({ character, fieldEvents, fields }: Props) {
           setPopover({ subject, anchor: e.currentTarget.getBoundingClientRect() })
         }
       />
-      <Popover
-        open={popover != null}
-        anchor={popover?.anchor ?? null}
-        onClose={() => setPopover(null)}
-      >
-        {popover && (
-          <LogPopoverContent
-            subject={popover.subject}
-            ctx={{
-              character,
-              areas: content?.areas ?? (content ? [content.startingArea] : undefined),
-              mobs: content?.mobs,
-              items: content?.items,
-            }}
-
-          />
-        )}
-      </Popover>
+      {(() => {
+        const popoverCtx = {
+          character,
+          areas: content?.areas ?? (content ? [content.startingArea] : undefined),
+          mobs: content?.mobs,
+          items: content?.items,
+        }
+        const popoverRarity = popover
+          ? resolveSubjectRarity(popover.subject, popoverCtx) ?? undefined
+          : undefined
+        return (
+          <Popover
+            open={popover != null}
+            anchor={popover?.anchor ?? null}
+            onClose={() => setPopover(null)}
+            rarity={popoverRarity}
+          >
+            {popover && (
+              <LogPopoverContent subject={popover.subject} ctx={popoverCtx} />
+            )}
+          </Popover>
+        )
+      })()}
 
       <section className="sheet__bars">
-        <div className="sheet__bar-row" data-tip={hpTip}>
+        <div
+          className={
+            'sheet__bar-row' + (sheetNumbers ? '' : ' sheet__bar-row--no-val')
+          }
+          data-tip={hpTip}
+        >
           <span className="sheet__bar-label sheet__bar-label--hp">HP</span>
           <div className="sheet__bar">
             <SegBar ratio={hpRatio} segClass="sheet__seg--hp" />
+            <div
+              className="sheet__bar-fx"
+              style={{ left: `${hpRatio * 100}%` }}
+            >
+              <FieldIndicator events={fieldEvents} field="hp" enabled={fields.hp} durationMs={fields.durationMs} />
+            </div>
           </div>
-          <span className="sheet__bar-val sheet__bar-val--hp">{formatCompact(character.hp)} / {formatCompact(character.maxHp)}</span>
-          <FieldIndicator events={fieldEvents} field="hp" enabled={fields.hp} durationMs={fields.durationMs} />
+          {sheetNumbers && (
+            <span className="sheet__bar-val sheet__bar-val--hp">{formatCompact(character.hp)} / {formatCompact(character.maxHp)}</span>
+          )}
         </div>
-        <div className="sheet__bar-row" data-tip={magicTip}>
+        <div
+          className={
+            'sheet__bar-row' + (sheetNumbers ? '' : ' sheet__bar-row--no-val')
+          }
+          data-tip={magicTip}
+        >
           <span className="sheet__bar-label sheet__bar-label--magic">{magicAbbr}</span>
           <div className="sheet__bar">
             <SegBar ratio={magicRatio} segClass="sheet__seg--magic" />
+            <div
+              className="sheet__bar-fx"
+              style={{ left: `${magicRatio * 100}%` }}
+            >
+              <FieldIndicator events={fieldEvents} field="magic" enabled={fields.magic} durationMs={fields.durationMs} />
+            </div>
           </div>
-          <span className="sheet__bar-val sheet__bar-val--magic">{formatCompact(character.magic)} / {formatCompact(character.maxMagic)}</span>
-          <FieldIndicator events={fieldEvents} field="magic" enabled={fields.magic} durationMs={fields.durationMs} />
+          {sheetNumbers && (
+            <span className="sheet__bar-val sheet__bar-val--magic">{formatCompact(character.magic)} / {formatCompact(character.maxMagic)}</span>
+          )}
         </div>
-        <div className="sheet__bar-row sheet__bar-row--xp" data-tip={xpTip}>
+        <div
+          className={
+            'sheet__bar-row sheet__bar-row--xp' +
+            (sheetNumbers ? '' : ' sheet__bar-row--no-val')
+          }
+          data-tip={xpTip}
+        >
           <span className="sheet__bar-label sheet__bar-label--xp">XP</span>
           <div className="sheet__bar">
             <SegBar ratio={xpRatio} segClass="sheet__seg--xp" />
+            <div
+              className="sheet__bar-fx"
+              style={{ left: `${xpRatio * 100}%` }}
+            >
+              <FieldIndicator events={fieldEvents} field="xp" enabled={fields.xp} durationMs={fields.durationMs} />
+            </div>
           </div>
-          <span className="sheet__bar-val sheet__bar-val--xp">{formatCompact(character.xp)} / {formatCompact(xpTarget)}</span>
-          <FieldIndicator events={fieldEvents} field="xp" enabled={fields.xp} durationMs={fields.durationMs} />
+          {sheetNumbers && (
+            <span className="sheet__bar-val sheet__bar-val--xp">{formatCompact(character.xp)} / {formatCompact(xpTarget)}</span>
+          )}
         </div>
       </section>
 
@@ -405,22 +478,34 @@ export default function SheetPanel({ character, fieldEvents, fields }: Props) {
         .sheet__level:hover, .sheet__level:focus-visible { outline: none; background: var(--bg-3); text-shadow: var(--glow-md); }
 
         .sheet__bars { display: flex; flex-direction: column; gap: var(--sp-1); }
-        /* Fixed ch-based columns keep the label, bar, and value aligned across
-           all three rows. The value column is wide enough for "999M / 999M"
-           without wrapping. */
         .sheet__bar-row { position: relative; display: grid; grid-template-columns: 3.5ch 1fr 14ch; gap: var(--sp-2); align-items: center; font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+        .sheet__bar-row--no-val { grid-template-columns: 3.5ch 1fr; }
         .sheet__bar-label { font-family: var(--font-mono); color: var(--fg-2); letter-spacing: 0.04em; font-size: var(--text-xs); font-variant-numeric: tabular-nums; text-align: left; }
-        .sheet__bar-label--hp { color: var(--hp); text-shadow: var(--glow-sm); }
-        .sheet__bar-label--magic { color: var(--mp); text-shadow: var(--glow-sm); }
+        /* Use the same color expression as the log's potion token
+           (LogPanel.tsx, potionColor) so HP/MP labels and gauges read
+           as a single visual family with health/mana potions. The
+           glow is currentColor-based — the theme's --glow-sm is tied
+           to the accent and would shift the perceived hue. */
+        .sheet__bar-label--hp { color: var(--log-hp, var(--hp)); text-shadow: 0 0 3px currentColor; }
+        .sheet__bar-label--magic { color: var(--log-mp, var(--mp)); text-shadow: 0 0 3px currentColor; }
         .sheet__bar-label--xp { color: var(--xp, #ffffff); }
-        .sheet__bar-val { color: var(--fg-2); text-align: right; white-space: nowrap; }
-        .sheet__bar-val--hp { color: var(--hp); text-shadow: var(--glow-sm); }
-        .sheet__bar-val--magic { color: var(--mp); text-shadow: var(--glow-sm); }
+        .sheet__bar-val { color: var(--fg-2); text-align: right; white-space: nowrap; font-size: var(--text-xs); }
+        /* Zero-width slot inside the bar; its inline left is the fill
+           ratio. The nested FieldIndicator anchor (position: absolute,
+           right: 0) latches onto this slot right edge, which sits on the
+           fill boundary — so +N / -N deltas spawn where the gauge
+           currently ends and drift upward/downward from there. */
+        .sheet__bar-fx { position: absolute; top: 0; left: 0; width: 0; height: 100%; pointer-events: none; }
+        /* Current/max readouts stay neutral (default .sheet__bar-val
+           color: var(--fg-2)) for HP and MP — the label and gauge carry
+           the HP/MP color, the numbers don't need to repeat it. XP keeps
+           its tint because the XP label has no HP-color twin to anchor
+           the row's identity. */
         .sheet__bar-val--xp { color: var(--xp, #ffffff); }
-        .sheet__bar { display: flex; gap: 2px; padding: 1px; height: 10px; background: var(--bg-inset); border: 1px solid var(--line-1); box-shadow: var(--shadow-inset); }
+        .sheet__bar { position: relative; display: flex; gap: 2px; padding: 1px; height: 10px; background: var(--bg-inset); border: 1px solid var(--line-1); box-shadow: var(--shadow-inset); overflow: visible; }
         .sheet__seg { flex: 1; height: 100%; background: var(--bg-0); }
-        .sheet__seg--hp { background: var(--hp); box-shadow: var(--glow-sm); }
-        .sheet__seg--magic { background: var(--mp); box-shadow: var(--glow-sm); }
+        .sheet__seg--hp { background: var(--log-hp, var(--hp)); color: var(--log-hp, var(--hp)); box-shadow: 0 0 3px currentColor; }
+        .sheet__seg--magic { background: var(--log-mp, var(--mp)); color: var(--log-mp, var(--mp)); box-shadow: 0 0 3px currentColor; }
         .sheet__seg--xp { background: var(--xp, #ffffff); box-shadow: 0 0 4px rgba(255,255,255,0.35); }
         .sheet__seg--drive-hunger { background: var(--warn); box-shadow: var(--glow-sm); }
         .sheet__seg--drive-fatigue { background: var(--magic); box-shadow: var(--glow-sm); }

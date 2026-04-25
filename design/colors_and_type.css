@@ -75,6 +75,15 @@
    *  these back to match their main palette. */
   --log-hp:       #ff5a6a;
   --log-mp:       #6f9aff;
+  /* Log XP defaults to the same green as the XP gauge so log "+N XP"
+   *  reads as the gauge's twin. Themes can override this independently
+   *  of --xp if they ever want the log token to diverge from the bar
+   *  (mirrors the --log-hp / --log-mp split). */
+  --log-xp:       var(--xp);
+  /* Damage multiplier ("×0.48 MOD") tag color. Coffee brown — pure
+   *  brown with no orange, gray, or sienna cast. Sits clearly distinct
+   *  from --verb-emph (warm orange ATK) and the HP/MP/XP stat colors. */
+  --log-scale:    #6f4e37;
   /* Log-only neutral/muted — used by the damage-tag breakdown so the
    *  final damage amount reads as a clean bright number and the
    *  defender's defense sinks into a dim secondary color, independent
@@ -82,15 +91,24 @@
    *  phosphor default renders in bright and dark green respectively). */
   --log-neutral:  #e8e8ea;
   --log-muted:    #5a5a5a;
-  --xp:           #6fd37a;   /* XP bar / label / level-up values. Themes
-                                without an override fall through to the
-                                SheetPanel default (white). */
+  --xp:           #6fd37a;   /* XP bar / label / level-up values. */
   --speech:       #ffe58a;   /* NPC dialogue in log */
   --verb-emph:    #ff8a3d;   /* SEVERE / CRITICAL damage verbs in the log.
                                 Warm orange — pops against the green/grey
                                 body text without colliding with mob names
                                 (red) or names (player accent). Themeable so
                                 light palettes can swap to a darker shade. */
+
+  /* Rarity tier colors — used by rarityColor() and the popover tint.
+   *  Exposed as theme tokens (rather than hardcoded in rarity.ts) so
+   *  each theme can swap shades that read against its palette. The
+   *  default tier spread follows the classic "grey → green → blue →
+   *  purple → gold" progression. */
+  --rarity-common:    #9a9a9a;
+  --rarity-uncommon:  #5fd45f;
+  --rarity-rare:      #5aa7ff;
+  --rarity-epic:      #c084fc;
+  --rarity-legendary: #ffb040;
 
   /* Lines — CRT scanline, panel borders */
   --line-1:       #1d3a24;   /* subtle divider */

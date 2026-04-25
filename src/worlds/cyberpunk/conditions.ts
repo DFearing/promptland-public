@@ -44,4 +44,16 @@ export const CYBERPUNK_CONDITIONS: ConditionDef[] = [
     element: 'electric',
     verb: 'overclocks',
   },
+  {
+    id: 'ice_armored',
+    name: 'Hardlined',
+    description: 'Reactive armor layered over the skin. Incoming packets break at the seam.',
+    kind: 'stat-mod',
+    polarity: 'buff',
+    defaultDuration: 5,
+    params: { defense: 3 },
+    element: 'ice',
+    verb: 'hardens',
+    noun: 'the hardline',
+  },
 ]

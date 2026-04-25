@@ -1,10 +1,4 @@
-import type { GenderOption, WorldManifest } from './types'
-
-const DEFAULT_GENDERS: GenderOption[] = [
-  { id: 'man', name: 'Man' },
-  { id: 'woman', name: 'Woman' },
-  { id: 'nonbinary', name: 'Nonbinary' },
-]
+import type { WorldManifest } from './types'
 
 // --- Title ladders --------------------------------------------------------
 // 39 entries per class: indexes 0..23 = levels 2..25 (one per level),
@@ -224,6 +218,8 @@ const FANTASY: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { strength: 1, constitution: 1 },
       },
+      primaryStats: ['STR', 'CON'],
+      secondaryStat: 'DEX',
       titles: FANTASY_WARRIOR_TITLES,
     },
     {
@@ -242,6 +238,8 @@ const FANTASY: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { dexterity: 1, charisma: 1 },
       },
+      primaryStats: ['DEX', 'CHA'],
+      secondaryStat: 'INT',
       titles: FANTASY_ROGUE_TITLES,
     },
     {
@@ -261,6 +259,8 @@ const FANTASY: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { intelligence: 1, wisdom: 1 },
       },
+      primaryStats: ['INT', 'WIS'],
+      secondaryStat: 'DEX',
       titles: FANTASY_MAGE_TITLES,
     },
     {
@@ -280,6 +280,8 @@ const FANTASY: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { wisdom: 1, constitution: 1 },
       },
+      primaryStats: ['WIS', 'CON'],
+      secondaryStat: 'CHA',
       titles: FANTASY_CLERIC_TITLES,
     },
     {
@@ -299,10 +301,11 @@ const FANTASY: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { dexterity: 1, constitution: 1 },
       },
+      primaryStats: ['DEX', 'CON'],
+      secondaryStat: 'WIS',
       titles: FANTASY_RANGER_TITLES,
     },
   ],
-  genders: DEFAULT_GENDERS,
   magicName: 'Mana',
   magicAbbreviation: 'MP',
   currencyName: 'Gold',
@@ -311,6 +314,8 @@ const FANTASY: WorldManifest = {
   forbiddenConcepts: ['gun', 'laser', 'spaceship', 'computer', 'robot'],
   creationVerb: 'Born',
   birthTitle: 'Wayfarer',
+  birthIntro:
+    'The kingdom has been old a long time. Moths in the lanterns, rust on whatever\'s slung at the hip, dust on every threshold worth crossing. One more Wayfarer takes to the road anyway — they call them {name}.',
   sacrificePhrase: 'The gods smile and grant',
 }
 
@@ -365,6 +370,8 @@ const CYBERPUNK: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { intelligence: 1, wisdom: 1 },
       },
+      primaryStats: ['INT', 'WIS'],
+      secondaryStat: 'DEX',
       titles: CYBERPUNK_NETRUNNER_TITLES,
     },
     {
@@ -383,6 +390,8 @@ const CYBERPUNK: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { strength: 1, dexterity: 1 },
       },
+      primaryStats: ['STR', 'DEX'],
+      secondaryStat: 'CON',
       titles: CYBERPUNK_SAMURAI_TITLES,
     },
     {
@@ -402,6 +411,8 @@ const CYBERPUNK: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { intelligence: 1, dexterity: 1 },
       },
+      primaryStats: ['INT', 'DEX'],
+      secondaryStat: 'WIS',
       titles: CYBERPUNK_TECHIE_TITLES,
     },
     {
@@ -420,10 +431,11 @@ const CYBERPUNK: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { charisma: 1, wisdom: 1 },
       },
+      primaryStats: ['CHA', 'WIS'],
+      secondaryStat: 'INT',
       titles: CYBERPUNK_FIXER_TITLES,
     },
   ],
-  genders: DEFAULT_GENDERS,
   magicName: 'Hack',
   magicAbbreviation: 'HAX',
   currencyName: 'Credits',
@@ -432,6 +444,8 @@ const CYBERPUNK: WorldManifest = {
   forbiddenConcepts: ['magic', 'sword', 'dragon', 'wizard'],
   creationVerb: 'Grown',
   birthTitle: 'Nobody',
+  birthIntro:
+    'The city has been on too long. Rain on the neon, chrome fogged from the inside, rent due on whatever coffin counts as a home. Another Nobody jacks into the grid anyway — handle: {name}.',
   sacrificePhrase: 'The net pings back and credits',
 }
 
@@ -485,6 +499,8 @@ const SCIFI: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { charisma: 1, wisdom: 1 },
       },
+      primaryStats: ['CHA', 'WIS'],
+      secondaryStat: 'CON',
       titles: SCIFI_CAPTAIN_TITLES,
     },
     {
@@ -503,6 +519,8 @@ const SCIFI: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { intelligence: 1, dexterity: 1 },
       },
+      primaryStats: ['INT', 'DEX'],
+      secondaryStat: 'CON',
       titles: SCIFI_ENGINEER_TITLES,
     },
     {
@@ -522,6 +540,8 @@ const SCIFI: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { intelligence: 1, wisdom: 1 },
       },
+      primaryStats: ['INT', 'WIS'],
+      secondaryStat: 'CON',
       titles: SCIFI_SCIENCE_TITLES,
     },
     {
@@ -540,6 +560,8 @@ const SCIFI: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { strength: 1, constitution: 1 },
       },
+      primaryStats: ['STR', 'CON'],
+      secondaryStat: 'DEX',
       titles: SCIFI_SECURITY_TITLES,
     },
     {
@@ -559,10 +581,11 @@ const SCIFI: WorldManifest = {
         statBumpInterval: 4,
         statBumps: { wisdom: 1, intelligence: 1 },
       },
+      primaryStats: ['WIS', 'INT'],
+      secondaryStat: 'CHA',
       titles: SCIFI_MEDIC_TITLES,
     },
   ],
-  genders: DEFAULT_GENDERS,
   magicName: 'Psionics',
   magicAbbreviation: 'PSY',
   currencyName: 'Credits',
@@ -571,6 +594,8 @@ const SCIFI: WorldManifest = {
   forbiddenConcepts: ['magic', 'sword', 'dragon', 'wizard'],
   creationVerb: 'Commissioned',
   birthTitle: 'Cadet',
+  birthIntro:
+    'The station has been in slow orbit a long time. Coolant lines ticking, recyclers humming a note flatter than last year, the star outside cooling faster than the surveys promised. One more Cadet reports aboard anyway — designation: {name}.',
   sacrificePhrase: 'The archive registers the offering and issues',
 }
 

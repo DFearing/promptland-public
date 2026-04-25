@@ -19,6 +19,7 @@ export const THEMES: readonly ThemeMeta[] = [
   { id: 'vacuum', name: 'Vacuum', description: 'Ice-white on navy.' },
   { id: 'vellum', name: 'Vellum', description: 'Ink on parchment. The only light one.' },
   { id: 'paper', name: 'Paper', description: 'Pure white background, black text. For debugging color rules.' },
+  { id: 'custom', name: 'Custom', description: 'Your own palette — eight tokens. Selecting this theme reveals the editor.' },
 ] as const
 
 export function isThemeId(value: unknown): value is ThemeId {

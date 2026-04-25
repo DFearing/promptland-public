@@ -30,10 +30,13 @@ export function makeDefaults(worldId?: string): Pick<
   | 'equipped'
   | 'conditions'
   | 'spells'
+  | 'journal'
+  | 'rngState'
 > {
   const area = resolveStartingArea(worldId)
   const start = { areaId: area.id, x: area.startX, y: area.startY, z: area.startZ }
   return {
+    rngState: crypto.getRandomValues(new Uint32Array(1))[0],
     gold: 0,
     position: start,
     visitedRooms: [visitedKey(area.id, area.startX, area.startY, area.startZ)],
@@ -44,10 +47,30 @@ export function makeDefaults(worldId?: string): Pick<
     equipped: {},
     conditions: [],
     spells: [],
+    // Seed the journal with a starting-area discovery entry so new
+    // characters immediately have something under their first area in
+    // the Journal panel (instead of an empty list until the first mob
+    // defeat / level-up).
+    journal: [
+      {
+        at: Date.now(),
+        areaId: area.id,
+        kind: 'area-discovered',
+        text: `Discovered ${area.name}.`,
+        meta: { roomName: area.rooms[visitedKey(area.id, area.startX, area.startY, area.startZ).split(':')[1]]?.name },
+      },
+    ],
   }
 }
 
 export function migrateCharacter(raw: unknown): Character {
   const partial = (raw ?? {}) as Partial<Character>
-  return { ...makeDefaults(partial.worldId), ...partial } as Character
+  const merged = { ...makeDefaults(partial.worldId), ...partial } as Character
+  // Legacy saves lack rngState — seed one from crypto so the character
+  // begins drawing from a fresh stream. This is a one-time migration;
+  // subsequent loads round-trip the stamped value.
+  if (merged.rngState == null) {
+    merged.rngState = crypto.getRandomValues(new Uint32Array(1))[0]
+  }
+  return merged
 }

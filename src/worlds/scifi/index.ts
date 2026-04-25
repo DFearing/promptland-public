@@ -13,4 +13,10 @@ export const SCIFI_CONTENT: WorldContent = {
   startingArea: SCIFI_START_AREA,
   conditions: SCIFI_CONDITIONS,
   context: SCIFI_CONTEXT,
+  shopInventory: [
+    { itemId: 'medfoam', price: 16, maxStock: 4 },
+    { itemId: 'psi_lozenge', price: 20, maxStock: 3 },
+    { itemId: 'ration_synth_module', price: 130, maxStock: 1 },
+    { itemId: 'circadian_regulator', price: 150, maxStock: 1 },
+  ],
 }
