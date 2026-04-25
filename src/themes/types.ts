@@ -40,6 +40,11 @@ export interface TickSpeedMeta {
  */
 export interface Effects {
   scanlines: boolean
+  /** When true, heal / consume / condition-tick / XP entries show exact
+   *  numeric amounts in the log. When false, they render as qualitative
+   *  descriptors so the game reads like a story instead of a spec sheet.
+   *  Default: false — the "watch and infer" mode is the shipping vibe. */
+  logNumbers: boolean
   fullscreen: {
     /** Master toggle — disables every fullscreen effect when off. */
     enabled: boolean

@@ -3,13 +3,13 @@
 A ~200-line Node script that exposes an **OpenAI-compatible**
 `/v1/chat/completions` endpoint backed by **Claude Code's headless mode**
 (`claude -p`). Point any OpenAI-compatible client at it — including
-Understudy — and it will transparently use your Claude Code login (i.e. your
+Promptland — and it will transparently use your Claude Code login (i.e. your
 Pro/Max subscription) as the LLM backend.
 
 ## Why
 
 - BYOK paid APIs cost money per token. A Claude subscription doesn't.
-- Running Understudy's game loop against Claude-Haiku through a subscription
+- Running Promptland's game loop against Claude-Haiku through a subscription
   means generating items, mobs, lore, etc. doesn't tick a meter beyond the
   flat monthly fee (subject to the plan's usage limits).
 - The proxy is a local dev tool only. It does not ship with deployed builds
@@ -39,9 +39,9 @@ claude-proxy listening on http://127.0.0.1:11435
 
 Leave it running in a second terminal alongside `npm run dev`.
 
-## Wire into Understudy
+## Wire into Promptland
 
-In Understudy's LLM settings, pick the **"Claude Subscription (local
+In Promptland's LLM settings, pick the **"Claude Subscription (local
 proxy)"** preset. Defaults:
 
 - `base_url`: `http://127.0.0.1:11435/v1`
@@ -72,14 +72,14 @@ You should get a standard OpenAI response object with Claude's reply in
 
 ## Limitations / gotchas
 
-- **No streaming.** `stream: true` returns 400. Understudy's current
+- **No streaming.** `stream: true` returns 400. Promptland's current
   `LLMClient` uses non-streaming, so this is fine today.
 - **`temperature` and `max_tokens` are ignored.** Claude Code's headless mode
   doesn't expose them. If you need tight control over randomness, use the
   real Anthropic/OpenAI preset.
 - **Cold-start cost.** Each request spawns a fresh `claude` process (~1–3s
   overhead). The 5-minute prompt cache warms subsequent calls, but the
-  spawn itself is always there. Understudy's entity cache masks most of it.
+  spawn itself is always there. Promptland's entity cache masks most of it.
 - **Subscription rate limits.** Pro/Max plans meter by messages/sessions per
   5h window. A chatty game loop can hit these — the entity cache is your
   real mitigation.

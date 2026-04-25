@@ -11,6 +11,7 @@ export const CYBERPUNK_CONDITIONS: ConditionDef[] = [
     params: { attack: -2, defense: -2 },
     element: 'hack',
     verb: 'hacks',
+    noun: 'the hack',
   },
   {
     id: 'jammed',

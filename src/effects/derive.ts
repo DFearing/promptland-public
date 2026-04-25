@@ -1,4 +1,5 @@
 import type { Character } from '../character'
+import { parseMobDisplayName } from '../items/rarity'
 import type { LogEntry } from '../log'
 import type {
   EffectContext,
@@ -13,11 +14,39 @@ function nextId(): string {
   return `fx-${Date.now()}-${counter}`
 }
 
+// Per-character tracking of first-seen mobs and items so we can fire
+// discovery events. Keyed by character id — cleared when the character
+// changes. We use a module-level map so the Set survives across ticks
+// but resets on page reload (which is fine — discovery sounds are a
+// session-only nicety, not persisted state).
+const seenMobs = new Map<string, Set<string>>()
+const seenItems = new Map<string, Set<string>>()
+
+function isFirstMob(charId: string, mobName: string): boolean {
+  let set = seenMobs.get(charId)
+  if (!set) { set = new Set(); seenMobs.set(charId, set) }
+  if (set.has(mobName)) return false
+  set.add(mobName)
+  return true
+}
+
+function isFirstItem(charId: string, itemName: string): boolean {
+  let set = seenItems.get(charId)
+  if (!set) { set = new Set(); seenItems.set(charId, set) }
+  if (set.has(itemName)) return false
+  set.add(itemName)
+  return true
+}
+
 export function deriveEvents(ctx: EffectContext): EffectEvent[] {
   const events: EffectEvent[] = []
 
   if (ctx.prevStateKind !== 'fighting' && ctx.nextStateKind === 'fighting') {
     events.push({ id: nextId(), kind: 'enter-fight' })
+  }
+
+  if (ctx.prevStateKind !== 'generating-area' && ctx.nextStateKind === 'generating-area') {
+    events.push({ id: nextId(), kind: 'generating-area' })
   }
 
   const newEntries = ctx.nextLog.slice(ctx.prevLogLength)
@@ -66,6 +95,17 @@ export function deriveEvents(ctx: EffectContext): EffectEvent[] {
             maxHp: ctx.character.maxHp,
           })
         }
+        // New mob discovery — fire only for rare+ so common/uncommon
+        // ambient kills don't spam the overlay. We still mark the display
+        // name as seen so a later re-encounter doesn't re-fire if it
+        // rolled rare the first time and common the second.
+        const dmgMobName = entry.meta?.mobName
+        if (dmgMobName && isFirstMob(ctx.character.id, dmgMobName)) {
+          const { rarity } = parseMobDisplayName(dmgMobName)
+          if (rarity === 'rare' || rarity === 'epic' || rarity === 'legendary') {
+            events.push({ id: nextId(), kind: 'new-mob', name: dmgMobName })
+          }
+        }
         break
       }
       case 'heal': {
@@ -93,12 +133,42 @@ export function deriveEvents(ctx: EffectContext): EffectEvent[] {
         }
         break
       }
-      case 'loot':
+      case 'loot': {
         events.push({ id: nextId(), kind: 'loot' })
+        // Gold windfall/jackpot — only one fires, jackpot takes priority.
+        const goldAmt = entry.meta?.goldAmount ?? 0
+        if (goldAmt >= 150) {
+          events.push({ id: nextId(), kind: 'gold-jackpot', amount: goldAmt })
+        } else if (goldAmt >= 30) {
+          events.push({ id: nextId(), kind: 'gold-windfall', amount: goldAmt })
+        }
+        // New item discovery — only banner for rare+ so common/uncommon
+        // pickups don't spam the overlay. Still mark the item as seen so
+        // later upgrades at higher rarity don't double-fire.
+        const itemName = entry.meta?.itemName
+        if (itemName && isFirstItem(ctx.character.id, itemName)) {
+          const rarity = entry.meta?.itemRarity
+          if (rarity === 'rare' || rarity === 'epic' || rarity === 'legendary') {
+            events.push({ id: nextId(), kind: 'new-item', name: itemName })
+          }
+        }
         break
-      case 'area':
-        events.push({ id: nextId(), kind: 'new-area', name: entry.text })
+      }
+      case 'area': {
+        // Banner only fires for rare+ areas — common/uncommon discoveries
+        // still show the "New Area" log line, but don't take over the
+        // screen. Keeps fullscreen reveals reserved for actual milestones.
+        const r = entry.rarity
+        if (r === 'rare' || r === 'epic' || r === 'legendary') {
+          events.push({
+            id: nextId(),
+            kind: 'new-area',
+            name: entry.text,
+            rarity: r,
+          })
+        }
         break
+      }
     }
   }
 

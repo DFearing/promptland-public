@@ -25,6 +25,9 @@ interface ActiveFx {
   }
   /** Area name used by the new-area fullscreen banner. */
   name?: string
+  /** Area rarity — drives the new-area banner variant. Rare+ renders a
+   *  distinct "Rare Area Discovered" card in the rarity color. */
+  rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
 }
 
 // Per-level on-screen durations for the level-up card. Tuned in code so
@@ -114,10 +117,29 @@ function intensityFor(amount: number, maxHp: number): number {
   return Math.sqrt(ratio)
 }
 
+// Fullscreen card-style effects that fully take over the foreground.
+// Only one of these plays at a time; new arrivals queue behind whatever's
+// currently on screen. Non-listed kinds (damage-taken, heal-self) are rim
+// flashes that co-render fine and bypass the queue.
+const BLOCKING_KINDS = new Set<EffectEvent['kind']>([
+  'level-up',
+  'death',
+  'new-area',
+  'llm-connected',
+  'generating-area',
+  'new-mob',
+  'new-item',
+])
+
+const isBlocking = (fx: ActiveFx): boolean => BLOCKING_KINDS.has(fx.kind)
+
 export default function EffectsOverlay({ events, effects }: Props) {
   const seenRef = useRef<Set<string>>(new Set())
   const primedRef = useRef(false)
   const [active, setActive] = useState<ActiveFx[]>([])
+  // Queue of blocking fullscreen effects waiting for the current one to
+  // finish. FIFO — first queued, first played.
+  const [queue, setQueue] = useState<ActiveFx[]>([])
 
   // Mark whatever's already in the queue at mount as seen, without rendering
   // any of it — the saved-game backlog must not replay on page load. Done as
@@ -159,12 +181,46 @@ export default function EffectsOverlay({ events, effects }: Props) {
       } else if (e.kind === 'heal-self' && fs.heal) {
         renderable.push({ id: e.id, kind: e.kind, intensity: intensityFor(e.amount, e.maxHp) })
       } else if (e.kind === 'new-area' && fs.newArea) {
-        renderable.push({ id: e.id, kind: e.kind, name: e.name })
+        renderable.push({ id: e.id, kind: e.kind, name: e.name, rarity: e.rarity })
       } else if (e.kind === 'llm-connected') {
         renderable.push({ id: e.id, kind: e.kind })
+      } else if (e.kind === 'generating-area') {
+        renderable.push({ id: e.id, kind: e.kind })
+      } else if (e.kind === 'new-mob') {
+        renderable.push({ id: e.id, kind: e.kind, name: e.name })
+      } else if (e.kind === 'new-item') {
+        renderable.push({ id: e.id, kind: e.kind, name: e.name })
       }
     }
-    if (renderable.length > 0) setActive((prev) => [...prev, ...renderable])
+    // Admit-on-arrival semantics: flags are evaluated here, not at render
+    // time, so an effect that toggles mid-flight doesn't retroactively
+    // hide or reveal already-admitted items. This rules out the "derive
+    // during render" refactor the rule suggests.
+    //
+    // Blocking kinds (card-style banners) serialize: at most one plays at
+    // a time. New blocking arrivals line up behind whatever's currently
+    // on screen; non-blocking rim flashes always play immediately.
+    if (renderable.length > 0) {
+      const nonBlocking = renderable.filter((fx) => !isBlocking(fx))
+      const blocking = renderable.filter(isBlocking)
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActive((prev) => {
+        const hasBlocking = prev.some(isBlocking)
+        const admitFromQueue: ActiveFx[] = []
+        const holdForQueue: ActiveFx[] = []
+        if (hasBlocking) {
+          holdForQueue.push(...blocking)
+        } else if (blocking.length > 0) {
+          // First blocking arrival goes live; the rest wait.
+          admitFromQueue.push(blocking[0])
+          holdForQueue.push(...blocking.slice(1))
+        }
+        if (holdForQueue.length > 0) {
+          setQueue((q) => [...q, ...holdForQueue])
+        }
+        return [...prev, ...nonBlocking, ...admitFromQueue]
+      })
+    }
 
     if (fsOn && fs.levelUpConfetti) {
       for (const e of fresh) {
@@ -176,6 +232,19 @@ export default function EffectsOverlay({ events, effects }: Props) {
   const handleEnd = (id: string) => {
     setActive((prev) => prev.filter((fx) => fx.id !== id))
   }
+
+  // Promote the next queued blocking effect the moment there's no blocking
+  // one on screen. Kept as an effect (not inlined into handleEnd) so the
+  // two state updates compose cleanly and don't misbehave under strict
+  // mode's double-invoked updaters.
+  useEffect(() => {
+    if (queue.length === 0) return
+    if (active.some(isBlocking)) return
+    const [next, ...rest] = queue
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setQueue(rest)
+    setActive((prev) => [...prev, next])
+  }, [queue, active])
 
   return (
     <div className="fx-overlay" aria-hidden="true">
@@ -335,11 +404,18 @@ export default function EffectsOverlay({ events, effects }: Props) {
           )
         }
         if (fx.kind === 'new-area') {
+          const isRare =
+            fx.rarity === 'rare' ||
+            fx.rarity === 'epic' ||
+            fx.rarity === 'legendary'
+          const rareColor = isRare ? rarityColor(fx.rarity!) : undefined
+          const rareLabel = isRare ? `${rarityLabel(fx.rarity!)} Area Discovered` : 'New Area'
           return (
-            <div key={fx.id} className="fx-cluster fx-newarea">
+            <div key={fx.id} className={'fx-cluster fx-newarea' + (isRare ? ' fx-newarea--rare' : '')}>
               <div className="fx-newarea-scrim" />
               <div
                 className="fx-newarea-card"
+                style={isRare ? { ['--fx-rare-color' as string]: rareColor } : undefined}
                 onAnimationEnd={(e) => {
                   // Only release when the card's own animation ends — the
                   // scrim runs a shorter fade, and inner elements animate
@@ -349,7 +425,7 @@ export default function EffectsOverlay({ events, effects }: Props) {
                 }}
               >
                 <div className="fx-newarea-rule" />
-                <div className="fx-newarea-label">New Area</div>
+                <div className="fx-newarea-label">{rareLabel}</div>
                 <div className="fx-newarea-name">
                   <span className="fx-newarea-glyph">✦</span>
                   <span className="fx-newarea-title">{fx.name}</span>
@@ -378,6 +454,58 @@ export default function EffectsOverlay({ events, effects }: Props) {
                   <span className="fx-llmc-glyph">◀</span>
                 </div>
                 <div className="fx-llmc-rule" />
+              </div>
+            </div>
+          )
+        }
+        if (fx.kind === 'generating-area') {
+          return (
+            <div key={fx.id} className="fx-cluster fx-genarea">
+              <div className="fx-genarea-scrim" />
+              <div
+                className="fx-genarea-card"
+                onAnimationEnd={(e) => {
+                  if (e.currentTarget === e.target) handleEnd(fx.id)
+                }}
+              >
+                <div className="fx-genarea-rule" />
+                <div className="fx-genarea-label">Exploring</div>
+                <div className="fx-genarea-name">
+                  <span className="fx-genarea-title">Charting unknown paths...</span>
+                </div>
+                <div className="fx-genarea-rule" />
+              </div>
+            </div>
+          )
+        }
+        if (fx.kind === 'new-mob') {
+          return (
+            <div key={fx.id} className="fx-cluster fx-discovery">
+              <div className="fx-discovery-scrim" />
+              <div
+                className="fx-discovery-card fx-discovery-card--mob"
+                onAnimationEnd={(e) => {
+                  if (e.currentTarget === e.target) handleEnd(fx.id)
+                }}
+              >
+                <div className="fx-discovery-label">First Encounter</div>
+                <div className="fx-discovery-name">{fx.name}</div>
+              </div>
+            </div>
+          )
+        }
+        if (fx.kind === 'new-item') {
+          return (
+            <div key={fx.id} className="fx-cluster fx-discovery">
+              <div className="fx-discovery-scrim" />
+              <div
+                className="fx-discovery-card fx-discovery-card--item"
+                onAnimationEnd={(e) => {
+                  if (e.currentTarget === e.target) handleEnd(fx.id)
+                }}
+              >
+                <div className="fx-discovery-label">New Discovery</div>
+                <div className="fx-discovery-name">{fx.name}</div>
               </div>
             </div>
           )
@@ -684,6 +812,33 @@ export default function EffectsOverlay({ events, effects }: Props) {
           color: var(--accent-hot);
         }
 
+        /* Rare+ area discovery — repaints the label, rule, glyphs, and
+           title in the area's rarity color so an epic area reads
+           instantly as a bigger deal than an ordinary new-area banner. */
+        .fx-newarea--rare .fx-newarea-card { color: var(--fx-rare-color, var(--accent-hot)); }
+        .fx-newarea--rare .fx-newarea-label {
+          color: var(--fx-rare-color, var(--fg-1));
+          opacity: 1;
+        }
+        .fx-newarea--rare .fx-newarea-title {
+          color: var(--fx-rare-color, var(--accent-hot));
+          text-shadow: var(--glow-lg), 0 0 24px var(--fx-rare-color, transparent);
+        }
+        .fx-newarea--rare .fx-newarea-glyph {
+          color: var(--fx-rare-color, var(--accent));
+        }
+        .fx-newarea--rare .fx-newarea-rule {
+          background: linear-gradient(
+            to right,
+            transparent,
+            var(--fx-rare-color, var(--accent)) 20%,
+            var(--fx-rare-color, var(--accent-hot)) 50%,
+            var(--fx-rare-color, var(--accent)) 80%,
+            transparent
+          );
+          box-shadow: 0 0 10px var(--fx-rare-color, var(--accent));
+        }
+
         /* LLM-connected banner — same structure as new-area but in the
            "good" green palette so it reads as a system/status confirm. */
         .fx-llmc { pointer-events: none; }
@@ -767,6 +922,145 @@ export default function EffectsOverlay({ events, effects }: Props) {
           color: var(--good);
         }
 
+        /* Generating-area banner — pulsing variant of new-area in magic palette */
+        .fx-genarea { pointer-events: none; }
+        .fx-genarea-scrim {
+          position: absolute;
+          inset: 0;
+          background: radial-gradient(ellipse 80% 60% at center,
+            rgba(0, 0, 0, 0.65) 0%,
+            rgba(0, 0, 0, 0.45) 55%,
+            transparent 90%);
+          animation: fx-genarea-scrim 3200ms ease-out forwards;
+          opacity: 0;
+        }
+        @keyframes fx-genarea-scrim {
+          0%   { opacity: 0; }
+          12%  { opacity: 1; }
+          85%  { opacity: 1; }
+          100% { opacity: 0; }
+        }
+        .fx-genarea-card {
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          transform: translate(-50%, -50%);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: var(--sp-2);
+          padding: var(--sp-4) var(--sp-6, 24px);
+          color: var(--magic, #c084fc);
+          text-align: center;
+          animation: fx-genarea-card 3200ms ease-out forwards;
+          opacity: 0;
+        }
+        @keyframes fx-genarea-card {
+          0%   { opacity: 0; transform: translate(-50%, -42%) scale(0.92); }
+          12%  { opacity: 1; transform: translate(-50%, -50%) scale(1.0); }
+          85%  { opacity: 1; transform: translate(-50%, -50%) scale(1.0); }
+          100% { opacity: 0; transform: translate(-50%, -54%) scale(1.02); }
+        }
+        .fx-genarea-rule {
+          width: min(60vw, 440px);
+          height: 1px;
+          background: linear-gradient(
+            to right,
+            transparent,
+            var(--magic, #c084fc) 20%,
+            var(--magic, #c084fc) 80%,
+            transparent
+          );
+          box-shadow: 0 0 8px var(--magic, #c084fc);
+          opacity: 0.7;
+        }
+        .fx-genarea-label {
+          font-family: var(--font-mono);
+          font-size: clamp(12px, 1.4vw, 16px);
+          letter-spacing: 0.4em;
+          text-transform: uppercase;
+          color: var(--fg-1);
+          opacity: 0.8;
+          text-shadow: 0 0 8px var(--magic, #c084fc);
+        }
+        .fx-genarea-name {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: clamp(16px, 3vw, 28px);
+          font-family: var(--font-display);
+          font-size: clamp(28px, 5vw, 56px);
+          line-height: 1;
+          font-weight: 500;
+          text-shadow: 0 0 24px var(--magic, #c084fc), 0 0 48px rgba(192, 132, 252, 0.35);
+          animation: fx-genarea-pulse 1200ms ease-in-out infinite alternate;
+        }
+        @keyframes fx-genarea-pulse {
+          0%   { opacity: 0.7; transform: scale(1); }
+          100% { opacity: 1; transform: scale(1.03); }
+        }
+        .fx-genarea-title { color: var(--magic, #c084fc); }
+
+        /* Discovery banners — brief 1.5s overlay for new mobs/items */
+        .fx-discovery { pointer-events: none; }
+        .fx-discovery-scrim {
+          position: absolute;
+          inset: 0;
+          background: radial-gradient(ellipse 70% 40% at center,
+            rgba(0, 0, 0, 0.45) 0%,
+            transparent 80%);
+          animation: fx-discovery-scrim 1500ms ease-out forwards;
+          opacity: 0;
+        }
+        @keyframes fx-discovery-scrim {
+          0%   { opacity: 0; }
+          15%  { opacity: 1; }
+          75%  { opacity: 1; }
+          100% { opacity: 0; }
+        }
+        .fx-discovery-card {
+          position: absolute;
+          left: 50%;
+          top: 38%;
+          transform: translate(-50%, -50%);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: var(--sp-1);
+          padding: var(--sp-2) var(--sp-4);
+          text-align: center;
+          animation: fx-discovery-card 1500ms ease-out forwards;
+          opacity: 0;
+        }
+        @keyframes fx-discovery-card {
+          0%   { opacity: 0; transform: translate(-50%, -44%) scale(0.9); }
+          18%  { opacity: 1; transform: translate(-50%, -50%) scale(1.0); }
+          75%  { opacity: 1; transform: translate(-50%, -50%) scale(1.0); }
+          100% { opacity: 0; transform: translate(-50%, -54%) scale(1.02); }
+        }
+        .fx-discovery-card--mob {
+          color: var(--bad, #e55);
+          text-shadow: 0 0 12px var(--bad, #e55);
+        }
+        .fx-discovery-card--item {
+          color: var(--accent-hot, #ffd27a);
+          text-shadow: 0 0 12px var(--accent, #e4a657);
+        }
+        .fx-discovery-label {
+          font-family: var(--font-mono);
+          font-size: clamp(10px, 1.2vw, 14px);
+          letter-spacing: 0.3em;
+          text-transform: uppercase;
+          color: var(--fg-1);
+          opacity: 0.8;
+        }
+        .fx-discovery-name {
+          font-family: var(--font-display);
+          font-size: clamp(24px, 5vw, 48px);
+          line-height: 1;
+          font-weight: 500;
+        }
+
         @media (prefers-reduced-motion: reduce) {
           .fx-flash, .fx-vignette, .fx-banner, .fx-death-stack { animation-duration: 900ms; }
           .fx-banner, .fx-death-stack { animation-timing-function: linear; }
@@ -776,6 +1070,15 @@ export default function EffectsOverlay({ events, effects }: Props) {
           }
           .fx-llmc-card, .fx-llmc-scrim {
             animation-duration: 2100ms;
+            animation-timing-function: linear;
+          }
+          .fx-genarea-card, .fx-genarea-scrim {
+            animation-duration: 2400ms;
+            animation-timing-function: linear;
+          }
+          .fx-genarea-name { animation: none; }
+          .fx-discovery-card, .fx-discovery-scrim {
+            animation-duration: 1200ms;
             animation-timing-function: linear;
           }
         }

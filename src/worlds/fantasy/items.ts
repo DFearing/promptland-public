@@ -63,6 +63,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 2,
     slot: 'weapon',
     bonuses: { attack: 1 },
+    requirements: { strength: 4 },
   },
   {
     id: 'hand_axe',
@@ -71,6 +72,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 2,
     slot: 'weapon',
     bonuses: { attack: 1, strength: 1 },
+    requirements: { strength: 5 },
   },
   {
     id: 'iron_shortsword',
@@ -79,6 +81,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 2,
     slot: 'weapon',
     bonuses: { attack: 2 },
+    requirements: { strength: 5 },
   },
   {
     id: 'shortbow',
@@ -87,6 +90,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 2,
     slot: 'weapon',
     bonuses: { attack: 2, dexterity: 1 },
+    requirements: { dexterity: 5 },
   },
   {
     id: 'iron_mace',
@@ -95,6 +99,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 4,
     slot: 'weapon',
     bonuses: { attack: 2, strength: 1 },
+    requirements: { strength: 6 },
   },
   {
     id: 'carved_staff',
@@ -103,6 +108,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 2,
     slot: 'weapon',
     bonuses: { attack: 1, intelligence: 1 },
+    requirements: { intelligence: 6 },
   },
   {
     id: 'runed_dagger',
@@ -111,6 +117,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 2,
     slot: 'weapon',
     bonuses: { attack: 3 },
+    requirements: { dexterity: 5 },
   },
 
   // ── Armor (torso) ────────────────────────────────────────────────────────────
@@ -121,6 +128,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 2,
     slot: 'armor',
     bonuses: { defense: 1 },
+    requirements: { strength: 4 },
   },
   {
     id: 'leather_jerkin',
@@ -129,6 +137,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 3,
     slot: 'armor',
     bonuses: { defense: 2 },
+    requirements: { strength: 6 },
   },
   {
     id: 'chain_vest',
@@ -137,6 +146,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 5,
     slot: 'armor',
     bonuses: { defense: 3 },
+    requirements: { strength: 10, level: 3 },
   },
 
   // ── Head ────────────────────────────────────────────────────────────────────
@@ -147,6 +157,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 2,
     slot: 'head',
     bonuses: { defense: 1 },
+    requirements: { strength: 4 },
   },
   {
     id: 'open_helm',
@@ -155,6 +166,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 2,
     slot: 'head',
     bonuses: { defense: 2 },
+    requirements: { strength: 6 },
   },
 
   // ── Arms ────────────────────────────────────────────────────────────────────
@@ -247,6 +259,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 1,
     slot: 'amulet',
     bonuses: { wisdom: 2 },
+    requirements: { wisdom: 5 },
   },
   {
     id: 'amber_pendant',
@@ -255,6 +268,7 @@ const ARCHETYPES: ItemArchetype[] = [
     weight: 1,
     slot: 'amulet',
     bonuses: { wisdom: 1, charisma: 1 },
+    requirements: { wisdom: 4 },
   },
 
   // ── Rings ───────────────────────────────────────────────────────────────────

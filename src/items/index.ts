@@ -3,6 +3,7 @@ export type {
   ConsumableEffect,
   EquipBonuses,
   EquipmentArchetype,
+  EquipRequirements,
   EquipSlot,
   ItemArchetype,
   ItemDef,
@@ -17,6 +18,7 @@ export {
   RARITY_DEFS,
   defeatLingerMs,
   mobDisplayName,
+  parseMobDisplayName,
   rarityColor,
   rarityLabel,
   rarityStatMult,
@@ -27,3 +29,12 @@ export {
   type Rarity,
   type RarityDef,
 } from './rarity'
+export {
+  meetsRequirements,
+  requirementMultFor,
+  scaledRequirements,
+} from './requirements'
+export {
+  ITEM_GENERATION_CAP,
+  isGenerationCapReached,
+} from './generationCap'

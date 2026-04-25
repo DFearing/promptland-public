@@ -1,4 +1,5 @@
 import type { Character } from '../character'
+import { damageVerb } from '../combat'
 import type { LogEntry } from '../log'
 import type { WorldContent } from '../worlds'
 import type { ActiveCondition, ConditionDef } from './types'
@@ -40,9 +41,12 @@ export function tickConditions(
         if (dmg > 0 && hp > 1) {
           const taken = Math.min(dmg, hp - 1)
           hp -= taken
+          const { verb } = damageVerb(taken, character.maxHp, character.worldId)
+          const noun = def.noun ?? def.name.toLowerCase()
+          const capNoun = noun.charAt(0).toUpperCase() + noun.slice(1)
           entries.push({
             kind: 'condition-tick',
-            text: `${character.name} suffers from ${def.name}.`,
+            text: `${capNoun} ${verb} ${character.name}.`,
             amount: taken,
             conditionId: def.id,
             meta: {

@@ -13,4 +13,5 @@ export const CYBERPUNK_ENCOUNTERS: Record<RoomType, string[]> = {
   entrance: ['street_punk'],
   shop: [],
   shrine: [],
+  exit: [],
 }

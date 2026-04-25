@@ -69,6 +69,8 @@ export default function TooltipLayer() {
       }
     }
 
+    const popoverOpen = () => document.body.classList.contains('has-popover')
+
     const scheduleShow = (anchor: AnchorTip) => {
       clearShow()
       clearHide()
@@ -77,6 +79,9 @@ export default function TooltipLayer() {
         showTimerRef.current = null
         const current = currentRef.current
         if (!current || !current.el.isConnected) return
+        // Popover owns the dialog slot while it's open — swallow the
+        // tooltip so the two don't render on top of each other.
+        if (popoverOpen()) return
         setTip({ text: current.text, rect: current.el.getBoundingClientRect() })
       }, SHOW_DELAY_MS)
     }
@@ -131,6 +136,7 @@ export default function TooltipLayer() {
       clearShow()
       clearHide()
       currentRef.current = anchor
+      if (popoverOpen()) return
       setTip({ text: anchor.text, rect: anchor.el.getBoundingClientRect() })
     }
 
@@ -152,6 +158,14 @@ export default function TooltipLayer() {
     }
     document.addEventListener('keydown', onKey)
 
+    // When a popover opens mid-hover the tooltip can already be visible.
+    // Watch the body's class list so we can dismiss it the moment the
+    // popover takes over.
+    const observer = new MutationObserver(() => {
+      if (popoverOpen()) hideNow()
+    })
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] })
+
     return () => {
       clearShow()
       clearHide()
@@ -162,14 +176,12 @@ export default function TooltipLayer() {
       window.removeEventListener('scroll', onScroll, true)
       window.removeEventListener('resize', onScroll)
       document.removeEventListener('keydown', onKey)
+      observer.disconnect()
     }
   }, [])
 
   useLayoutEffect(() => {
-    if (!tip) {
-      setPlacement(null)
-      return
-    }
+    if (!tip) return
     const el = tooltipRef.current
     if (!el) return
     const w = el.offsetWidth

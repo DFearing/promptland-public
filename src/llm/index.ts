@@ -19,20 +19,29 @@ export { KEYLESS_HOSTS, LLM_PRESETS, type LLMPreset } from './presets'
 export {
   TEMPLATES,
   areaFlavorTemplate,
+  areaGenTemplate,
   classTitleTemplate,
   itemFlavorTemplate,
+  itemGenTemplate,
   loreSnippetTemplate,
   mobFlavorTemplate,
+  mobGenTemplate,
   renderMessages,
   roomFlavorTemplate,
   substitute,
   type AreaFlavorParams,
+  type AreaGenParams,
+  type AreaGenPayload,
   type ClassTitleParams,
   type ClassTitlePayload,
   type ItemFlavorParams,
+  type ItemGenParams,
+  type ItemGenPayload,
   type LoreSnippet,
   type LoreSnippetParams,
   type MobFlavorParams,
+  type MobGenParams,
+  type MobGenPayload,
   type PromptTemplate,
   type RarityScopedContext,
   type RoomFlavorParams,
@@ -40,6 +49,36 @@ export {
   type TemplateId,
   type WorldContextDefaults,
 } from './templates'
+export {
+  MAX_GENERATED_AREAS,
+  AREA_GEN_TEMPLATE_ID,
+  countGeneratedAreas,
+  payloadToArea,
+  storeGeneratedArea,
+  type GeneratedAreaPayload,
+} from './areaGen'
+export {
+  loadGeneratedAreaGraph,
+  rehydrateGeneratedAreas,
+  saveGeneratedAreaGraph,
+} from './areaGenPersistence'
+export {
+  BESPOKE_MOB_TEMPLATE_ID,
+  bespokeToTemplate,
+  installBespokeMobsFromPayload,
+  rehydrateBespokeMobs,
+  storeBespokeMob,
+  type NormalisedAreaPayload,
+  type NormalisedCuratedItem,
+  type NormalisedCuratedLoot,
+  type NormalisedRoomEncounter,
+} from './bespokeMobs'
+export {
+  BESPOKE_ITEM_TEMPLATE_ID,
+  bespokeToItemDef,
+  rehydrateBespokeItems,
+  storeBespokeItem,
+} from './bespokeItems'
 export { deriveCacheKey, type CacheKeyInputs } from './cacheKey'
 export {
   generate,

@@ -81,7 +81,7 @@ const Topbar = ({ onOpenSettings, onNewChar, speed, onSpeed, theme, onTheme }) =
     padding: '10px 16px', borderBottom: '1px solid var(--line-2)', background: 'var(--bg-1)',
   }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-      <img src="../../assets/logo/understudy-wordmark.svg" alt="Understudy" style={{ height: 30, color: 'var(--accent-hot)', filter: 'drop-shadow(0 0 4px rgba(168, 255, 176, 0.35))' }} />
+      <img src="../../assets/logo/promptland-wordmark.svg" alt="Promptland" style={{ height: 30, color: 'var(--accent-hot)', filter: 'drop-shadow(0 0 4px rgba(168, 255, 176, 0.35))' }} />
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
         fenra · life 7 · floor 4
       </span>

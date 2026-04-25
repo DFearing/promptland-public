@@ -103,6 +103,7 @@ const rooms: Record<string, Room> = Object.fromEntries(
 export const CYBERPUNK_START_AREA: Area = {
   id: 'night_city_block',
   name: 'Block Seven',
+  level: 1,
   startX: 0,
   startY: 0,
   startZ: 0,

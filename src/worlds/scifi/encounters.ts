@@ -13,4 +13,5 @@ export const SCIFI_ENCOUNTERS: Record<RoomType, string[]> = {
   entrance: ['maintenance_bot'],
   shop: [],
   shrine: [],
+  exit: [],
 }

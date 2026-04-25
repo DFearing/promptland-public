@@ -1,5 +1,5 @@
 /* ============================================================================
-   Understudy — text scale
+   Promptland — text scale
    Base token sizes are ~30% larger than the raw design system values, which
    read too small in a browser window. A --scale multiplier adjusts from there.
    Switched via [data-scale] on <html>. Default (no attribute) is 1.

@@ -166,4 +166,16 @@ export interface Character {
    *  picks a speed manually so the ramp doesn't fight their choice. Absent
    *  on pre-feature saves, treated as false (no ramp for legacy chars). */
   tickSpeedAuto?: boolean
+  /** Mob archetype IDs / template IDs encountered at least once. Used to
+   *  track first-encounter discovery effects. */
+  discoveredMobs?: string[]
+  /** Item archetype IDs looted at least once. Used to track first-discovery
+   *  effects for new item types. */
+  discoveredItems?: string[]
+  /** Keys of rooms whose `firstOnly` curated encounter has already been
+   *  defeated. Format: `${areaId}:${x},${y},${z}` (visitedKey). A room
+   *  listed here falls back to the random encounter pool instead of
+   *  re-spawning its curated boss. Absent on pre-feature saves —
+   *  treated as `[]`. */
+  defeatedRooms?: string[]
 }

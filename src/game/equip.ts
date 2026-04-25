@@ -1,6 +1,6 @@
 import type { Character, InventoryItem } from '../character'
 import { conditionStatMods } from '../conditions'
-import { rarityStatMult, type EquipBonuses, type EquipmentArchetype, type EquipSlot } from '../items'
+import { meetsRequirements, scaledRequirements, rarityStatMult, type EquipBonuses, type EquipmentArchetype, type EquipSlot } from '../items'
 import type { LogEntry } from '../log'
 import type { WorldContent } from '../worlds'
 
@@ -246,6 +246,23 @@ export interface EquipEvent {
   replacedRarity?: InventoryItem['rarity']
 }
 
+/** Returns true when the character satisfies the (rarity-scaled) requirements
+ *  of the given equipment archetype. Items without requirements always pass. */
+function charMeetsItemReqs(
+  character: Character,
+  item: InventoryItem,
+  eq: EquipmentArchetype,
+): boolean {
+  const reqs = scaledRequirements(eq.requirements, item.rarity ?? 'common')
+  return meetsRequirements(reqs, {
+    level: character.level,
+    strength: character.stats.strength,
+    dexterity: character.stats.dexterity,
+    intelligence: character.stats.intelligence,
+    wisdom: character.stats.wisdom,
+  })
+}
+
 type Candidate = { item: InventoryItem; sum: number; hands: 1 | 2; source: 'inv' | 'eq-w' | 'eq-o' }
 
 function weaponCandidates(
@@ -253,11 +270,13 @@ function weaponCandidates(
   equippedWeapon: InventoryItem | undefined,
   equippedOffhand: InventoryItem | undefined,
   world: WorldContent,
+  character?: Character,
 ): Candidate[] {
   const out: Candidate[] = []
   const push = (item: InventoryItem, source: Candidate['source']) => {
     const eq = equipmentOf(item, world)
     if (!eq || eq.slot !== 'weapon') return
+    if (character && !charMeetsItemReqs(character, item, eq)) return
     const hands: 1 | 2 = eq.hands === 2 ? 2 : 1
     out.push({ item, sum: sumBonuses(equipBonusesFor(item, world)), hands, source })
   }
@@ -277,12 +296,14 @@ function pickBestForSlot(
   currentlyWorn: InventoryItem | undefined,
   slot: EquipSlot,
   world: WorldContent,
+  character?: Character,
 ): { item: InventoryItem; inventoryAfter: InventoryItem[] } | null {
   type Option = { item: InventoryItem; sum: number; fromInventory: boolean }
   const options: Option[] = []
   for (const inv of inventory) {
     const eq = equipmentOf(inv, world)
     if (!eq || eq.slot !== slot) continue
+    if (character && !charMeetsItemReqs(character, inv, eq)) continue
     options.push({
       item: inv,
       sum: sumBonuses(equipBonusesFor(inv, world)),
@@ -315,6 +336,7 @@ function resolveRings(
   ring1: InventoryItem | undefined,
   ring2: InventoryItem | undefined,
   world: WorldContent,
+  character?: Character,
 ): {
   inventoryAfter: InventoryItem[]
   ring1: InventoryItem | undefined
@@ -327,6 +349,7 @@ function resolveRings(
     if (!item) return
     const eq = equipmentOf(item, world)
     if (!eq || eq.slot !== 'ring') return
+    if (character && !charMeetsItemReqs(character, item, eq)) return
     all.push({ item, sum: sumBonuses(equipBonusesFor(item, world)) })
   }
   for (const inv of inventory) consider(inv)
@@ -409,7 +432,7 @@ export function applyAutoEquip(
     amulet: character.equipped.amulet,
   }
   for (const slot of SIMPLE_SLOTS) {
-    const pick = pickBestForSlot(inventory, simpleResults[slot], slot, world)
+    const pick = pickBestForSlot(inventory, simpleResults[slot], slot, world, character)
     if (pick) {
       const replaced = simpleResults[slot]
       events.push({
@@ -433,14 +456,15 @@ export function applyAutoEquip(
     character.equipped.ring1,
     character.equipped.ring2,
     world,
+    character,
   )
   inventory = ringRes.inventoryAfter
-  let ring1 = ringRes.ring1
-  let ring2 = ringRes.ring2
+  const ring1 = ringRes.ring1
+  const ring2 = ringRes.ring2
   events.push(...ringRes.events)
 
   // Weapons — pick main hand, then off-hand.
-  const pool = weaponCandidates(inventory, weapon, offhand, world)
+  const pool = weaponCandidates(inventory, weapon, offhand, world, character)
   if (pool.length > 0) {
     const bestMain = pool.reduce((a, b) => (b.sum > a.sum ? b : a))
     if (bestMain.source !== 'eq-w') {
@@ -473,7 +497,7 @@ export function applyAutoEquip(
     const mainHands: 1 | 2 =
       weapon && equipmentOf(weapon, world)?.hands === 2 ? 2 : 1
     if (mainHands === 1) {
-      const offPool = weaponCandidates(inventory, undefined, offhand, world).filter(
+      const offPool = weaponCandidates(inventory, undefined, offhand, world, character).filter(
         (c) => c.hands === 1 && c.item.id !== weapon?.id,
       )
       if (offPool.length > 0) {
@@ -536,6 +560,19 @@ const EQUIP_VERBS: Record<EquipEventSlot, string> = {
   ring: 'slips on',
   ring1: 'slips on',
   ring2: 'slips on',
+}
+
+/** Returns true when the equip event is a no-op swap — the new item and the
+ *  replaced item share the same archetype and rarity, so logging would produce
+ *  a confusing "wields X, setting aside X" line. Callers should skip these. */
+export function isRedundantEquip(event: EquipEvent): boolean {
+  if (!event.replaced || !event.itemId || !event.replacedId) return false
+  // Absent rarity is treated as 'common' everywhere else (starting-inventory
+  // items have no rarity field). Normalize before comparing so a looted
+  // 'common' replacing a starting item reads as redundant, not a swap.
+  const a = event.itemRarity ?? 'common'
+  const b = event.replacedRarity ?? 'common'
+  return event.itemId === event.replacedId && a === b
 }
 
 export function equipLogEntry(character: Character, event: EquipEvent): LogEntry {

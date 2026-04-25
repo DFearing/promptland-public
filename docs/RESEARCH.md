@@ -1,4 +1,4 @@
-# Understudy — Tech Stack Research
+# Promptland — Tech Stack Research
 
 Goal: pick a stack that's cheap to run long-term, uses familiar web tech, handles a pixel-art 2D game well, and doesn't paint us into a corner if we add multiplayer later. BYOK for LLMs is settled.
 

@@ -1,4 +1,5 @@
-import type { EntityCache, EntityCacheEntry } from '../storage/types'
+// See src/items/generationCap.ts for per-rarity item generation limits
+import type { EntityCache, EntityCacheEntry, GenerationMeta } from '../storage/types'
 import { devLog } from '../util/devLog'
 import { deriveCacheKey } from './cacheKey'
 import { LLMError } from './client'
@@ -14,6 +15,8 @@ export interface GenerateOptions {
   manifestVersion: string
   temperature?: number
   maxTokens?: number
+  /** When provided, stored alongside the cached entry for provenance. */
+  meta?: GenerationMeta
 }
 
 export interface GenerateResult<TPayload> {
@@ -48,6 +51,7 @@ export async function generate<TParams, TPayload>(
   const hit = await ctx.cache.get(hash)
   if (hit) {
     devLog('llm.hit', { template: template.id, hash })
+    console.log('[LLM] cache hit:', template.id, hash)
     return { payload: hit.payload as TPayload, cached: true, hash }
   }
 
@@ -57,15 +61,23 @@ export async function generate<TParams, TPayload>(
     params: preview(params, 160),
   })
   const startedAt = Date.now()
+  const messages = renderMessages(template, params, context)
+
+  console.group(`[LLM] ${template.id}`)
+  console.log('Request:', { messages, templateVersion: template.version })
+  console.time('llm-response')
 
   let res
   try {
     res = await ctx.llm.complete({
-      messages: renderMessages(template, params, context),
+      messages,
       temperature: opts.temperature ?? 0.7,
       maxTokens: opts.maxTokens,
     })
   } catch (err) {
+    console.timeEnd('llm-response')
+    console.log('Error:', err instanceof Error ? err.message : String(err))
+    console.groupEnd()
     devLog('llm.error', {
       template: template.id,
       hash,
@@ -73,6 +85,10 @@ export async function generate<TParams, TPayload>(
     })
     throw err
   }
+
+  console.timeEnd('llm-response')
+  console.log('Response:', res.content)
+  console.groupEnd()
 
   let payload: TPayload
   try {
@@ -89,6 +105,7 @@ export async function generate<TParams, TPayload>(
     kind: template.kind,
     createdAt: Date.now(),
     payload,
+    meta: opts.meta,
   }
   await ctx.cache.put(entry)
   devLog('llm.done', {

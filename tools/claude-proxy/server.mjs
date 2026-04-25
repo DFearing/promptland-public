@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Tiny OpenAI-compatible proxy that serves /v1/chat/completions by shelling out
-// to `claude -p` (Claude Code headless mode). Lets Understudy — or any client
+// to `claude -p` (Claude Code headless mode). Lets Promptland — or any client
 // that speaks OpenAI chat completions — use your Claude.ai Max/Pro subscription
 // as the LLM backend. Single-file, no external deps.
 

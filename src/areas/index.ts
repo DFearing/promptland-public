@@ -9,5 +9,14 @@ export type {
   RoomType,
 } from './types'
 export { AREA_KINDS, roomKey, visitedKey } from './types'
-export { manhattan, neighborsOf, randomStep, stepTowards } from './movement'
+export {
+  AREA_LIMITS,
+  enforceAreaCaps,
+  manhattan,
+  neighborsOf,
+  pruneDisconnectedRooms,
+  randomStep,
+  stepTowards,
+} from './movement'
 export { ROOM_TYPE_VISUALS, type RoomTypeVisual } from './roomTypes'
+export { generateShape, type ShapeRoom } from './shapeGen'

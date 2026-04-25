@@ -12,7 +12,7 @@ import type { DevCommand } from './components/DevPanel'
 import Settings from './components/Settings'
 import Topbar from './components/Topbar'
 import TooltipLayer from './components/TooltipLayer'
-import { roomKey } from './areas'
+import { generateShape, roomKey, visitedKey, type AreaKind } from './areas'
 import type { Character, DeathRecord, InventoryItem } from './character'
 import {
   LAST_AUTHORED_TITLE_INDEX,
@@ -22,16 +22,26 @@ import {
   resolveTitle,
 } from './character'
 import {
+  areaGenTemplate,
   classTitleTemplate,
+  countGeneratedAreas,
   createLLMClient,
   generate,
+  installBespokeMobsFromPayload,
   isLLMConfigured,
   loadLLMConfig,
+  MAX_GENERATED_AREAS,
+  payloadToArea,
+  rehydrateBespokeItems,
+  rehydrateBespokeMobs,
+  rehydrateGeneratedAreas,
+  saveGeneratedAreaGraph,
+  storeGeneratedArea,
 } from './llm'
 import type { Mob } from './mobs'
 import { getVerbs } from './combat'
 import { applyCondition, clearConditions } from './conditions'
-import { defeatLingerMs, rarityValueMult, type Rarity } from './items'
+import { defeatLingerMs, mobDisplayName, rarityValueMult, type Rarity } from './items'
 import type { LogEntry } from './log'
 import { spawn } from './mobs'
 import { uuid } from './util/uuid'
@@ -57,11 +67,13 @@ import {
 } from './effects'
 import { loadEffects, loadTickSpeed, tickSpeedMult, type Effects, type TickSpeedId } from './themes'
 import { loadSoundSettings, saveSoundSettings, soundManager, type SoundSettings } from './sound'
-import { getWorldContent, getWorldManifest } from './worlds'
+import { pickItemsToSell } from './game/sell'
+import { pickItemsToSacrifice } from './game/sacrifice'
+import { getWorldContent, getWorldManifest, WORLD_CONTENTS } from './worlds'
 import './App.css'
 
 const EVENT_CAP = 50
-const DEV_OPEN_KEY = 'understudy.devPanel.open'
+const DEV_OPEN_KEY = 'promptland.devPanel.open'
 
 // Baseline linger before rarity scaling. Actual duration per mob comes
 // from `defeatLingerMs(mob.rarity)` — see the useEffect that schedules the
@@ -152,29 +164,52 @@ function buildLogSamples(character: Character, world: WorldContent): LogEntry[] 
     { kind: 'dialogue', text: '...the dice are already thrown.' },
   ]
 
-  // Damage entries across every severity, both directions, with several
-  // verbs per tier so the same line doesn't repeat back-to-back.
-  for (const sev of severities) {
-    for (const verb of sampleVerbsByTier[sev]) {
-      base.push({
-        kind: 'damage',
-        text: `${charName} ${verb} the ${mobName}.`,
-        amount: sampleAmounts[sev],
-        severity: sev,
-        meta: { name: charName, mobName, verb, severity: sev },
-      })
-    }
+  // One damage entry per severity per direction — the verb is picked at
+  // random from the per-tier verb pool so sample dumps show variety
+  // without listing every single verb. ATK/DEF populated so the "Log
+  // numbers" mode surfaces the combat-math breakdown in the dump too.
+  const sampleAtk: Record<(typeof severities)[number], number> = {
+    grazing: 3, light: 5, solid: 8, heavy: 12, severe: 18, critical: 26,
+  }
+  const sampleDef = 3
+  const pickVerb = (sev: (typeof severities)[number]): string => {
+    const pool = sampleVerbsByTier[sev]
+    if (pool.length === 0) return 'hits'
+    return pool[Math.floor(Math.random() * pool.length)]
   }
   for (const sev of severities) {
-    for (const verb of sampleVerbsByTier[sev]) {
-      base.push({
-        kind: 'damage',
-        text: `The ${mobName} ${verb} ${charName}.`,
-        amount: sampleAmounts[sev],
+    const verb = pickVerb(sev)
+    base.push({
+      kind: 'damage',
+      text: `${charName} ${verb} the ${mobName}.`,
+      amount: sampleAmounts[sev],
+      severity: sev,
+      meta: {
+        name: charName,
+        mobName,
+        verb,
         severity: sev,
-        meta: { name: charName, mobName, verb, severity: sev },
-      })
-    }
+        attackPower: sampleAtk[sev],
+        defense: sampleDef,
+      },
+    })
+  }
+  for (const sev of severities) {
+    const verb = pickVerb(sev)
+    base.push({
+      kind: 'damage',
+      text: `The ${mobName} ${verb} ${charName}.`,
+      amount: sampleAmounts[sev],
+      severity: sev,
+      meta: {
+        name: charName,
+        mobName,
+        verb,
+        severity: sev,
+        attackPower: sampleAtk[sev],
+        defense: sampleDef,
+      },
+    })
   }
 
   // Heal / loot (gold + items of each rarity) / consume / equip.
@@ -184,6 +219,31 @@ function buildLogSamples(character: Character, world: WorldContent): LogEntry[] 
       text: `${charName} catches their breath.`,
       amount: 5,
       meta: { name: charName },
+    },
+    {
+      kind: 'heal',
+      text: `${charName}'s Lesser Heal knits flesh together.`,
+      amount: 6,
+      meta: { name: charName, spellName: 'Lesser Heal' },
+    },
+    {
+      kind: 'heal',
+      text: `The ${mobName} patches itself up.`,
+      amount: 8,
+      meta: { mobName },
+    },
+    {
+      kind: 'heal',
+      text: `${charName} centers their breathing. (+8 MP · +2 HP)`,
+      meta: { name: charName },
+    },
+    // Mob-defeat + XP award — the real loot line the tick loop emits
+    // when a fight resolves. Missing from the sample meant the "Log
+    // numbers" XP tag path never exercised in the dev dump.
+    {
+      kind: 'loot',
+      text: `The ${mobName} falls. (+12 XP)`,
+      meta: { mobName, xpText: '+12 XP', mobDefeat: true },
     },
     {
       kind: 'loot',
@@ -274,7 +334,7 @@ function buildLogSamples(character: Character, world: WorldContent): LogEntry[] 
     },
     {
       kind: 'condition-tick',
-      text: `${charName} suffers from ${conditionName}.`,
+      text: `Poison MAULS ${charName}.`,
       amount: 2,
       conditionId,
       meta: { name: charName, conditionName },
@@ -287,6 +347,12 @@ function buildLogSamples(character: Character, world: WorldContent): LogEntry[] 
     },
   )
 
+  // System samples — sell, dev commands.
+  base.push({
+    kind: 'system',
+    text: `[Dev] Sold 4 items for 38 gold.`,
+  })
+
   // Level-up chapter — fires the levelTo hook so effect derivation would
   // trigger the fullscreen level-up card if this were a live tick.
   base.push({
@@ -296,6 +362,30 @@ function buildLogSamples(character: Character, world: WorldContent): LogEntry[] 
   })
 
   return base
+}
+
+// Weighted picker for LLM-generated area kinds. Wilderness dominates
+// because "road connecting zones" is the most common transition; towns
+// are rare rest beats. The pick is deterministic on a seed so repeated
+// gens from the same exit land on the same kind and hit the cache
+// rather than fracturing across kinds.
+const AREA_KIND_WEIGHTS: ReadonlyArray<readonly [AreaKind, number]> = [
+  ['wilderness', 50],
+  ['dungeon', 25],
+  ['ruin', 15],
+  ['settlement', 10],
+]
+
+function pickAreaKind(seed: string): AreaKind {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (Math.imul(h, 31) + seed.charCodeAt(i)) | 0
+  const total = AREA_KIND_WEIGHTS.reduce((s, [, w]) => s + w, 0)
+  let r = Math.abs(h) % total
+  for (const [kind, w] of AREA_KIND_WEIGHTS) {
+    if (r < w) return kind
+    r -= w
+  }
+  return 'wilderness'
 }
 
 function loadDevOpen(): boolean {
@@ -343,7 +433,15 @@ export default function App() {
   // Used by the dev "Sample log" command so dumping ~50 entries at once
   // doesn't slam the player with confetti/screen-flashes/sound stings.
   const suppressFxOnceRef = useRef(false)
-  const [selectedRoomKey, setSelectedRoomKey] = useState<string | null>(null)
+  // Effect-pause: when a fullscreen effect fires (new-area, new-mob, new-item,
+  // generating-area), we pause ticking for the effect duration + 500 ms.
+  const effectPauseUntilRef = useRef(0)
+  // In-flight area generation keyed by a params signature that matches the
+  // cache hash. Prior implementation keyed on exitRoomKey, but worlds with
+  // multiple exits that share generation params (e.g. Millhaven's three
+  // eastern exits) would produce identical hashes and bypass the guard —
+  // firing a duplicate LLM call while the first was still inflight.
+  const areaGenInflightRef = useRef<Set<string>>(new Set())
   // Post-defeat snapshot of the last mob we fought, rendered over the sprite
   // for DEFEAT_LINGER_MS so the defeat animation has something to shake.
   const [defeatedMob, setDefeatedMob] = useState<Mob | null>(null)
@@ -352,7 +450,6 @@ export default function App() {
   useEffect(() => {
     if (playingState?.kind === 'fighting') {
       lastMobRef.current = playingState.mob
-      setDefeatedMob((prev) => (prev ? null : prev))
       return
     }
     const previous = lastMobRef.current
@@ -363,16 +460,15 @@ export default function App() {
       () => setDefeatedMob(null),
       defeatLingerMs(previous.rarity),
     )
-    return () => window.clearTimeout(id)
+    // Cleanup runs when playingState changes again (e.g. a new fight starts):
+    // cancel the pending fade-out and clear the overlay so the new scene
+    // doesn't show the prior defeat on top.
+    return () => {
+      window.clearTimeout(id)
+      setDefeatedMob(null)
+    }
   }, [playingState])
 
-  const handleSelectRoomFromLog = useCallback((areaId: string, key: string) => {
-    setSelectedRoomKey((current) => {
-      // Only respond if the referenced room is in the current area (future-proof).
-      void areaId
-      return current === key ? null : key
-    })
-  }, [])
 
   const reload = useCallback(async (): Promise<RosterEntry[]> => {
     const metas = await storage.saves.list()
@@ -387,6 +483,26 @@ export default function App() {
   useEffect(() => {
     let cancelled = false
     void (async () => {
+      // Rehydrate any LLM-generated areas from the entity cache before we
+      // show characters. Runs for every registered world — the graph is
+      // per-world, so characters in any world see their generated areas
+      // back in place on reload. Failures are swallowed: a missing cache
+      // entry just means that area isn't restored, not that boot fails.
+      await Promise.all(
+        Object.entries(WORLD_CONTENTS).map(async ([worldId, world]) => {
+          // Bespoke mobs + items must rehydrate first — a subsequent
+          // curated encounter referencing a bespoke id only resolves if
+          // the mob / item is already in world.mobs / world.items by
+          // the time gameplay starts. Mobs and items are independent,
+          // run them in parallel.
+          await Promise.all([
+            rehydrateBespokeMobs(world, worldId, storage.entities).catch(() => {}),
+            rehydrateBespokeItems(world, worldId, storage.entities).catch(() => {}),
+          ])
+          await rehydrateGeneratedAreas(world, worldId, storage.entities).catch(() => {})
+        }),
+      )
+      if (cancelled) return
       const loaded = await reload()
       if (cancelled) return
       setPhase(loaded.length === 0 ? { kind: 'creating' } : { kind: 'roster' })
@@ -394,13 +510,17 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [reload])
+  }, [reload, storage])
 
-  // Initialize the sound manager and install a one-shot user-gesture listener
-  // so the browser will let the AudioContext start. `unlock()` is idempotent,
-  // so we can safely remove the listeners after the first event fires.
+  // Push sound config into the manager whenever it changes.
   useEffect(() => {
     soundManager.configure(sound)
+  }, [sound])
+
+  // Install a one-shot user-gesture listener so the browser lets the
+  // AudioContext start. `unlock()` is idempotent, so removing the listeners
+  // after the first event fires is safe.
+  useEffect(() => {
     const unlock = () => {
       soundManager.unlock()
       window.removeEventListener('pointerdown', unlock)
@@ -430,10 +550,220 @@ export default function App() {
     const mult = tickSpeedMult(activeTickSpeed)
     const cadence = Math.max(100, Math.round(TICK_MS[phase.state.kind] / mult))
     const id = setInterval(() => {
+      // Effect pause — skip ticking while a fullscreen overlay is active.
+      if (Date.now() < effectPauseUntilRef.current) return
       setPhase((p) => {
         if (p.kind !== 'playing' || p.paused) return p
         const world = getWorldContent(p.character.worldId)
         if (!world) return p
+
+        // If we're entering a generating-area state and LLM is configured,
+        // fire off the generation. If LLM is not configured, the tick handler
+        // inside runTick will bounce back to exploring with a message.
+        if (p.state.kind === 'generating-area') {
+          const exitKey = p.state.exitRoomKey
+          const config = loadLLMConfig()
+          if (isLLMConfigured(config)) {
+            const graph = world.generatedAreaGraph
+            if (countGeneratedAreas(graph) < MAX_GENERATED_AREAS) {
+              const manifest = getWorldManifest(p.character.worldId)
+              const klass = manifest?.classes.find((c) => c.id === p.character.classId)
+              const area = world.areas?.find((a) => exitKey.startsWith(a.id + '::'))
+              // Look up the exit room by the coordinates encoded in exitKey
+              // so the exit's flavor name can seed the generated area.
+              const [, exitCoords] = exitKey.split('::')
+              const exitRoom = area && exitCoords ? area.rooms[exitCoords] : undefined
+              // Signature matches the fields fed to areaGenTemplate. Includes
+              // the exit name so sibling exits from the same area produce
+              // distinct signatures (and distinct cache hashes) — otherwise
+              // all three eastern Millhaven exits would collapse to one area.
+              const sig = manifest && klass && area && exitRoom
+                ? `${manifest.id}|${p.character.name}|${p.character.level}|${klass.name}|${area.name}|${exitRoom.name}`
+                : null
+              if (manifest && klass && area && exitRoom && sig && !areaGenInflightRef.current.has(sig)) {
+                areaGenInflightRef.current.add(sig)
+                const client = createLLMClient(config)
+                // Pick a kind deterministically from the exit signature so
+                // repeated gens from the same exit hit the cache instead
+                // of fracturing across kinds. Weighted so wilderness is
+                // common, settlements rare — matches the pacing where
+                // towns are rest beats between explored zones.
+                const areaKind = pickAreaKind(sig)
+                // Build the shape first, then hand it to the LLM as a
+                // flavor-only pass. Shape is seeded from the same sig so
+                // repeated gens reproduce the exact same layout → same
+                // cache hash → cache hit.
+                const shape = generateShape(areaKind, sig)
+                void generate(
+                  areaGenTemplate,
+                  {
+                    worldId: manifest.id,
+                    characterName: p.character.name,
+                    characterLevel: p.character.level,
+                    characterClass: klass.name,
+                    fromAreaName: area.name,
+                    fromAreaDescription: '',
+                    fromExitName: exitRoom.name,
+                    areaKind,
+                    rooms: shape,
+                    allowedConcepts: manifest.allowedConcepts,
+                    forbiddenConcepts: manifest.forbiddenConcepts,
+                    // Pass the world's mob pool so the LLM can cherry-pick
+                    // curated per-room encounters. Keep each entry small
+                    // (id + name + level) — the prompt doesn't need full
+                    // stats, and a compact list keeps the context budget
+                    // friendly for worlds that grow their pool over time.
+                    mobPool: world.mobs.map((m) => ({
+                      id: m.id,
+                      name: m.name,
+                      level: m.level,
+                    })),
+                    // And the item pool, for curated-loot drops. Only
+                    // id + name + kind are exposed — full stats would
+                    // bloat the prompt and aren't needed for the LLM
+                    // to pick thematically.
+                    itemPool: world.items.map((i) => ({
+                      id: i.id,
+                      name: i.name,
+                      kind: i.kind,
+                    })),
+                  },
+                  world.context,
+                  { llm: client, cache: storage.entities },
+                  {
+                    manifestVersion: manifest.version,
+                    meta: {
+                      characterName: p.character.name,
+                      characterLevel: p.character.level,
+                      worldId: manifest.id,
+                      modelId: config.model,
+                      generatedAt: Date.now(),
+                    },
+                  },
+                ).then(async (result) => {
+                  // Install any bespoke mobs the LLM invented inline
+                  // BEFORE converting the payload to an Area. After
+                  // this step every encounter is a by-id reference, and
+                  // the new mobs are live in `world.mobs` + persisted
+                  // to the entity cache so future generations can
+                  // reference them (shared library grows per session).
+                  const installMeta = {
+                    characterName: p.character.name,
+                    characterLevel: p.character.level,
+                    worldId: manifest.id,
+                    modelId: config.model,
+                    generatedAt: Date.now(),
+                  }
+                  const installed = await installBespokeMobsFromPayload(
+                    result.payload,
+                    world,
+                    manifest.id,
+                    storage.entities,
+                    installMeta,
+                  )
+                  const newArea = payloadToArea(installed, shape)
+                  // Stamp the character's current level so the dev Area
+                  // tab (and anything else that cares about tier) can
+                  // sort/display without guessing. The payload itself
+                  // doesn't carry level, so do it here where we have it.
+                  newArea.level = p.character.level
+                  // Wire the exit room's destination to the new area's start.
+                  const [areaId, roomCoords] = exitKey.split('::')
+                  void storeGeneratedArea(storage.entities, newArea, manifest.id, installMeta)
+                  setPhase((prev) => {
+                    if (prev.kind !== 'playing') return prev
+                    const currentWorld = getWorldContent(prev.character.worldId)
+                    if (!currentWorld) return prev
+                    // Add the new area to the world's areas array.
+                    const updatedAreas = [...(currentWorld.areas ?? []), newArea]
+                    currentWorld.areas = updatedAreas
+                    // Update the exit room's destination.
+                    const srcArea = currentWorld.areas.find((a) => a.id === areaId)
+                    if (srcArea && roomCoords) {
+                      const exitRoom = srcArea.rooms[roomCoords]
+                      if (exitRoom) {
+                        exitRoom.destination = {
+                          areaId: newArea.id,
+                          x: newArea.startX,
+                          y: newArea.startY,
+                          z: newArea.startZ,
+                        }
+                        exitRoom.pendingAreaGeneration = false
+                      }
+                    }
+                    // Add a portal back from the new area to the exit room.
+                    const startKey = `${newArea.startX},${newArea.startY},${newArea.startZ}`
+                    const startRoom = newArea.rooms[startKey]
+                    if (startRoom) {
+                      startRoom.type = 'portal'
+                      const [rx, ry, rz] = (roomCoords ?? '0,0,0').split(',').map(Number)
+                      startRoom.destination = { areaId: areaId!, x: rx, y: ry, z: rz }
+                    }
+                    // Update the graph and persist it so the next session
+                    // can rehydrate the cached area on boot.
+                    currentWorld.generatedAreaGraph = {
+                      ...(currentWorld.generatedAreaGraph ?? {}),
+                      [exitKey]: newArea.id,
+                    }
+                    saveGeneratedAreaGraph(
+                      prev.character.worldId,
+                      currentWorld.generatedAreaGraph,
+                    )
+                    // Transition: character enters the new area.
+                    const dest = {
+                      areaId: newArea.id,
+                      x: newArea.startX,
+                      y: newArea.startY,
+                      z: newArea.startZ,
+                    }
+                    const vk = `${newArea.id}:${newArea.startX},${newArea.startY},${newArea.startZ}`
+                    const visitedRooms = prev.character.visitedRooms.includes(vk)
+                      ? prev.character.visitedRooms
+                      : [...prev.character.visitedRooms, vk]
+                    const entryRoom = newArea.rooms[startKey]
+                    let log = prev.log
+                    log = [...log, { kind: 'area' as const, text: newArea.name }]
+                    if (entryRoom) {
+                      log = [...log, {
+                        kind: 'narrative' as const,
+                        text: `${prev.character.name} emerges into the ${entryRoom.name}. ${entryRoom.description}`,
+                        meta: {
+                          name: prev.character.name,
+                          areaId: newArea.id,
+                          roomKey: startKey,
+                          roomName: entryRoom.name,
+                        },
+                      }]
+                    }
+                    return {
+                      ...prev,
+                      character: { ...prev.character, position: dest, visitedRooms },
+                      log: log.slice(-200),
+                      state: { kind: 'exploring' },
+                    }
+                  })
+                }).catch((err) => {
+                  console.warn('[LLM] Area generation failed:', err)
+                  setPhase((prev) => {
+                    if (prev.kind !== 'playing') return prev
+                    return {
+                      ...prev,
+                      log: [...prev.log, {
+                        kind: 'narrative' as const,
+                        text: `${prev.character.name} senses the path ahead has not yet taken shape.`,
+                        meta: { name: prev.character.name },
+                      }].slice(-200),
+                      state: { kind: 'exploring' },
+                    }
+                  })
+                }).finally(() => {
+                  areaGenInflightRef.current.delete(sig)
+                })
+              }
+            }
+          }
+        }
+
         const next = runTick(
           { character: p.character, log: p.log, state: p.state },
           world,
@@ -443,7 +773,7 @@ export default function App() {
     }, cadence)
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase.kind, stateKind, activeTickSpeed])
+  }, [phase.kind, stateKind, activeTickSpeed, storage])
 
   const handleDevCommand = useCallback((cmd: DevCommand) => {
     // Effect-trigger commands don't touch phase; they push fake events into
@@ -511,6 +841,30 @@ export default function App() {
               kind: 'new-area',
               name: world?.startingArea.name ?? 'New Area',
             }
+            break
+          }
+          case 'rare-area': {
+            const world = getWorldContent(p.character.worldId)
+            synthesized = {
+              id,
+              kind: 'new-area',
+              name: world?.startingArea.name ?? 'Rare Area',
+              rarity: 'rare',
+            }
+            break
+          }
+          case 'new-mob': {
+            const base =
+              getWorldContent(p.character.worldId)?.mobs?.[0]?.name ?? 'Mysterious Beast'
+            // Decorate with the rare prefix so the banner reads like a
+            // real rare encounter and matches how live kills are named.
+            synthesized = { id, kind: 'new-mob', name: mobDisplayName(base, 'rare') }
+            break
+          }
+          case 'new-item': {
+            const base =
+              getWorldContent(p.character.worldId)?.items?.[0]?.name ?? 'Glimmering Relic'
+            synthesized = { id, kind: 'new-item', name: base }
             break
           }
         }
@@ -771,6 +1125,14 @@ export default function App() {
             character: { ...p.character, hp: p.character.maxHp },
           }
 
+        case 'force-rest':
+          // Transition into the resting state for one duration. Subsequent
+          // ticks run the normal rest handler which ticks HP upward.
+          return { ...p, state: { kind: 'resting', ticksLeft: 6 } }
+
+        case 'force-meditate':
+          return { ...p, state: { kind: 'meditating', ticksLeft: 6 } }
+
         case 'max-drives':
           return {
             ...p,
@@ -810,6 +1172,223 @@ export default function App() {
             ...p,
             character: cleared.character,
             log: cleared.entry ? appendLog(cleared.entry) : p.log,
+          }
+        }
+
+        case 'sell-items': {
+          const sellResult = pickItemsToSell(p.character, world.items)
+          if (sellResult.sold.length === 0) return p
+          const mf = getWorldManifest(p.character.worldId)
+          const cur = (mf?.currencyName ?? 'gold').toLowerCase()
+          const n = sellResult.sold.reduce((s, e) => s + (e.item.quantity ?? 1), 0)
+          const updatedChar: Character = {
+            ...p.character,
+            inventory: sellResult.remainingInventory,
+            gold: p.character.gold + sellResult.totalGold,
+          }
+          const sellLog: LogEntry[] = [
+            ...p.log,
+            {
+              kind: 'system' as const,
+              text: `[Dev] Sold ${n} items for ${sellResult.totalGold} ${cur}.`,
+            },
+          ].slice(-200)
+          return { ...p, character: updatedChar, log: sellLog }
+        }
+
+        case 'sacrifice-items': {
+          const result = pickItemsToSacrifice(p.character, world.items)
+          if (result.sacrificed.length === 0) return p
+          const mf = getWorldManifest(p.character.worldId)
+          const cur = (mf?.currencyName ?? 'gold').toLowerCase()
+          const phrase = mf?.sacrificePhrase ?? 'The gods smile and grant'
+          const n = result.sacrificed.reduce((s, e) => s + (e.item.quantity ?? 1), 0)
+          const updatedChar: Character = {
+            ...p.character,
+            inventory: result.remainingInventory,
+            gold: p.character.gold + result.totalGold,
+          }
+          const noun = n === 1 ? 'item' : 'items'
+          const text = `${p.character.name} sacrifices ${n} ${noun}. ${phrase} ${result.totalGold} ${cur}.`
+          const sacLog: LogEntry[] = [
+            ...p.log,
+            { kind: 'loot' as const, text, meta: { goldAmount: result.totalGold } },
+          ].slice(-200)
+          return { ...p, character: updatedChar, log: sacLog }
+        }
+
+        case 'move-direction': {
+          const pos = p.character.position
+          const area = world.areas?.find((a) => a.id === pos.areaId) ?? world.startingArea
+          const target = { areaId: pos.areaId, x: pos.x + cmd.dx, y: pos.y + cmd.dy, z: pos.z + cmd.dz }
+          const targetRoom = area.rooms[roomKey(target.x, target.y, target.z)]
+          if (!targetRoom) return p
+
+          const addVisited = (rooms: string[], key: string): string[] =>
+            rooms.includes(key) ? rooms : [...rooms, key]
+
+          // If the target cell is a portal (or a wired exit), traverse it in
+          // one step rather than landing on the portal tile. Mirrors the tick
+          // loop's traversal so the map + position end up where the player
+          // expects instead of sitting on the portal icon.
+          const traversable =
+            (targetRoom.type === 'portal' || targetRoom.type === 'exit') &&
+            targetRoom.destination
+          let movedChar: Character
+          if (traversable && targetRoom.destination) {
+            const dest = targetRoom.destination
+            let visitedRooms = addVisited(
+              p.character.visitedRooms,
+              visitedKey(area.id, target.x, target.y, target.z),
+            )
+            visitedRooms = addVisited(
+              visitedRooms,
+              visitedKey(dest.areaId, dest.x, dest.y, dest.z),
+            )
+            movedChar = { ...p.character, position: dest, visitedRooms }
+          } else {
+            const visitedRooms = addVisited(
+              p.character.visitedRooms,
+              visitedKey(area.id, target.x, target.y, target.z),
+            )
+            movedChar = { ...p.character, position: target, visitedRooms }
+          }
+
+          // The D-pad is a dev movement aid but it should still feel like a
+          // game action — run one tick on the post-move state so drives,
+          // cooldowns, combat, and encounter rolls advance with the step.
+          const next = runTick(
+            { character: movedChar, log: p.log, state: p.state },
+            world,
+          )
+          return { ...p, ...next }
+        }
+
+        case 'purge-generated-areas': {
+          // One-shot dev cleanup: wipe every LLM-generated area for the
+          // current world, the persisted exit→area graph, and any
+          // derived wiring on authored exit rooms. Authored areas stay
+          // intact. If the character is standing in an area that's
+          // about to disappear, snap them back to the world's start.
+          const worldId = p.character.worldId
+          const authoredIds = new Set(
+            (world.areas ?? [world.startingArea]).map((a) => a.id),
+          )
+          // Filter to authored-only.
+          world.areas = (world.areas ?? []).filter((a) => authoredIds.has(a.id))
+          // Reset authored exit rooms to their pre-gen state so stepping
+          // into them triggers a fresh gen on the next tick.
+          for (const a of world.areas) {
+            for (const room of Object.values(a.rooms)) {
+              if (room.type === 'exit') {
+                room.destination = undefined
+                room.pendingAreaGeneration = true
+              }
+            }
+          }
+          // Clear the graph (runtime + localStorage).
+          world.generatedAreaGraph = {}
+          saveGeneratedAreaGraph(worldId, {})
+          // Delete every areaGen:* cache entry for this world.
+          void storage.entities
+            .deleteByTemplateAndWorld('areaGen', worldId)
+            .catch(() => {})
+          // Snap the character home if their current area was purged.
+          const charArea = p.character.position.areaId
+          let next = p
+          if (!authoredIds.has(charArea)) {
+            const start = world.startingArea
+            const destPos = {
+              areaId: start.id,
+              x: start.startX,
+              y: start.startY,
+              z: start.startZ,
+            }
+            const vk = visitedKey(destPos.areaId, destPos.x, destPos.y, destPos.z)
+            const visitedRooms = p.character.visitedRooms.includes(vk)
+              ? p.character.visitedRooms
+              : [...p.character.visitedRooms, vk]
+            next = {
+              ...next,
+              character: { ...p.character, position: destPos, visitedRooms },
+              state: { kind: 'exploring' },
+            }
+          }
+          return {
+            ...next,
+            log: appendLog({
+              kind: 'system',
+              text: '[dev] Purged generated areas and reset the exit graph.',
+            }),
+          }
+        }
+
+        case 'travel-to-area': {
+          // Dev-only inter-area teleport. Lands on the target area's
+          // authored start cell so we always drop into a valid tile,
+          // reveals every room in the area on the map (dev convenience
+          // — normal play still requires visiting each cell), and resets
+          // to exploring since any combat state wouldn't carry across
+          // areas.
+          const target = world.areas?.find((a) => a.id === cmd.areaId)
+          if (!target) return p
+          const destPos = {
+            areaId: target.id,
+            x: target.startX,
+            y: target.startY,
+            z: target.startZ,
+          }
+          const existing = new Set(p.character.visitedRooms)
+          for (const room of Object.values(target.rooms)) {
+            existing.add(visitedKey(target.id, room.x, room.y, room.z))
+          }
+          const visitedRooms = Array.from(existing)
+          const startRoom = target.rooms[roomKey(destPos.x, destPos.y, destPos.z)]
+          const destName = startRoom?.name ?? target.name
+          return {
+            ...p,
+            character: { ...p.character, position: destPos, visitedRooms },
+            state: { kind: 'exploring' },
+            log: appendLog({
+              kind: 'narrative',
+              text: `[dev] ${p.character.name} is whisked away to the ${destName} (${target.name}).`,
+              meta: { name: p.character.name, areaId: target.id },
+            }),
+          }
+        }
+
+        case 'reset-location': {
+          // Teleport home — world's startingArea + starting (x, y, z).
+          // In fantasy that lands the character in The Crow & Cup. Drops
+          // any combat state since fighting over there doesn't make
+          // sense, and snaps exploring back to idle so the next tick
+          // plans from the new spot.
+          const start = world.startingArea
+          const destPos = {
+            areaId: start.id,
+            x: start.startX,
+            y: start.startY,
+            z: start.startZ,
+          }
+          const visitedRooms = p.character.visitedRooms.includes(
+            visitedKey(destPos.areaId, destPos.x, destPos.y, destPos.z),
+          )
+            ? p.character.visitedRooms
+            : [
+                ...p.character.visitedRooms,
+                visitedKey(destPos.areaId, destPos.x, destPos.y, destPos.z),
+              ]
+          const startRoom = start.rooms[roomKey(destPos.x, destPos.y, destPos.z)]
+          const destName = startRoom?.name ?? start.name
+          return {
+            ...p,
+            character: { ...p.character, position: destPos, visitedRooms },
+            state: { kind: 'exploring' },
+            log: appendLog({
+              kind: 'narrative',
+              text: `[dev] ${p.character.name} is whisked back to the ${destName}.`,
+              meta: { name: p.character.name },
+            }),
           }
         }
 
@@ -980,7 +1559,22 @@ export default function App() {
       })
       if (fresh.length > 0) {
         setEvents((es) => [...es, ...fresh].slice(-EVENT_CAP))
-        for (const ev of fresh) soundManager.play(ev)
+        for (const ev of fresh) {
+          soundManager.play(ev)
+          // Pause ticking during fullscreen effects.
+          const pauseMs =
+            ev.kind === 'new-area' ? 2700
+            : ev.kind === 'new-mob' ? 2000
+            : ev.kind === 'new-item' ? 2000
+            : ev.kind === 'generating-area' ? 3700
+            : 0
+          if (pauseMs > 0) {
+            effectPauseUntilRef.current = Math.max(
+              effectPauseUntilRef.current,
+              Date.now() + pauseMs,
+            )
+          }
+        }
       }
       const freshFields = deriveFieldEvents(prev.character, phase.character)
       if (freshFields.length > 0) {
@@ -1080,11 +1674,12 @@ export default function App() {
     })
   }, [])
 
-  // Mute toggle — flips sound.enabled. Same persistence path as the volume
-  // slider so the choice survives reloads and stays in sync with Settings.
+  // Mute toggle — flips sound.muted (distinct from the Settings-tab
+  // `enabled` flag). Volume setting and slider visibility are preserved
+  // so the user can silence audio without losing their volume choice.
   const handleToggleMute = useCallback(() => {
     setSound((prev) => {
-      const next: SoundSettings = { ...prev, enabled: !prev.enabled }
+      const next: SoundSettings = { ...prev, muted: !prev.muted }
       soundManager.configure(next)
       saveSoundSettings(next)
       soundManager.unlock()
@@ -1125,17 +1720,17 @@ export default function App() {
         onTogglePause={phase.kind === 'playing' ? handleTogglePause : undefined}
         tickSpeed={phase.kind === 'playing' ? activeTickSpeed : undefined}
         onPickTickSpeed={phase.kind === 'playing' ? handlePickTickSpeed : undefined}
-        volume={phase.kind === 'playing' ? sound.volume : undefined}
-        onSetVolume={phase.kind === 'playing' ? handleSetVolume : undefined}
-        muted={phase.kind === 'playing' ? !sound.enabled : undefined}
-        onToggleMute={phase.kind === 'playing' ? handleToggleMute : undefined}
+        volume={phase.kind === 'playing' && sound.enabled ? sound.volume : undefined}
+        onSetVolume={phase.kind === 'playing' && sound.enabled ? handleSetVolume : undefined}
+        muted={phase.kind === 'playing' && sound.enabled ? sound.muted : undefined}
+        onToggleMute={phase.kind === 'playing' && sound.enabled ? handleToggleMute : undefined}
       />
       <div className="shell__body">
         {phase.kind === 'settings' && (
           <Settings
             onResetCharacters={handleResetAll}
             onLlmConnected={() =>
-              setEvents((es) => [...es, { id: uuid(), kind: 'llm-connected' }].slice(-EVENT_CAP))
+              setEvents((es) => [...es, { id: uuid(), kind: 'llm-connected' } as const].slice(-EVENT_CAP))
             }
             characterCount={entries.length}
             storage={storage}
@@ -1198,14 +1793,11 @@ export default function App() {
                 <div className="game__roomdesc">
                   <RoomDescPanel
                     character={phase.character}
-                    selectedKey={selectedRoomKey}
                   />
                 </div>
                 <div className="game__map">
                   <MapPanel
                     character={phase.character}
-                    selectedKey={selectedRoomKey}
-                    onSelect={setSelectedRoomKey}
                   />
                 </div>
               </div>
@@ -1215,7 +1807,7 @@ export default function App() {
                   entries={phase.log}
                   state={phase.state}
                   paused={phase.paused}
-                  onSelectRoom={handleSelectRoomFromLog}
+                  showNumbers={effects.logNumbers}
                 />
               </div>
             </div>

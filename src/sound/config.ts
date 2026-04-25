@@ -1,9 +1,10 @@
 import { SOUND_EVENT_KINDS, type SoundEventKind, type SoundSettings } from './types'
 
-const SOUND_KEY = 'understudy.sound'
+const SOUND_KEY = 'promptland.sound'
 
 export const DEFAULT_SOUND_SETTINGS: SoundSettings = {
   enabled: true,
+  muted: false,
   volume: 0.6,
   events: SOUND_EVENT_KINDS.reduce(
     (acc, kind) => {
@@ -39,6 +40,7 @@ export function loadSoundSettings(): SoundSettings {
         : DEFAULT_SOUND_SETTINGS.volume
     return {
       enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : DEFAULT_SOUND_SETTINGS.enabled,
+      muted: typeof parsed.muted === 'boolean' ? parsed.muted : DEFAULT_SOUND_SETTINGS.muted,
       volume,
       events,
     }

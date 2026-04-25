@@ -17,17 +17,22 @@ import {
   type LLMConfig,
   type TemplateId,
 } from '../llm'
+import type { EffectEvent } from '../effects'
 import type { Storage } from '../storage'
 import {
   DEFAULT_SOUND_SETTINGS,
   SOUND_EVENT_DESCS,
   SOUND_EVENT_KINDS,
   SOUND_EVENT_LABELS,
+  SOUND_THEMES,
   loadSoundSettings,
+  loadSoundTheme,
   saveSoundSettings,
+  saveSoundTheme,
   soundManager,
   type SoundEventKind,
   type SoundSettings,
+  type SoundThemeId,
 } from '../sound'
 import { getWorldContent, getWorldManifest } from '../worlds'
 import {
@@ -131,13 +136,49 @@ function needsApiKey(baseUrl: string): boolean {
   }
 }
 
+/** Build a minimal EffectEvent suitable for previewing a single sound. */
+function previewEvent(kind: SoundEventKind): EffectEvent {
+  const id = `preview-${kind}`
+  switch (kind) {
+    case 'damage-taken':
+      return { id, kind, amount: 8, maxHp: 30 }
+    case 'damage-dealt':
+      return { id, kind, amount: 6 }
+    case 'heal-self':
+      return { id, kind, amount: 10, maxHp: 30 }
+    case 'loot':
+      return { id, kind }
+    case 'level-up':
+      return { id, kind, record: { at: 0, from: 1, to: 2 }, previousAt: 0, previousGold: 0 }
+    case 'death':
+      return { id, kind }
+    case 'enter-fight':
+      return { id, kind }
+    case 'new-area':
+      return { id, kind, name: 'The Sunken Chapel' }
+    case 'llm-connected':
+      return { id, kind }
+    case 'gold-windfall':
+      return { id, kind, amount: 50 }
+    case 'gold-jackpot':
+      return { id, kind, amount: 200 }
+    case 'new-mob':
+      return { id, kind, name: 'Cave Rat' }
+    case 'new-item':
+      return { id, kind, name: 'Bone Die' }
+    case 'generating-area':
+      return { id, kind }
+  }
+}
+
 // Gameplay tab used to live here for tick-speed; the per-character control
 // in the topbar now owns that, so Settings has nothing left in 'gameplay'.
-type SettingsTab = 'appearance' | 'effects' | 'llm' | 'data'
+type SettingsTab = 'appearance' | 'effects' | 'sound' | 'llm' | 'data'
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'effects', label: 'Effects' },
+  { id: 'sound', label: 'Sound' },
   { id: 'llm', label: 'LLM' },
   { id: 'data', label: 'Data' },
 ]
@@ -149,6 +190,7 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
   const [scale, setScaleState] = useState<ScaleId>(() => loadScale())
   const [effects, setEffectsState] = useState<Effects>(() => loadEffects())
   const [sound, setSoundState] = useState<SoundSettings>(() => loadSoundSettings())
+  const [soundTheme, setSoundThemeState] = useState<SoundThemeId>(() => loadSoundTheme())
   const [saved, setSaved] = useState(false)
   const [test, setTest] = useState<TestState>({ kind: 'idle' })
   const [gen, setGen] = useState<GenState>({ kind: 'idle' })
@@ -196,6 +238,10 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
 
   const toggleScanlines = () => {
     commitEffects({ ...effects, scanlines: !effects.scanlines })
+  }
+
+  const toggleLogNumbers = () => {
+    commitEffects({ ...effects, logNumbers: !effects.logNumbers })
   }
 
   const toggleFullscreen = (key: keyof Effects['fullscreen']) => {
@@ -247,6 +293,21 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
     commitSound({ ...sound, events: { ...sound.events, [kind]: !sound.events[kind] } })
   }
 
+  const pickSoundTheme = (id: SoundThemeId) => {
+    setSoundThemeState(id)
+    soundManager.setTheme(id)
+    saveSoundTheme(id)
+    // Play a preview so the user hears the new theme immediately.
+    soundManager.unlock()
+    soundManager.play({
+      id: 'theme-preview',
+      kind: 'level-up',
+      record: { at: 0, from: 1, to: 2 },
+      previousAt: 0,
+      previousGold: 0,
+    })
+  }
+
   const handleSave = () => {
     saveLLMConfig(config)
     setSaved(true)
@@ -274,6 +335,7 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
     // Effects (deep clone so downstream state diffs trip).
     const fresh: Effects = {
       scanlines: DEFAULT_EFFECTS.scanlines,
+      logNumbers: DEFAULT_EFFECTS.logNumbers,
       fullscreen: { ...DEFAULT_EFFECTS.fullscreen },
       viewport: { ...DEFAULT_EFFECTS.viewport },
       fields: { ...DEFAULT_EFFECTS.fields },
@@ -289,6 +351,10 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
     setSoundState(freshSound)
     soundManager.configure(freshSound)
     saveSoundSettings(freshSound)
+    // Sound theme.
+    setSoundThemeState('retro')
+    soundManager.setTheme('retro')
+    saveSoundTheme('retro')
     // Tick speed: still reset the legacy localStorage default so old saves
     // without per-character `tickSpeed` fall back to a sane value.
     saveTickSpeed(DEFAULT_TICK_SPEED)
@@ -516,6 +582,12 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
                     on={effects.scanlines}
                     onClick={toggleScanlines}
                   />
+                  <ToggleRow
+                    title="Log numbers"
+                    desc="Show exact HP / MP / XP amounts in the log instead of descriptive words."
+                    on={effects.logNumbers}
+                    onClick={toggleLogNumbers}
+                  />
                 </div>
               </section>
 
@@ -686,62 +758,117 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
                 </div>
               </details>
 
-              <details className="settings__group">
-                <summary className="settings__group-summary">
+            </>
+          )}
+
+          {tab === 'sound' && (
+            <>
+              <section className="settings__section">
+                <div className="settings__group-head">
                   <h2>Sound</h2>
                   <button
                     type="button"
                     role="switch"
                     aria-checked={sound.enabled}
                     className={'settings__toggle' + (sound.enabled ? ' settings__toggle--on' : '')}
-                    onClick={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      toggleSoundEnabled()
-                    }}
+                    onClick={toggleSoundEnabled}
                   >
                     {sound.enabled ? 'On' : 'Off'}
                   </button>
-                </summary>
+                </div>
                 <p className="settings__group-desc">
                   Procedural chiptune SFX synthesized in the browser — no asset files.
-                  Per-event toggles are ignored when the group is off.
+                  Per-event toggles are ignored when sound is off.
                 </p>
-                <div className={'settings__fxgrid' + (sound.enabled ? '' : ' settings__fxgrid--dim')}>
-                  <div className="settings__slider-row settings__slider-row--span">
-                    <div className="settings__toggle-copy">
-                      <span className="settings__toggle-title">Volume</span>
-                      <span className="settings__toggle-desc">
-                        Master volume for every SFX voice.
-                      </span>
-                    </div>
-                    <div className="settings__slider-control">
-                      <input
-                        type="range"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={sound.volume}
-                        onChange={(e) => setSoundVolume(Number(e.target.value))}
-                        aria-label="Sound volume"
-                        className="settings__slider"
-                      />
-                      <span className="settings__slider-val">
-                        {Math.round(sound.volume * 100)}%
-                      </span>
-                    </div>
+              </section>
+
+              <div
+                aria-disabled={!sound.enabled}
+                style={sound.enabled ? undefined : { opacity: 0.4, pointerEvents: 'none' }}
+              >
+              <section className="settings__section">
+                <div className="settings__slider-row">
+                  <div className="settings__toggle-copy">
+                    <span className="settings__toggle-title">Volume</span>
+                    <span className="settings__toggle-desc">
+                      Master volume for every SFX voice.
+                    </span>
                   </div>
-                  {SOUND_EVENT_KINDS.map((kind) => (
-                    <ToggleRow
-                      key={kind}
-                      title={SOUND_EVENT_LABELS[kind]}
-                      desc={SOUND_EVENT_DESCS[kind]}
-                      on={sound.events[kind]}
-                      onClick={() => toggleSoundEvent(kind)}
+                  <div className="settings__slider-control">
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={sound.volume}
+                      onChange={(e) => setSoundVolume(Number(e.target.value))}
+                      aria-label="Sound volume"
+                      className="settings__slider"
                     />
+                    <span className="settings__slider-val">
+                      {Math.round(sound.volume * 100)}%
+                    </span>
+                  </div>
+                </div>
+              </section>
+
+              <section className="settings__section">
+                <h2>Sound theme</h2>
+                <p className="settings__group-desc">
+                  Tone recipes used for every event. Selecting a theme plays a preview.
+                </p>
+                <div className="settings__sound-theme-grid">
+                  {SOUND_THEMES.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={'settings__theme' + (soundTheme === t.id ? ' settings__theme--active' : '')}
+                      onClick={() => pickSoundTheme(t.id)}
+                    >
+                      <span className="settings__theme-name">{t.name}</span>
+                      <span className="settings__theme-desc">{t.description}</span>
+                    </button>
                   ))}
                 </div>
-              </details>
+              </section>
+
+              <section className="settings__section">
+                <h2>Per-event toggles</h2>
+                <div className={'settings__fxgrid' + (sound.enabled ? '' : ' settings__fxgrid--dim')}>
+                  {SOUND_EVENT_KINDS.map((kind) => (
+                    <div key={kind} className="settings__toggle-row">
+                      <div className="settings__toggle-copy">
+                        <span className="settings__toggle-title">{SOUND_EVENT_LABELS[kind]}</span>
+                        <span className="settings__toggle-desc">{SOUND_EVENT_DESCS[kind]}</span>
+                      </div>
+                      <div className="settings__toggle-actions">
+                        <button
+                          type="button"
+                          className="settings__play-btn"
+                          disabled={!sound.enabled}
+                          aria-label={`Preview ${SOUND_EVENT_LABELS[kind]}`}
+                          onClick={() => {
+                            soundManager.unlock()
+                            soundManager.play(previewEvent(kind))
+                          }}
+                        >
+                          {'▶'}
+                        </button>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={sound.events[kind]}
+                          className={'settings__toggle' + (sound.events[kind] ? ' settings__toggle--on' : '')}
+                          onClick={() => toggleSoundEvent(kind)}
+                        >
+                          {sound.events[kind] ? 'On' : 'Off'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+              </div>
             </>
           )}
 
@@ -1091,6 +1218,8 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
         .settings__section h2 { margin: 0 0 var(--sp-1); font-family: var(--font-display); font-size: var(--text-lg); font-weight: 400; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-2); text-shadow: none; border-bottom: 1px solid var(--line-1); padding-bottom: var(--sp-1); }
 
         .settings__themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--sp-2); }
+        .settings__sound-themes { padding: var(--sp-3); background: var(--bg-inset); border: 1px solid var(--line-1); display: flex; flex-direction: column; gap: var(--sp-2); }
+        .settings__sound-theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--sp-1); }
         .settings__theme { padding: var(--sp-2) var(--sp-3); background: var(--bg-1); border: 1px solid var(--line-2); color: var(--fg-1); cursor: pointer; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; font: inherit; text-align: left; transition: border-color var(--dur-fast) var(--ease-crt), background var(--dur-fast) var(--ease-crt); }
         .settings__theme:hover { background: var(--bg-2); border-color: var(--line-3); }
         .settings__theme--active { background: var(--bg-3); border-color: var(--line-3); }
@@ -1104,6 +1233,10 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
         .settings__toggle { padding: 4px var(--sp-3); min-width: 56px; background: var(--bg-1); border: 1px solid var(--line-2); color: var(--fg-3); cursor: pointer; font-family: var(--font-display); font-size: var(--text-md); letter-spacing: 0.08em; text-transform: uppercase; transition: color var(--dur-fast) var(--ease-crt), border-color var(--dur-fast) var(--ease-crt), background var(--dur-fast) var(--ease-crt); }
         .settings__toggle:hover { background: var(--bg-2); border-color: var(--line-3); }
         .settings__toggle--on { background: var(--bg-3); border-color: var(--line-3); color: var(--accent-hot); text-shadow: var(--glow-sm); }
+        .settings__toggle-actions { display: flex; align-items: center; gap: var(--sp-3); flex-shrink: 0; }
+        .settings__play-btn { padding: 2px 6px; background: transparent; border: 1px solid var(--line-1); color: var(--fg-3); cursor: pointer; font-family: var(--font-mono); font-size: var(--text-sm); line-height: normal; transition: color var(--dur-fast) var(--ease-crt), border-color var(--dur-fast) var(--ease-crt); }
+        .settings__play-btn:hover:not(:disabled) { color: var(--accent-hot); border-color: var(--line-3); text-shadow: var(--glow-sm); }
+        .settings__play-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
         .settings__slider-row { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); padding: var(--sp-3); background: var(--bg-inset); border: 1px solid var(--line-1); }
         .settings__slider-control { display: flex; align-items: center; gap: var(--sp-2); flex-shrink: 0; }

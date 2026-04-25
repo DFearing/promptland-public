@@ -27,6 +27,13 @@ export type GameState =
       ambush?: { side: 'character' | 'mob'; ticksLeft: number }
     }
   | { kind: 'using-room'; action: UsingAction }
+  | {
+      kind: 'generating-area'
+      /** Room key identifying the exit room that triggered generation. */
+      exitRoomKey: string
+      /** Countdown ticks while the LLM works. */
+      ticksLeft: number
+    }
 
 export const INITIAL_STATE: GameState = { kind: 'exploring' }
 
@@ -40,4 +47,5 @@ export const TICK_MS: Record<GameState['kind'], number> = {
   meditating: 1800,
   fighting: 1400,
   'using-room': 1800,
+  'generating-area': 2000,
 }

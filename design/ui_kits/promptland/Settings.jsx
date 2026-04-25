@@ -39,7 +39,7 @@ const Settings = ({ onBack }) => {
         <Button variant="ghost" onClick={onBack}>← Back to game</Button>
       </div>
       <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--fg-3)', fontStyle: 'italic', marginBottom: 26 }}>
-        Understudy does not ship a model. You bring your own. Your key is stored locally in this browser.
+        Promptland does not ship a model. You bring your own. Your key is stored locally in this browser.
       </div>
 
       <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--fg-2)', marginBottom: 10, borderBottom: '1px solid var(--line-1)', paddingBottom: 4 }}>

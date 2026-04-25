@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { roomKey } from '../areas'
 import type { Character } from '../character'
 import type { ConditionDef } from '../conditions'
 import type { ElementKind, ElementTarget, FieldId } from '../effects'
@@ -21,6 +22,9 @@ export type FullscreenFxKind =
   | 'loot'
   | 'enter-fight'
   | 'new-area'
+  | 'rare-area'
+  | 'new-mob'
+  | 'new-item'
 
 export type DevCommand =
   | { kind: 'pause' }
@@ -38,6 +42,14 @@ export type DevCommand =
   | { kind: 'set-value'; field: SetField; value: number }
   | { kind: 'apply-condition'; conditionId: string }
   | { kind: 'clear-conditions' }
+  | { kind: 'sell-items' }
+  | { kind: 'sacrifice-items' }
+  | { kind: 'move-direction'; dx: number; dy: number; dz: number }
+  | { kind: 'reset-location' }
+  | { kind: 'travel-to-area'; areaId: string }
+  | { kind: 'purge-generated-areas' }
+  | { kind: 'force-rest' }
+  | { kind: 'force-meditate' }
   | { kind: 'clear-log' }
   | { kind: 'log-samples' }
   | { kind: 'fx-fullscreen'; fx: FullscreenFxKind }
@@ -67,7 +79,7 @@ interface Props {
   conditions?: ConditionDef[]
 }
 
-type Tab = 'play' | 'spawn' | 'set' | 'cond' | 'fx' | 'theme'
+type Tab = 'play' | 'spawn' | 'set' | 'cond' | 'fx' | 'log' | 'theme' | 'area'
 
 const FULLSCREEN_FX_LABELS: Record<FullscreenFxKind, string> = {
   'level-up': 'Level up',
@@ -78,6 +90,9 @@ const FULLSCREEN_FX_LABELS: Record<FullscreenFxKind, string> = {
   loot: 'Loot',
   'enter-fight': 'Enter fight',
   'new-area': 'New area',
+  'rare-area': 'Rare area',
+  'new-mob': 'New mob',
+  'new-item': 'New item',
 }
 
 const FIELD_FX_LABELS: Record<FieldId, string> = {
@@ -102,8 +117,8 @@ interface Pos {
 
 const INITIAL_OFFSET = 16
 const PANEL_WIDTH = 385
-const POS_KEY = 'understudy.devPanel.pos'
-const TAB_KEY = 'understudy.devPanel.tab'
+const POS_KEY = 'promptland.devPanel.pos'
+const TAB_KEY = 'promptland.devPanel.tab'
 
 type ValueRow =
   | { kind: 'single'; field: SetField; label: string }
@@ -224,7 +239,9 @@ function loadSavedTab(): Tab {
       raw === 'set' ||
       raw === 'cond' ||
       raw === 'fx' ||
-      raw === 'theme'
+      raw === 'log' ||
+      raw === 'theme' ||
+      raw === 'area'
     ) {
       return raw
     }
@@ -409,8 +426,10 @@ export default function DevPanel({
     world?.items[0]?.id ??
     ''
 
-  // --- Gold slider -------------------------------------------------------
-  const [goldAmount, setGoldAmount] = useState<number>(25)
+  // Two-click arming for the Die button. Click once to arm → label flips to
+  // "Confirm?" for 2s; a second click within that window actually kills the
+  // character. Cheap guard against fat-finger deaths in the dev panel.
+  const [dieArmed, setDieArmed] = useState(false)
 
   // --- Character value editors ------------------------------------------
   const [valueDrafts, setValueDrafts] = useState<Record<SetField, string>>(() => {
@@ -450,7 +469,9 @@ export default function DevPanel({
       ? [{ id: 'cond' as const, label: 'Cond' }]
       : []),
     { id: 'fx', label: 'FX' },
+    { id: 'log', label: 'Log' },
     { id: 'theme', label: 'Theme' },
+    { id: 'area', label: 'Area' },
   ]
 
   return (
@@ -494,12 +515,55 @@ export default function DevPanel({
       </div>
 
       <div className="dev__scroll">
-        {tab === 'play' && (
+        {tab === 'play' && (() => {
+          // Probe each compass + vertical direction against the current area's
+          // rooms so the D-pad can dim directions that would no-op.
+          const pos = character.position
+          const area =
+            world?.areas?.find((a) => a.id === pos.areaId) ?? world?.startingArea
+          const canMove = (dx: number, dy: number, dz: number): boolean => {
+            if (!area) return false
+            return area.rooms[roomKey(pos.x + dx, pos.y + dy, pos.z + dz)] != null
+          }
+          const dbtn = (dx: number, dy: number, dz: number, glyph: string, tip: string, extra = '') => {
+            const valid = canMove(dx, dy, dz)
+            return (
+              <button
+                type="button"
+                className={'dev__dbtn' + (extra ? ' ' + extra : '') + (valid ? '' : ' dev__dbtn--muted')}
+                data-tip={tip}
+                disabled={!valid}
+                onClick={() => onCommand({ kind: 'move-direction', dx, dy, dz })}
+              >
+                {glyph}
+              </button>
+            )
+          }
+          return (
           <>
+            <div className="dev__move">
+              <div className="dev__dpad-wrap">
+                <div className="dev__dpad">
+                  {dbtn(-1, -1, 0, '↖', 'Northwest')}
+                  {dbtn(0, -1, 0, '↑', 'North')}
+                  {dbtn(1, -1, 0, '↗', 'Northeast')}
+                  {dbtn(-1, 0, 0, '←', 'West')}
+                  <span className="dev__dbtn dev__dbtn--label">Move</span>
+                  {dbtn(1, 0, 0, '→', 'East')}
+                  {dbtn(-1, 1, 0, '↙', 'Southwest')}
+                  {dbtn(0, 1, 0, '↓', 'South')}
+                  {dbtn(1, 1, 0, '↘', 'Southeast')}
+                </div>
+                <div className="dev__dpad-z">
+                  {dbtn(0, 0, 1, 'U', 'Up a floor', 'dev__dbtn--z')}
+                  {dbtn(0, 0, -1, 'D', 'Down a floor', 'dev__dbtn--z')}
+                </div>
+              </div>
+            </div>
             <div className="dev__grid">
               <button
                 type="button"
-                className="dev__btn"
+                className="dev__btn dev__btn--compact"
                 onClick={() => onCommand(paused ? { kind: 'resume' } : { kind: 'pause' })}
               >
                 {paused ? 'Resume' : 'Pause'}
@@ -518,15 +582,14 @@ export default function DevPanel({
               <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'spawn-fight' })}>
                 Spawn fight
               </button>
-              <button
-                type="button"
-                className="dev__btn dev__btn--danger"
-                onClick={() => onCommand({ kind: 'die' })}
-              >
-                Die
-              </button>
               <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'heal-full' })}>
                 Heal full
+              </button>
+              <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'force-rest' })}>
+                Rest
+              </button>
+              <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'force-meditate' })}>
+                Meditate
               </button>
               <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'max-drives' })}>
                 Max drives
@@ -534,35 +597,39 @@ export default function DevPanel({
               <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'drain-drives' })}>
                 Drain drives
               </button>
-              <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'clear-log' })}>
-                Clear log
+              <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'sell-items' })}>
+                Sell items
               </button>
-              <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'log-samples' })}>
-                Sample log
+              <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'sacrifice-items' })}>
+                Sacrifice items
               </button>
-            </div>
-            <div className="dev__row">
-              <span className="dev__row-label">Gold</span>
-              <input
-                type="range"
-                min={1}
-                max={500}
-                step={1}
-                value={goldAmount}
-                onChange={(e) => setGoldAmount(Number(e.target.value))}
-                aria-label="Gold amount"
-              />
-              <span className="dev__slider-val">+{goldAmount}</span>
               <button
                 type="button"
-                className="dev__btn dev__btn--compact"
-                onClick={() => onCommand({ kind: 'add-gold', amount: goldAmount })}
+                className="dev__btn"
+                data-tip="Teleport back to the world's starting room"
+                onClick={() => onCommand({ kind: 'reset-location' })}
               >
-                Add
+                Reset location
+              </button>
+              <button
+                type="button"
+                className={'dev__btn dev__btn--danger' + (dieArmed ? ' dev__btn--armed' : '')}
+                onClick={() => {
+                  if (dieArmed) {
+                    setDieArmed(false)
+                    onCommand({ kind: 'die' })
+                  } else {
+                    setDieArmed(true)
+                    window.setTimeout(() => setDieArmed(false), 2000)
+                  }
+                }}
+              >
+                {dieArmed ? 'Confirm?' : 'Die'}
               </button>
             </div>
           </>
-        )}
+          )
+        })()}
 
         {tab === 'spawn' && (
           <>
@@ -793,6 +860,104 @@ export default function DevPanel({
           </>
         )}
 
+        {tab === 'log' && (
+          <div className="dev__grid">
+            <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'clear-log' })}>
+              Clear log
+            </button>
+            <button type="button" className="dev__btn" onClick={() => onCommand({ kind: 'log-samples' })}>
+              Sample log
+            </button>
+          </div>
+        )}
+
+        {tab === 'area' && (() => {
+          const rawAreas =
+            world?.areas && world.areas.length > 0
+              ? world.areas
+              : world
+                ? [world.startingArea]
+                : []
+          // Coarse tier buckets — tight enough to read at a glance, wide
+          // enough that each band usually has a couple of entries. Areas
+          // without a level don't reach this code path — rehydration
+          // drops them from both world.areas and the cache, and fresh
+          // generations always stamp the character's level.
+          const bandFor = (
+            level: number | undefined,
+          ): { order: number; label: string } => {
+            if (typeof level !== 'number') return { order: 99, label: 'Lvl ?' }
+            if (level <= 5) return { order: 1, label: 'Lvl 1–5' }
+            if (level <= 10) return { order: 2, label: 'Lvl 6–10' }
+            if (level <= 15) return { order: 3, label: 'Lvl 11–15' }
+            if (level <= 20) return { order: 4, label: 'Lvl 16–20' }
+            if (level <= 30) return { order: 5, label: 'Lvl 21–30' }
+            return { order: 6, label: 'Lvl 31+' }
+          }
+          const sorted = [...rawAreas].sort((a, b) => {
+            const ao = bandFor(a.level).order
+            const bo = bandFor(b.level).order
+            if (ao !== bo) return ao - bo
+            const al = typeof a.level === 'number' ? a.level : Infinity
+            const bl = typeof b.level === 'number' ? b.level : Infinity
+            if (al !== bl) return al - bl
+            return a.name.localeCompare(b.name)
+          })
+          // Group in sorted order — preserves the tier ordering while
+          // producing one section per populated band.
+          const groups: Array<{ label: string; areas: typeof sorted }> = []
+          for (const area of sorted) {
+            const band = bandFor(area.level)
+            const last = groups[groups.length - 1]
+            if (last && last.label === band.label) {
+              last.areas.push(area)
+            } else {
+              groups.push({ label: band.label, areas: [area] })
+            }
+          }
+          const currentAreaId = character.position.areaId
+          return (
+            <div className="dev__areas">
+              {sorted.length === 0 ? (
+                <div className="dev__empty">No areas loaded for this world.</div>
+              ) : (
+                groups.map((g) => (
+                  <div key={g.label} className="dev__area-group">
+                    <div className="dev__area-group-label">{g.label}</div>
+                    {g.areas.map((a) => {
+                      const active = a.id === currentAreaId
+                      const lvl = typeof a.level === 'number' ? a.level : '?'
+                      return (
+                        <button
+                          key={a.id}
+                          type="button"
+                          className={'dev__btn' + (active ? ' dev__btn--active' : '')}
+                          data-tip={
+                            active
+                              ? 'Character is already here'
+                              : `Travel to ${a.name}`
+                          }
+                          onClick={() => onCommand({ kind: 'travel-to-area', areaId: a.id })}
+                        >
+                          {a.name} <span className="dev__area-lvl">(lvl {lvl})</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                ))
+              )}
+              <button
+                type="button"
+                className="dev__btn dev__btn--danger"
+                data-tip="Delete every LLM-generated area from the entity cache for this world, plus its exit-to-area graph. Authored areas are untouched."
+                onClick={() => onCommand({ kind: 'purge-generated-areas' })}
+              >
+                Purge generated areas
+              </button>
+            </div>
+          )
+        })()}
+
         {tab === 'theme' && (
           <div className="dev__themes">
             {THEMES.map((t) => {
@@ -845,7 +1010,7 @@ export default function DevPanel({
         .dev__bar:active { cursor: grabbing; }
         .dev__drag-grip { color: var(--fg-3); font-family: var(--font-mono); font-size: var(--text-md); padding: 0 2px; letter-spacing: -2px; }
         .dev__title { font-family: var(--font-display); font-size: var(--text-sm); letter-spacing: 0.12em; text-transform: uppercase; color: var(--warn); text-shadow: var(--glow-sm); }
-        .dev__status { font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-2); padding: 2px var(--sp-2); border: 1px dashed var(--line-2); }
+        .dev__status { font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-2); padding: 0 var(--sp-2); border: 1px dashed var(--line-2); }
         .dev__status--paused { color: var(--warn); border-style: solid; border-color: var(--warn); text-shadow: var(--glow-sm); }
         .dev__close { width: 22px; height: 22px; padding: 0; background: transparent; border: 1px solid var(--line-2); color: var(--fg-2); cursor: pointer; font-family: var(--font-mono); font-size: var(--text-base); line-height: 1; transition: color var(--dur-fast) var(--ease-crt), border-color var(--dur-fast) var(--ease-crt); }
         .dev__close:hover, .dev__close:focus-visible { outline: none; color: var(--bad); border-color: var(--bad); text-shadow: var(--glow-sm); }
@@ -892,6 +1057,8 @@ export default function DevPanel({
         .dev__btn--compact { padding: 4px var(--sp-2); font-size: var(--text-xs); }
         .dev__btn--danger { color: var(--bad); border-color: var(--bad); }
         .dev__btn--danger:hover:not(:disabled) { color: var(--bad); border-color: var(--bad); text-shadow: var(--glow-sm); }
+        .dev__btn--armed { background: var(--bad); color: var(--bg-0); text-shadow: none; }
+        .dev__btn--armed:hover:not(:disabled) { background: var(--bad); color: var(--bg-0); text-shadow: none; }
         .dev__btn--buff { color: var(--good); border-color: var(--good); }
         .dev__btn--buff:hover:not(:disabled) { color: var(--good); border-color: var(--good); text-shadow: var(--glow-sm); }
         .dev__btn--debuff { color: var(--warn); border-color: var(--warn); }
@@ -907,6 +1074,40 @@ export default function DevPanel({
         .dev__row-label { font-family: var(--font-display); font-size: var(--text-xs); letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-3); }
         .dev__row input[type="range"] { accent-color: var(--accent-hot); min-width: 0; }
         .dev__slider-val { font-family: var(--font-mono); font-size: var(--text-xs); color: #ffb040; font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; text-shadow: 0 0 4px rgba(255, 176, 64, 0.35); }
+
+        .dev__move { display: flex; flex-direction: column; align-items: center; gap: var(--sp-1); padding: var(--sp-3) 0; }
+        .dev__dpad-wrap { display: flex; align-items: center; gap: var(--sp-3); }
+        .dev__dpad { display: grid; grid-template-columns: repeat(3, 40px); gap: 3px; }
+        .dev__dpad-z { display: grid; grid-template-columns: 40px; gap: 3px; }
+        .dev__dbtn {
+          aspect-ratio: 1 / 1;
+          border: 1px solid var(--line-1);
+          background: var(--bg-inset);
+          color: var(--fg-2);
+          font-family: var(--font-mono);
+          font-size: var(--text-md);
+          line-height: 1;
+          cursor: pointer;
+          display: grid;
+          place-items: center;
+        }
+        .dev__dbtn:hover { background: var(--bg-1); color: var(--accent-hot); }
+        .dev__dbtn--z { font-size: var(--text-sm); }
+        .dev__dbtn--spacer { background: transparent; border-color: transparent; cursor: default; }
+        .dev__dbtn--spacer:hover { background: transparent; color: inherit; }
+        .dev__dbtn--muted { opacity: 0.28; cursor: not-allowed; }
+        .dev__dbtn--muted:hover { background: var(--bg-inset); color: var(--fg-2); }
+        .dev__dbtn--label {
+          background: transparent;
+          border-color: transparent;
+          cursor: default;
+          font-family: var(--font-display);
+          font-size: var(--text-xs);
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: var(--fg-3);
+        }
+        .dev__dbtn--label:hover { background: transparent; color: var(--fg-3); }
 
         .dev__rarity-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; }
         .dev__rbtn {
@@ -1063,6 +1264,33 @@ export default function DevPanel({
         .dev__fx-field-row { display: grid; grid-template-columns: 48px 1fr 1fr; gap: 4px; align-items: center; }
         .dev__fx-elements { display: flex; flex-direction: column; gap: 4px; }
         .dev__fx-element-row { display: grid; grid-template-columns: 64px 1fr 1fr; gap: 4px; align-items: center; }
+
+        .dev__areas { display: flex; flex-direction: column; gap: var(--sp-2); }
+        .dev__area-group { display: flex; flex-direction: column; gap: 4px; }
+        .dev__area-group-label {
+          font-family: var(--font-mono);
+          font-size: var(--text-xs);
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          color: var(--fg-3);
+          padding: var(--sp-1) 0 2px;
+        }
+        /* (lvl N) follows the button's text color (via currentColor) so
+           both the active and inactive states stay legible without a
+           second contrast decision. Tabular-nums keeps the digits aligned
+           across rows. */
+        .dev__area-lvl { color: currentColor; font-variant-numeric: tabular-nums; opacity: 0.75; }
+        /* Active-area button — picks up the accent outline+tint rather
+           than the danger-red armed style, which put white-ish text on
+           red at the level badge. Still clearly "this is where you are"
+           without fighting the rest of the tab's color language. */
+        .dev__btn--active {
+          border-color: var(--accent-hot);
+          color: var(--accent-hot);
+          box-shadow: inset 0 0 0 1px var(--accent-hot);
+          text-shadow: var(--glow-sm);
+        }
+        .dev__empty { color: var(--fg-3); font-style: italic; padding: var(--sp-2); text-align: center; }
 
         .dev__themes { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--sp-1); }
         .dev__theme {

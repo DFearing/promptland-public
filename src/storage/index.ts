@@ -2,6 +2,7 @@ export type {
   EntityCache,
   EntityCacheEntry,
   EntityKind,
+  GenerationMeta,
   SaveMetadata,
   SaveRecord,
   SaveStore,

@@ -17,8 +17,20 @@ export type EffectEvent =
   | { id: string; kind: 'heal-self'; amount: number; maxHp: number }
   | { id: string; kind: 'loot' }
   | { id: string; kind: 'enter-fight' }
-  | { id: string; kind: 'new-area'; name: string }
+  | {
+      id: string
+      kind: 'new-area'
+      name: string
+      /** Rarity tier of the area. Drives the banner variant — rare+ gets
+       *  a "Rare Area Discovered" treatment. Defaults to 'common'. */
+      rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
+    }
   | { id: string; kind: 'llm-connected' }
+  | { id: string; kind: 'gold-windfall'; amount: number }
+  | { id: string; kind: 'gold-jackpot'; amount: number }
+  | { id: string; kind: 'new-mob'; name: string }
+  | { id: string; kind: 'new-item'; name: string }
+  | { id: string; kind: 'generating-area' }
 
 export interface EffectContext {
   prevLogLength: number

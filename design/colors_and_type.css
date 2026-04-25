@@ -1,9 +1,23 @@
 /* ============================================================================
-   Understudy — colors_and_type.css
+   Promptland — colors_and_type.css
    Classic MUD green-on-black default. Themes swap via [data-theme="..."].
    ============================================================================ */
 
 @import url('https://fonts.googleapis.com/css2?family=VT323&family=IBM+Plex+Mono:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+/* Self-hosted Cascadia Mono so the map legend glyphs render identically
+   everywhere. Without this, --font-mono falls through to each platform's
+   system monospace (Menlo/Consolas/DejaVu Sans Mono), and the per-type
+   glyphScale / glyphYOffset corrections that balance the legend row are
+   tuned for whichever font the user happens to have. SIL Open Font
+   License 1.1 — bundling is explicitly permitted. */
+@font-face {
+  font-family: 'Cascadia Mono';
+  src: url('/fonts/CascadiaMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
 
 /* ----------------------------------------------------------------------------
    Theme: Classic MUD (default)
@@ -52,13 +66,25 @@
   --warn:         #ffcc66;   /* caution, low hp */
   --bad:          #ff6b6b;   /* damage, death, error, mob names */
   --magic:        #c99bff;   /* magic, rare items, dialogue */
-  --hp:           #e63855;   /* HP bar / heal potions / +HP ticks.
-                                Crimson red so HP reads as its own thing,
-                                distinct from --good (loot/xp) and --bad
-                                (damage/mobs). */
-  --mp:           #3a5fd0;   /* MP bar / label / mana potions. Deep blue,
-                                darker than the old light blue so it reads
-                                as a stat color rather than a link. */
+  --hp:           #6fd37a;   /* HP bar / heal potions / +HP ticks. */
+  --mp:           #6fd37a;   /* MP bar / label / mana potions. */
+  /* Log-only HP/MP — the stat bars in the sheet stay in theme palette
+   *  (often matching --fg or phosphor green), but references inside log
+   *  prose paint in classic "red HP / blue MP" so the eye can scan
+   *  them as a pair. Themes that want monochrome (mud-classic) override
+   *  these back to match their main palette. */
+  --log-hp:       #ff5a6a;
+  --log-mp:       #6f9aff;
+  /* Log-only neutral/muted — used by the damage-tag breakdown so the
+   *  final damage amount reads as a clean bright number and the
+   *  defender's defense sinks into a dim secondary color, independent
+   *  of whatever the theme picked for --fg-1 / --fg-dim (which the
+   *  phosphor default renders in bright and dark green respectively). */
+  --log-neutral:  #e8e8ea;
+  --log-muted:    #5a5a5a;
+  --xp:           #6fd37a;   /* XP bar / label / level-up values. Themes
+                                without an override fall through to the
+                                SheetPanel default (white). */
   --speech:       #ffe58a;   /* NPC dialogue in log */
   --verb-emph:    #ff8a3d;   /* SEVERE / CRITICAL damage verbs in the log.
                                 Warm orange — pops against the green/grey
@@ -92,7 +118,7 @@
   /* Type families */
   --font-display: 'VT323', ui-monospace, 'Courier New', monospace;
   --font-body:    'IBM Plex Mono', ui-monospace, 'Menlo', monospace;
-  --font-mono:    'JetBrains Mono', ui-monospace, 'Menlo', monospace;
+  --font-mono:    'Cascadia Mono', 'JetBrains Mono', ui-monospace, 'Menlo', monospace;
 
   /* Type scale — everything is monospace-ish so line-height is tight */
   --text-xs:      11px;

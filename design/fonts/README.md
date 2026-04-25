@@ -1,6 +1,6 @@
 # Fonts
 
-Understudy uses three typefaces, all loaded from Google Fonts at runtime. No local `.ttf`/`.woff2` files are bundled — the `@import` rules in `colors_and_type.css` pull them directly.
+Promptland uses three typefaces, all loaded from Google Fonts at runtime. No local `.ttf`/`.woff2` files are bundled — the `@import` rules in `colors_and_type.css` pull them directly.
 
 | Role | Family | Why |
 |---|---|---|

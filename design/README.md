@@ -1,13 +1,13 @@
-# Understudy Design System
+# Promptland Design System
 
-**Understudy** is a browser-based game that plays itself. The player picks a world (fantasy, cyberpunk, sci-fi) and a character (species, gender, class), then **watches** the character live out an emergent adventure. Gameplay is algorithm-driven; LLMs generate the flavor — world lore, items, mobs, room descriptions — while the player is a spectator. The character dies, respawns, and the story accumulates across sessions.
+**Promptland** is a browser-based game that plays itself. The player picks a world (fantasy, cyberpunk, sci-fi) and a character (species, gender, class), then **watches** the character live out an emergent adventure. Gameplay is algorithm-driven; LLMs generate the flavor — world lore, items, mobs, room descriptions — while the player is a spectator. The character dies, respawns, and the story accumulates across sessions.
 
 The name is the product thesis. The player is not the hero — they're the one who watched the rehearsal. The tone is quiet, literary, self-aware, a little dry. Not silly. Not grim. Somewhere in cozy/idle-game territory, but with the visual lineage of a 1992 MUD client.
 
 ## Sources
 
 - **Original brief:** pasted product description.
-- **Repo:** `DFearing/understudy` (React 19 + Vite + PixiJS + Dexie/IndexedDB). Read selectively — `src/App.tsx`, `src/App.css`, `src/components/CharacterCreation.tsx`, `src/components/CharacterRoster.tsx`, `src/components/CharacterPanel.tsx`, `src/worlds/manifests.ts`.
+- **Repo:** `DFearing/promptland` (React 19 + Vite + PixiJS + Dexie/IndexedDB). Read selectively — `src/App.tsx`, `src/App.css`, `src/components/CharacterCreation.tsx`, `src/components/CharacterRoster.tsx`, `src/components/CharacterPanel.tsx`, `src/worlds/manifests.ts`.
 - **World copy** (`manifests.ts`) was the most useful source — its one-liners ("A bow, a path, a long silence.", "Half you, half warranty.") confirmed the understated literary tone and are the voice this system aims to extend.
 
 ### Relationship to the current repo styling
@@ -16,7 +16,7 @@ The repo today uses a **system-UI sans + purple accent (`#c084fc`) on dark slate
 
 **This design system proposes a different direction**: classic MUD green-on-black, pixel display face (VT323), monospace body (IBM Plex Mono), zero radius, phosphor glow. It's an intentional aesthetic commitment that matches the brief's explicit "retro MUD/roguelike lineage" call and the copy tone already in `manifests.ts`.
 
-The existing components map 1:1 to this system — `CharacterRoster`, `CharacterCreation`, `CharacterPanel`, `MapPanel`, `LogPanel`, `CharacterViewport` all have direct analogs in the UI kit. To adopt, swap `App.css` and the inline `<style>` blocks in each component for the tokens in `colors_and_type.css`, then rebuild the three screens against the kit recreations in `ui_kits/understudy/`.
+The existing components map 1:1 to this system — `CharacterRoster`, `CharacterCreation`, `CharacterPanel`, `MapPanel`, `LogPanel`, `CharacterViewport` all have direct analogs in the UI kit. To adopt, swap `App.css` and the inline `<style>` blocks in each component for the tokens in `colors_and_type.css`, then rebuild the three screens against the kit recreations in `ui_kits/promptland/`.
 
 ## Product surface (v1)
 
@@ -56,11 +56,11 @@ All three are wired in `colors_and_type.css`. Swap by setting `data-theme` on `<
 
 ## CONTENT FUNDAMENTALS
 
-Understudy's voice is the single most defining thing about the product. The log is 60% of what the player sees, so how it's written IS the UX.
+Promptland's voice is the single most defining thing about the product. The log is 60% of what the player sees, so how it's written IS the UX.
 
 ### The voice
 
-**Narrator-first, not system-first.** Traditional MUDs say "You are in a dimly lit room." Understudy says "Fenra stands at the edge of the pit, counting her arrows. She has three." The player is not the protagonist — the log is a story being told about someone else.
+**Narrator-first, not system-first.** Traditional MUDs say "You are in a dimly lit room." Promptland says "Fenra stands at the edge of the pit, counting her arrows. She has three." The player is not the protagonist — the log is a story being told about someone else.
 
 **Third person, past or present.** Both are acceptable. Lean present for action, past for reflection.
 
@@ -76,7 +76,7 @@ Understudy's voice is the single most defining thing about the product. The log 
 **Self-aware about the premise.** Occasional — *rare* — dry asides from the narrator are welcome. Fourth-wall nudges that acknowledge the player is watching. Use once per session, not every five lines.
 
 - ✅ `Someone, somewhere, is watching her do this. She does not know.`
-- ✅ `(The understudy improvises. It is not in the script.)`
+- ✅ `(The promptland improvises. It is not in the script.)`
 
 **Mechanical events are written as prose.** Damage, item pickups, level-ups — all get narrated. Numbers appear in parentheses or margins, not mid-sentence.
 
@@ -105,7 +105,7 @@ Understudy's voice is the single most defining thing about the product. The log 
 
 ### Icons as text
 
-Where a terminal would use a glyph, Understudy uses **ASCII/Unicode box-drawing or bracketed tags**:
+Where a terminal would use a glyph, Promptland uses **ASCII/Unicode box-drawing or bracketed tags**:
 
 - `[+]` add, new
 - `[ ]` empty slot
@@ -280,7 +280,7 @@ There are no "cards" in the Material sense. There are **panels**: flat `--bg-1` 
 
 ## ICONOGRAPHY
 
-**Understudy largely does not use icons.** The CRT aesthetic means labels, ASCII characters, and typography do the work that icons would do in a modern UI.
+**Promptland largely does not use icons.** The CRT aesthetic means labels, ASCII characters, and typography do the work that icons would do in a modern UI.
 
 ### Where icons appear
 
@@ -300,7 +300,7 @@ Stroke weight matches text baseline (1px on a 16px grid). No gradient fills, no 
 
 ### No emoji, ever
 
-Not even in casual/human moments. Emoji carry brand semantics (Apple, Google, Twitter) that fight the Understudy period aesthetic. Use Unicode dingbats if you need "emoji-like" — `✶ ✷ ❂ ❧ ✧ ◉`.
+Not even in casual/human moments. Emoji carry brand semantics (Apple, Google, Twitter) that fight the Promptland period aesthetic. Use Unicode dingbats if you need "emoji-like" — `✶ ✷ ❂ ❧ ✧ ◉`.
 
 ### No icon font
 
@@ -308,8 +308,8 @@ Icon fonts (Font Awesome, Material Icons, etc.) are not used. Don't add one. Pre
 
 ### Assets in this system
 
-- `assets/logo/understudy-wordmark.svg` — primary wordmark, VT323-style
-- `assets/logo/understudy-mark.svg` — just the `[U]` mark for small spaces
+- `assets/logo/promptland-wordmark.svg` — primary wordmark, VT323-style
+- `assets/logo/promptland-mark.svg` — just the `[U]` mark for small spaces
 - `assets/icons/` — inline SVG icons as needed (settings, close, play/pause, chevrons)
 
 If the user downloads this system as a Claude Code skill and needs more icons, **generate them in the existing style** — single-color, 1px stroke, 16×16 grid, `currentColor`. Don't pull from Lucide / Heroicons / etc.; their geometry doesn't match the CRT aesthetic.
@@ -328,6 +328,6 @@ The root folder:
 | `fonts/` | Font substitution notes. Fonts load from Google Fonts at runtime. |
 | `assets/` | Logos (`logo/`) and SVG icons (`icons/`) |
 | `preview/` | Individual design-system cards (one HTML file per card). Shown in the Design System tab. |
-| `ui_kits/understudy/` | High-fidelity React UI kit: the main game view, character creation wizard, settings. `index.html` is the clickable demo. |
+| `ui_kits/promptland/` | High-fidelity React UI kit: the main game view, character creation wizard, settings. `index.html` is the clickable demo. |
 
 Each UI kit subdirectory has its own `README.md` describing components and screens.

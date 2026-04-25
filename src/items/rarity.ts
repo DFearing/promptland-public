@@ -99,6 +99,30 @@ export function mobDisplayName(baseName: string, rarity: Rarity): string {
   return `${def.mobPrefix}${baseName}${skullsFor(rarity)}`
 }
 
+/**
+ * Inverse of mobDisplayName — given a rendered name like "Strong King Cave
+ * Rat ★★", recovers the rarity tier and bare base name. Longer prefixes are
+ * checked first so "Strong King " (epic) doesn't get mis-attributed to
+ * "Strong " (uncommon). Returns `common` + the input unchanged if nothing
+ * matches.
+ */
+export function parseMobDisplayName(name: string): { rarity: Rarity; baseName: string } {
+  let stripped = name
+  // Skulls land at the end as " ★", " ★★", or " ★★★". Pull them off first
+  // so the prefix match works on the clean base.
+  const pipMatch = stripped.match(/\s(★+)$/)
+  if (pipMatch) stripped = stripped.slice(0, -pipMatch[0].length)
+  // Check prefixes longest-first so "Strong King " wins over "Strong ".
+  const tiers: Rarity[] = ['legendary', 'epic', 'rare', 'uncommon']
+  for (const r of tiers) {
+    const prefix = RARITY_DEFS[r].mobPrefix
+    if (prefix && stripped.startsWith(prefix)) {
+      return { rarity: r, baseName: stripped.slice(prefix.length) }
+    }
+  }
+  return { rarity: 'common', baseName: stripped }
+}
+
 // How long a defeated mob's card lingers on screen after the fight ends,
 // scaled by rarity. Higher tiers get more time so a legendary kill reads as
 // a victory lap; commons are dismissed quickly to keep pacing brisk.
@@ -135,13 +159,20 @@ export function rollRarity(bias = 0): Rarity {
 
 // For mobs: rarity distribution skews to common more heavily than items, so
 // the rare/epic/legendary tiers feel genuinely special rather than routine.
-export function rollMobRarity(): Rarity {
+//
+// `areaLevel` biases the roll: higher-level areas shave weight off common
+// and add it to rare/epic/legendary. At level 1 the distribution matches
+// the original baseline; each additional level of area difficulty pushes
+// a little more weight into the upper tiers. Capped so a very high-level
+// area still has some commons rolling through.
+export function rollMobRarity(areaLevel: number = 1): Rarity {
+  const bias = Math.max(0, areaLevel - 1)
   const weights: Array<[Rarity, number]> = [
-    ['common', 72],
-    ['uncommon', 18],
-    ['rare', 7],
-    ['epic', 2.5],
-    ['legendary', 0.5],
+    ['common', Math.max(30, 72 - bias * 4)],
+    ['uncommon', 18 + bias * 1.5],
+    ['rare', 7 + bias * 2],
+    ['epic', 2.5 + bias * 0.75],
+    ['legendary', 0.5 + bias * 0.25],
   ]
   const total = weights.reduce((acc, [, w]) => acc + w, 0)
   let roll = Math.random() * total
