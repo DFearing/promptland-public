@@ -15,7 +15,7 @@ src/
 │   ├── shapeGen.ts       # deterministic area shape generation per AreaKind
 │   └── index.ts          # enforceAreaCaps, pruneDisconnectedRooms, helpers
 ├── character/            # Character, Equipped, StatBlock, DeathRecord, titles
-├── combat/               # damage verb tables, severity tiers
+├── combat/               # damage verbs, severity tiers, death predicates (pickDeathPredicate)
 ├── components/           # React UI: DevPanel, LogPanel, MapPanel, SheetPanel, Topbar, ...
 ├── conditions/           # active conditions: poisoned, burning, slowed, etc.
 ├── effects/              # fullscreen + field effect derivation and overlays
@@ -27,8 +27,10 @@ src/
 │   ├── equip.ts          # applyAutoEquip, combatBonuses
 │   ├── death.ts          # applyDeathPenalty
 │   ├── sell.ts           # pickItemsToSell — class-aware filtering
-│   ├── sacrifice.ts      # pickItemsToSacrifice
+│   ├── sacrifice.ts      # pickItemsToSacrifice — shrine offload, wired into tick
 │   ├── consume.ts        # maybeAutoConsume — potions + mana
+│   ├── journal.ts        # deriveJournalEntry — milestone tracking
+│   ├── logLines.ts       # log-line construction helpers
 │   └── weight.ts         # weightDriveValue
 ├── items/                # ItemDef, rarity roll, stat multipliers
 ├── llm/                  # LLM client, templates, caching, generation pipeline
@@ -45,6 +47,10 @@ src/
 ├── log/                  # LogEntry type and helpers
 ├── mobs/                 # MobArchetype, MobFlavor, Mob, spawn()
 ├── sound/                # procedural audio (Web Audio API)
+├── gen/                  # pixel-art image generation client
+│   ├── client.ts         # ImageGenClient — talks to tools/pixel-gen/ bridge
+│   ├── sprites.ts        # sprite-fetch helpers used by CharacterViewport
+│   └── types.ts          # ImageGenRequest / ImageGenResponse / HealthInfo
 ├── spells/               # Spell defs + castSpell
 ├── storage/              # Storage abstraction
 │   ├── types.ts          # EntityCache, SaveStore, Storage interfaces
@@ -289,5 +295,7 @@ Deploy: anything that serves static files. Currently no deployment target is wir
 
 - **Mock LLM client** (`src/llm/mockClient.ts`) — deterministic stubs for every template, so the app is fully exercisable offline. Bound to the `MOCK_BASE_URL` sentinel value in Settings.
 - **Claude Code proxy** (`tools/claude-proxy/server.mjs`) — a tiny Node server that exposes Claude Code's headless mode over an OpenAI-compatible endpoint. Lets you run the game against your Claude subscription without paying per-token. See `tools/claude-proxy/README.md`.
-- **Dev Panel** (`src/components/DevPanel.tsx`) — accessible via a toggle hotkey. Teleport between areas, spawn specific mobs at specific rarities, inject conditions, purge generated areas, modify drives, grant XP/gold, force-rest/meditate, move directionally, and more. See [DEVELOPMENT.md](DEVELOPMENT.md).
+- **Pacing simulator** (`tools/sim/`) — headless deterministic simulator. Runs the tick loop against authored content with a seeded PRNG and reports how long it takes a character to reach each target level. `npm run sim` (default profile), `npm run sim:warrior`, `npm run sim:mage`, `npm run sim:long` for bundled profiles. Exit code 1 on any failing verdict. See `tools/sim/README.md`.
+- **Pixel-gen bridge** (`tools/pixel-gen/`) — single-file Node bridge that fronts a local ComfyUI instance for pixel-art sprite generation. `npm run pixel-gen`. The browser client lives in `src/gen/`. Falls back to placeholders when the bridge is not running. See `tools/pixel-gen/README.md`.
+- **Dev Panel** (`src/components/DevPanel.tsx`) — accessible via a toggle hotkey. Teleport between areas, spawn specific mobs at specific rarities, inject conditions, purge generated areas, modify drives, grant XP/gold, force-rest/meditate, move directionally, preview image gen (Gen tab), and more. See [DEVELOPMENT.md](DEVELOPMENT.md).
 - **Dev log plugin** (`vite.config.ts` `promptland-dev-log`) — a middleware that accepts structured log events from the browser and prints them to the `npm run dev` terminal so LLM generations and cache hits are visible without opening devtools.

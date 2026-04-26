@@ -2,13 +2,12 @@ export type { GameState } from './state'
 export { INITIAL_STATE, TICK_MS } from './state'
 export {
   AREA_GEN_TIMEOUT_TICKS,
-  applyOneLevel,
   predictNextStep,
   runTick,
   seedLog,
-  type ApplyOneLevelOptions,
   type Playing,
 } from './tick'
+export { applyOneLevel, type ApplyOneLevelOptions } from './leveling'
 export type { Drive, Drives } from './drives'
 export { DRIVES, DRIVE_MAX, DRIVE_THRESHOLD, ZERO_DRIVES, topDrive } from './drives'
 export {

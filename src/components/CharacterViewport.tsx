@@ -1,15 +1,21 @@
 import { useEffect, useRef } from 'react'
 import { Application, Graphics, type Filter } from 'pixi.js'
 import { CRTFilter, GlowFilter, RGBSplitFilter, ShockwaveFilter } from 'pixi-filters'
+import type { Character } from '../character/types'
 import type { GameState } from '../game'
 import { ElementOverlay, type EffectEvent, type ElementFxEvent } from '../effects'
 import type { Effects } from '../themes'
+import { PORTRAIT_CONFIG, PortraitLayers } from '../portrait'
 
 interface Props {
   stateKind: GameState['kind']
   events: EffectEvent[]
   elementEvents?: ElementFxEvent[]
   viewport: Effects['viewport']
+  /** Character whose equipment drives the layered portrait. Optional —
+   *  when absent (or when `PORTRAIT_CONFIG.enabled` is false), the
+   *  placeholder stick figure is the only thing rendered. */
+  character?: Character
 }
 
 interface Pulse {
@@ -34,7 +40,7 @@ interface ViewportApi {
   syncAmbient: () => void
 }
 
-export default function CharacterViewport({ stateKind, events, elementEvents, viewport }: Props) {
+export default function CharacterViewport({ stateKind, events, elementEvents, viewport, character }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const propsRef = useRef({ stateKind, viewport })
   const seenRef = useRef<Set<string>>(new Set())
@@ -280,6 +286,7 @@ export default function CharacterViewport({ stateKind, events, elementEvents, vi
   return (
     <div className="viewport">
       <div ref={hostRef} className="viewport__canvas" />
+      {PORTRAIT_CONFIG.enabled && character ? <PortraitLayers character={character} /> : null}
       {elementEvents && <ElementOverlay events={elementEvents} target="character" />}
 
       <style>{`

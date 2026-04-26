@@ -15,7 +15,8 @@
     "sim:mage": "tsx tools/sim/sim.ts tools/sim/profiles/mage-midgame.json",
     "sim:long": "tsx tools/sim/sim.ts tools/sim/profiles/long-haul.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "bench": "vitest bench --run"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",

@@ -7,14 +7,6 @@ export interface LLMPreset {
   note?: string
 }
 
-/** Hosts that never require an API key (local / trusted LAN servers). */
-export const KEYLESS_HOSTS: readonly string[] = [
-  'localhost',
-  '127.0.0.1',
-  '0.0.0.0',
-  '192.168.1.186',
-]
-
 export const LLM_PRESETS: readonly LLMPreset[] = [
   {
     id: 'mock',

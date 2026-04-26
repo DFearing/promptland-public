@@ -12,7 +12,7 @@ If the user invokes this skill without any other guidance, ask them what they wa
 
 ## Quick map
 
-- `colors_and_type.css` — all tokens, three themes (`mud` default, `amber`, `phosphor`). Set `data-theme` on `<html>` to switch.
+- `colors_and_type.css` — all tokens, the default `mud` theme. Per-theme overrides for `mud-classic`, `chromejack`, `lcars`, `channel`, `newsroom` live in `src/themes/extra.css`. Set `data-theme` on `<html>` to switch. See `docs/THEMING.md` for the per-token role guide.
 - `assets/logo/` — wordmark and `[U]` mark, both single-color SVGs that pick up `currentColor`.
 - `assets/icons/` — a handful of 16×16 utility icons (settings, close, play/pause/FF, chevrons).
 - `ui_kits/promptland/` — React UI kit: game view, character creation wizard, settings screen.

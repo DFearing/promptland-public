@@ -90,6 +90,8 @@ const GLYPH: Record<JournalEntryKind, string> = {
   'level-up': '↑',
   'spell-learned': '✺',
   death: '†',
+  'death-save': '✶',
+  'favor-tier-up': '✦',
 }
 
 interface Span {

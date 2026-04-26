@@ -3,13 +3,13 @@ import { conditionStatMods } from '../conditions'
 import { meetsRequirements, scaledRequirements, rarityStatMult, type EquipBonuses, type EquipmentArchetype, type EquipSlot } from '../items'
 import type { LogEntry } from '../log'
 import type { WorldContent } from '../worlds'
+import { getItem } from './worldLookup'
 
 function equipmentOf(
   item: InventoryItem,
   world: WorldContent,
 ): EquipmentArchetype | null {
-  if (!item.archetypeId) return null
-  const def = world.items.find((i) => i.id === item.archetypeId)
+  const def = getItem(world, item.archetypeId)
   if (!def || def.kind !== 'equipment') return null
   return def
 }

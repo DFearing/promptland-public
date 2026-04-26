@@ -1,13 +1,10 @@
 export type ThemeId =
   | 'mud'
   | 'mud-classic'
-  | 'amber'
-  | 'phosphor'
-  | 'neon'
-  | 'cyber'
-  | 'vacuum'
-  | 'vellum'
-  | 'paper'
+  | 'chromejack'
+  | 'lcars'
+  | 'channel'
+  | 'newsroom'
   | 'custom'
 
 export interface ThemeMeta {

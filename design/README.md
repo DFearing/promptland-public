@@ -42,15 +42,18 @@ And a **speed control** chrome (pause / 1× / 2× / 4×) since the game auto-pla
 
 ## Themes
 
-The MUD aesthetic is the DNA. Different *worlds* swap the color palette — future themes like `cyberpunk` (magenta-on-black) and `vacuum` (ice-white-on-navy) will slot in alongside these:
+The MUD aesthetic is the DNA. Six themes ship; each is a remix of the same token shape (see `docs/THEMING.md` for the per-token role guide):
 
-| Theme | Data attribute | Palette | Use |
+| Theme | Data attribute | Palette | Notes |
 |---|---|---|---|
-| **Classic MUD** (default) | `data-theme="mud"` | Phosphor green on deep black | Fantasy worlds |
-| **Amber** | `data-theme="amber"` | PC/3270 amber on warm black | Alt terminal, some sci-fi |
-| **Phosphor White** | `data-theme="phosphor"` | Paper-white on black | Neutral / "settings" areas |
+| **MUD (Modern)** (default) | `data-theme="mud"` | Phosphor green on deep black, semantic accents | Fantasy worlds |
+| **MUD (Classic)** | `data-theme="mud-classic"` | Pure green-on-black, no color accents | VT-100 purist mode |
+| **Chromejack** | `data-theme="chromejack"` | Cyber-yellow chrome on slate, cyan/magenta accents | Cyberpunk worlds |
+| **LCARS** | `data-theme="lcars"` | Peach on void, mauve chrome, Federation blue | Star Trek sci-fi |
+| **Channel** | `data-theme="channel"` | Aubergine + channel blue + mention yellow | Office-chat aesthetic |
+| **Newsroom** | `data-theme="newsroom"` | Broadsheet ink on cream paper | The only light theme |
 
-All three are wired in `colors_and_type.css`. Swap by setting `data-theme` on `<html>` or any subtree.
+The default `mud` theme is wired in `colors_and_type.css`; the rest live in `src/themes/extra.css`. Swap by setting `data-theme` on `<html>` or any subtree.
 
 ---
 

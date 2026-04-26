@@ -88,7 +88,7 @@ We ship a `LLMClient` that takes `{ baseUrl, apiKey, model }` and issues standar
 
 1. Scaffold the Vite + React + TypeScript + PixiJS skeleton with the two-panel layout.
 2. Define the `Storage` interface and ship the IndexedDB implementation.
-3. Build the character creation flow (world → species → gender → class) with hardcoded world manifests.
+3. Build the character creation flow (world → species → class) with hardcoded world manifests.
 4. Build the character sheet and inventory panels (no game loop yet).
 5. Stub the LLM client and settings page.
 6. Then — and only then — add the tick loop and log.

@@ -1,0 +1,12 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`SCENARIO B — does sacrifice happen in natural play? > 500-tick scripted warrior run — surface the evidence 1`] = `
+{
+  "abandonedCount": 2,
+  "finalGold": 449,
+  "finalInventoryCount": 6,
+  "peakGreedDrive": 35,
+  "peakWeightDrive": 100,
+  "voluntaryCount": 10,
+}
+`;

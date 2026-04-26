@@ -15,7 +15,7 @@ export {
   loadLLMConfig,
   saveLLMConfig,
 } from './config'
-export { KEYLESS_HOSTS, LLM_PRESETS, type LLMPreset } from './presets'
+export { LLM_PRESETS, type LLMPreset } from './presets'
 export {
   AREA_LEVEL_OFFSET_MIN,
   AREA_LEVEL_OFFSET_RANGE,

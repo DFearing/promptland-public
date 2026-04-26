@@ -24,7 +24,7 @@ Overall: **~90% of v1 scope is implemented and end-to-end wired.** Track A (Clou
 | [Map UI](#map-ui) | ✅ 100% | Fog, floor selector, click-to-read, portal icons, area rarity color |
 | [Effects / feedback](#effects--feedback) | ✅ 100% | Level-up, death, damage, new-area, rare variant, effects queue |
 | [Topbar controls](#topbar-controls) | ✅ 100% | Pause, speed, mute, settings |
-| [Dev tools](#dev-tools) | ✅ 100% | Teleport, spawn, conditions, reset, purge, drive manip |
+| [Dev tools](#dev-tools) | ✅ 100% | Teleport, spawn, conditions, reset, purge, drive manip, Gen tab, Save button |
 | [Audio / themes](#audio--themes) | ✅ 100% | Procedural synthesis, 5+ themes, scale, color tokens |
 | [Art / sprites](#art--sprites) | ❌ 0% | Placeholder only; explicitly out of v1 scope |
 
@@ -41,7 +41,7 @@ Legend: ✅ fully wired · 🟡 partial · ❌ not implemented
 The design doc listed **six gameplay states**: Traveling, Exploring, Fighting, Resting, Shopping, Interacting. In code, Shopping and Interacting are **merged into `using-room`** with a `UsingAction` union (`satisfy` / `traverse-portal` / `sell`). This was a reasonable consolidation — shopping and interacting are one-tick events driven by context, not sustained state phases — but it means:
 
 - "Shopping as its own state" with its own tick speed isn't configurable.
-- Extending to new interaction types (talking to NPCs, reading lore plaques, etc.) requires adding a new `UsingAction` variant, not a new top-level state.
+- Extending to new sustained interaction types (multi-turn dialogue trees, mini-games, lore-reading sub-modes) would still require adding a new `UsingAction` variant or a new top-level state. Note: fixed NPCs (PR #101) are passive — their lines surface on room entry without a state transition — so the "talking to NPCs" example above no longer applies in the simple greeting case.
 
 **Files:** `src/game/state.ts:12-36`
 
@@ -181,7 +181,7 @@ The design doc explicitly deferred WebDAV / cloud sync / gist sync. JSON export/
 
 - **No player-initiated purchase UI.** Entering a shop doesn't open a browsable inventory. You can't pick something and buy it.
 - **No weight-driven forced-sell in main loop.** The `weight` drive contributes to goal-seeking (drives the character toward a shop when overloaded) but there's no hard encumbrance cap that stops the character from picking up another item — over-encumbered characters just have a persistent weight drive.
-- **Sacrifice is dev-only.** `src/game/sacrifice.ts` exists and is callable from the Dev Panel, but isn't wired into the main tick loop.
+- **Sacrifice is wired.** `src/game/sacrifice.ts` is called from the tick loop at shrine rooms when the weight drive is high and no shop is reachable. It is also accessible from the Dev Panel for on-demand offloads.
 
 **Files:** `src/game/tick.ts` (tryShopPurchase), `src/game/sell.ts`, `src/game/sacrifice.ts`
 
@@ -231,7 +231,7 @@ Everything is toggleable per-effect in Settings.
 
 **Implemented.** Dev Panel with tabs:
 
-- **Play:** D-pad (10-direction + U/D floor buttons), rest / meditate / reset-location / die (with 2s confirm), sell / sacrifice items.
+- **Play:** D-pad (10-direction + U/D floor buttons), rest / meditate / reset-location / die (with 2s confirm), sell / sacrifice items, Save button.
 - **Spawn:** roll a specific mob id at a specific rarity, instant-fight.
 - **Set:** grant XP / gold / specific item / drive value.
 - **Cond:** inject any condition at any stack count.
@@ -239,6 +239,7 @@ Everything is toggleable per-effect in Settings.
 - **Log:** clear log, sample log (dumps every log variant for theme previewing).
 - **Theme:** swap themes + scale + tick speeds.
 - **Area:** list every loaded area grouped by level tier, teleport to any by click, purge all generated areas for the world.
+- **Gen:** pixel-art image generation test panel. Fires a generation request to the running pixel-gen bridge and displays the result. Shows bridge health.
 
 **Files:** `src/components/DevPanel.tsx`
 
@@ -263,6 +264,8 @@ The design doc explicitly stated: "No 2D art yet (sprite placeholder)." Still tr
 The character viewport component (`src/components/CharacterViewport.tsx`) is a stub placeholder. PixiJS is a dependency but nothing renders on a `<canvas>` yet.
 
 Art pipeline decisions deferred: generation source (BYOK image-gen vs. local vs. pre-generated library vs. procedural vs. hybrid), what gets generated (whole sprites vs. paper-doll layers), when generation happens (lazy-on-first-encounter vs. background pregen). Leading candidate per MEMORY.md: hybrid pre-generated sprite library + BYOK image-gen, lazy generation, whole sprites, animation via CSS/canvas transforms.
+
+A local ComfyUI-backed generation path now exists for experimentation: `tools/pixel-gen/` bridges the browser to a local Flux Schnell + pixel LoRA setup. The browser client lives in `src/gen/`. The CharacterViewport is still a placeholder; the bridge is not wired to render into it yet.
 
 ---
 

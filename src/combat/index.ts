@@ -1,6 +1,7 @@
 export {
   DAMAGE_FAMILIES,
   SEVERITIES,
+  ascendSeverity,
   damageVerb,
   getVerbs,
   isEmphatic,

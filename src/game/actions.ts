@@ -2,7 +2,8 @@ import type { Character } from '../character'
 import type { LogEntry } from '../log'
 import type { Mob } from '../mobs'
 import type { Rng } from '../rng'
-import { LOG_CAP, rollAmbush } from './tick'
+import { append, trim } from './logCap'
+import { rollAmbush } from './tick'
 import type { GameState } from './state'
 
 function capitalize(s: string): string {
@@ -40,8 +41,6 @@ export function beginFight(
   options: BeginFightOptions,
 ): BeginFightResult {
   const prefix = options.logPrefix ?? ''
-  const append = (next: LogEntry[], entry: LogEntry): LogEntry[] =>
-    [...next, entry].slice(-LOG_CAP)
   let out = append(log, {
     kind: 'narrative',
     text: `${prefix}A ${mob.name} bars the way. ${mob.description}`,
@@ -61,8 +60,10 @@ export function beginFight(
       meta: { name: character.name, mobName: mob.name, mobRarity: mob.rarity },
     })
   }
+  // beginFight is invoked outside runTick (App.tsx click handler), so it
+  // owns the trim — runTick doesn't run before its result hits the UI.
   return {
     state: { kind: 'fighting', mob, ambush },
-    log: out,
+    log: trim(out),
   }
 }

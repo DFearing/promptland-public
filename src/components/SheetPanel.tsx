@@ -10,6 +10,13 @@ import {
   type BonusBreakdown,
   type Drive,
 } from '../game'
+import {
+  describeBlessing,
+  favorName,
+  favorTier,
+  favorTierName,
+  favorTierTooltip,
+} from '../game/favor'
 import type { Effects } from '../themes'
 import { getWorldContent, getWorldManifest } from '../worlds'
 import LevelingDialog from './LevelingDialog'
@@ -23,6 +30,7 @@ const DRIVE_LABELS: Record<Drive, string> = {
   greed: 'Greed',
   curiosity: 'Curiosity',
   weight: 'Weight',
+  piety: 'Piety',
 }
 
 // Short explanatory text surfaced as the drive's tooltip. Kept here rather
@@ -38,6 +46,8 @@ const DRIVE_DESCRIPTIONS: Record<Drive, string> = {
     'Urge to see new places. Satisfied by stepping into a room for the first time.',
   weight:
     'Computed from inventory weight vs. carrying capacity (base 20 + STR modifier). Satisfied by selling at a shop.',
+  piety:
+    'Your desire to be one with everything.',
 }
 
 // Stat tooltips describe what each stat does today. Copy is intentionally
@@ -153,6 +163,16 @@ export default function SheetPanel({
   const hpTip = `Hit Points — reaches 0 and you fall, then respawn at the last safe room.`
   const magicTip = `${magicLabel} — spent casting spells. Refills on rest, potions, or scrolls.`
   const xpTip = `Experience toward level ${character.level + 1}. Resets on level-up (target: ${xpTarget}).`
+
+  const favor = character.favor ?? 0
+  const favorLabelText = favorName(world)
+  const favorTierIdx = favorTier(favor)
+  const favorTierLabel = favorTierName(favorTierIdx, world)
+  const blessingLabel = describeBlessing(character, world)
+  const tierFlavor = favorTierTooltip(favorTierIdx, world)
+  const favorTip = blessingLabel
+    ? `${tierFlavor}  ·  ${blessingLabel} (${character.blessing?.ticksRemaining ?? 0}t)`
+    : tierFlavor
 
   const content = getWorldContent(character.worldId)
   const conditionDefs = new Map((content?.conditions ?? []).map((c) => [c.id, c]))
@@ -414,7 +434,13 @@ export default function SheetPanel({
             const isGoal = d === goalDrive
             const pct = Math.round(ratio * 100)
             const goalSuffix = isGoal ? '  ·  Current goal — the next move is picked to ease this.' : ''
-            const tip = `${DRIVE_LABELS[d]} — ${pct}% full.  ${DRIVE_DESCRIPTIONS[d]}${goalSuffix}`
+            // Piety re-skins per world (Piety / Sync / Reverence) so the
+            // gauge reads diegetically alongside the world-themed favor
+            // gauge in the purse cluster. Other drives are universal —
+            // hunger is hunger in any world.
+            const driveLabel = d === 'piety' ? (world?.pietyName ?? DRIVE_LABELS.piety) : DRIVE_LABELS[d]
+            const driveDesc = d === 'piety' ? (world?.pietyDescription ?? DRIVE_DESCRIPTIONS.piety) : DRIVE_DESCRIPTIONS[d]
+            const tip = `${driveLabel} — ${pct}% full.  ${driveDesc}${goalSuffix}`
             const heatColor =
               d === 'weight' || d === 'hunger' || d === 'fatigue'
                 ? ratio < 0.5
@@ -431,7 +457,7 @@ export default function SheetPanel({
                 className={'sheet__drive' + (isGoal ? ' sheet__drive--goal' : '')}
                 data-tip={tip}
               >
-                <span className="sheet__drive-label">{isGoal ? '> ' : ''}{DRIVE_LABELS[d]}</span>
+                <span className="sheet__drive-label">{isGoal ? '> ' : ''}{driveLabel}</span>
                 <div className="sheet__drive-gauge">
                   <SegBar ratio={ratio} segClass={`sheet__seg--drive-${d}`} color={heatColor} />
                 </div>
@@ -441,10 +467,23 @@ export default function SheetPanel({
         </div>
       </section>
 
-      <div className="sheet__gold">
-        <span className="sheet__gold-label">{currencyLabel}</span>
-        <span className="sheet__gold-val">{character.gold}</span>
-        <FieldIndicator events={fieldEvents} field="gold" enabled={fields.gold} durationMs={fields.durationMs} />
+      <div className="sheet__purse">
+        <div className="sheet__gold">
+          <span className="sheet__gold-label">{currencyLabel}</span>
+          <span className="sheet__gold-val">{character.gold}</span>
+          <FieldIndicator events={fieldEvents} field="gold" enabled={fields.gold} durationMs={fields.durationMs} />
+        </div>
+
+        <div
+          className={`sheet__favor sheet__favor--tier-${favorTierIdx}`}
+          data-tip={favorTip}
+        >
+          <span className="sheet__favor-label">{favorLabelText}</span>
+          <span className="sheet__favor-val">
+            {favorTierLabel}
+            {character.blessing ? ' · blessed' : ''}
+          </span>
+        </div>
       </div>
 
       {activeConds.length > 0 && (
@@ -512,6 +551,7 @@ export default function SheetPanel({
         .sheet__seg--drive-greed { background: var(--good); box-shadow: var(--glow-sm); }
         .sheet__seg--drive-curiosity { background: var(--speech, var(--accent)); box-shadow: var(--glow-sm); }
         .sheet__seg--drive-weight { background: var(--fg-2); box-shadow: var(--glow-sm); }
+        .sheet__seg--drive-piety { background: var(--favor, #f5c542); color: var(--favor, #f5c542); box-shadow: 0 0 3px currentColor; }
 
         .sheet__attrs { margin: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-1); padding: var(--sp-2); background: var(--bg-inset); border: 1px solid var(--line-1); box-shadow: var(--shadow-inset); }
         /* Combat stats sit between the attribute block and the drive grid.
@@ -538,9 +578,34 @@ export default function SheetPanel({
         .sheet__stat-bonus:hover,
         .sheet__stat-bonus:focus-visible { outline: none; text-shadow: var(--glow-md); }
 
+        /* Purse groups gold + favor as a tight visual pair (your purse is
+           your worldly pile + the gods' tally of you). The inner gap is
+           small so the two rows read as one cluster, while a larger
+           top-margin pushes the cluster away from the drives grid above
+           — drives are body needs, the purse is something else. */
+        .sheet__purse { display: flex; flex-direction: column; gap: var(--sp-1); margin-top: var(--sp-2); }
         .sheet__gold { position: relative; display: flex; justify-content: space-between; align-items: baseline; padding: 0 2px; }
         .sheet__gold-label { font-family: var(--font-body); color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.1em; font-size: var(--text-xs); }
         .sheet__gold-val { font-family: var(--font-mono); color: var(--warn); font-variant-numeric: tabular-nums; font-size: var(--text-sm); text-shadow: var(--glow-sm); }
+
+        /* Favor row mirrors the gold row's two-column "label · value" layout
+           so the eye reads the two as a pair. The label uses the same
+           muted gold-label color; the value defaults to that same color
+           at tier 0 (low favor — same color as the label, by request)
+           and brightens through the tiers to var(--accent-hot) at
+           Anointed. The trailing tier name shares the value's color. */
+        .sheet__favor { position: relative; display: flex; justify-content: space-between; align-items: baseline; padding: 0 2px; }
+        .sheet__favor-label { font-family: var(--font-body); color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.1em; font-size: var(--text-xs); }
+        /* Favor value is the tier label ("Touched", "Anointed", …) — body
+           font + small caps to read as a name rather than a stat number,
+           matching the surrounding label/header treatment. Tier 0
+           ("Unseen") sits one shade brighter than the label so it stays
+           legible — previously --fg-3 on --fg-3 vanished into the row. */
+        .sheet__favor-val { font-family: var(--font-body); color: var(--fg-2); text-transform: uppercase; letter-spacing: 0.08em; font-size: var(--text-xs); }
+        .sheet__favor--tier-1 .sheet__favor-val,
+        .sheet__favor--tier-2 .sheet__favor-val,
+        .sheet__favor--tier-3 .sheet__favor-val { color: var(--good); text-shadow: var(--glow-sm); }
+        .sheet__favor--tier-4 .sheet__favor-val { color: var(--accent-hot); text-shadow: var(--glow-sm); }
         .sheet__level-xp { color: var(--fg-1); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
         .sheet__conds { display: flex; flex-direction: column; gap: var(--sp-1); }

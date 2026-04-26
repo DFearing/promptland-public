@@ -1,9 +1,10 @@
 import type { Character, JournalEntry, JournalEntryKind } from '../character'
 import { deathClause } from '../combat'
 import type { LogEntry } from '../log'
-import { Rng } from '../rng'
+import type { Rng } from '../rng'
 import { getSpell } from '../spells'
 import type { WorldContent } from '../worlds'
+import { getArea, getItem } from './worldLookup'
 
 /**
  * Derives journal entries from a state transition.
@@ -27,6 +28,7 @@ export function deriveJournalEntries(
   next: Character,
   newLogEntries: readonly LogEntry[],
   world: WorldContent,
+  rng: Rng,
 ): JournalEntry[] {
   const adds: JournalEntry[] = []
   const now = Date.now()
@@ -50,7 +52,7 @@ export function deriveJournalEntries(
     const key = `area-discovered:${areaId}`
     if (seenInDerivation.has(key)) continue
     seenInDerivation.add(key)
-    const area = world.areas?.find((a) => a.id === areaId) ?? world.startingArea
+    const area = getArea(world, areaId)
     adds.push({
       at: now,
       areaId,
@@ -110,7 +112,7 @@ export function deriveJournalEntries(
       // Use a fresh rotation-picked predicate for the journal entry,
       // independent of what the death log narrative showed. Two rolls
       // means the journal reads like a diary recap, not a transcript.
-      const clause = record.cause ?? deathClause(mobName, undefined, Rng.random())
+      const clause = record.cause ?? deathClause(mobName, undefined, rng)
       const capClause = clause.charAt(0).toUpperCase() + clause.slice(1)
       adds.push({
         at: record.at,
@@ -120,6 +122,47 @@ export function deriveJournalEntries(
         meta: { mobName, roomName: record.roomName, cause: record.cause },
       })
     }
+  }
+
+  // --- Death-saves ---------------------------------------------------------
+  // Diff saved.length the same way deaths are tracked. Each new entry
+  // becomes a journal milestone — a once-per-Anointed-tier event worth
+  // remembering.
+  const prevSaveCount = prev.saved?.length ?? 0
+  const nextSaveCount = next.saved?.length ?? 0
+  if (nextSaveCount > prevSaveCount) {
+    for (let i = prevSaveCount; i < nextSaveCount; i++) {
+      const record = next.saved?.[i]
+      if (!record) continue
+      const roomPhrase = record.roomName ? ` in the ${record.roomName}` : ''
+      const mobName = record.mobName ?? 'something'
+      adds.push({
+        at: record.at,
+        areaId: record.areaId,
+        kind: 'death-save',
+        text: `Saved from ${mobName}${roomPhrase}. Not today, death.`,
+        meta: { mobName, roomName: record.roomName, cause: record.cause },
+      })
+    }
+  }
+
+  // --- Favor tier-ups ------------------------------------------------------
+  // Scan new log entries for the `favor-tier-up` log kind — the tick
+  // emitter is the source of truth and the entry already carries the
+  // resolved tier index + name. Scoped to the area where the tier-up
+  // happened (sacrifice rooms = shrines, in practice).
+  for (const e of newLogEntries) {
+    if (e.kind !== 'favor-tier-up') continue
+    const tierName = e.meta?.tierName
+    const tier = e.meta?.tier
+    if (!tierName || !tier) continue
+    adds.push({
+      at: now,
+      areaId: next.position.areaId,
+      kind: 'favor-tier-up',
+      text: `Reached ${tierName}.`,
+      meta: { tier, tierName },
+    })
   }
 
   // --- Mob first-defeat / boss-defeat -------------------------------------
@@ -207,7 +250,7 @@ export function deriveJournalEntries(
       if (journaledItemIds.has(itemId)) continue
       const key = `item:${itemId}`
       if (seenInDerivation.has(key)) continue
-      const def = world.items.find((i) => i.id === itemId)
+      const def = getItem(world, itemId)
       if (!def) continue
       const rarity = candidate.rarity
       // Gate first-item entries on rare+ — mirrors the effects

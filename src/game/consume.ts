@@ -8,6 +8,7 @@ import {
 import type { LogEntry } from '../log'
 import { getSpell } from '../spells'
 import type { WorldContent } from '../worlds'
+import { getItem } from './worldLookup'
 import { focusAdverb, healAdverb } from './intensity'
 
 const HEAL_THRESHOLD = 0.35
@@ -32,7 +33,7 @@ function findConsumable(
   for (let i = 0; i < inventory.length; i++) {
     const item = inventory[i]
     if (!item.archetypeId) continue
-    const def = world.items.find((d) => d.id === item.archetypeId)
+    const def = getItem(world, item.archetypeId)
     if (!def || def.kind !== 'consumable') continue
     if (def.effect.kind !== effectKind) continue
     return { inventoryIdx: i, def: def as ItemDef & ConsumableArchetype }

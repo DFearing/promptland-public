@@ -67,6 +67,14 @@ export function deriveEvents(ctx: EffectContext): EffectEvent[] {
       })
       continue
     }
+    if (meta?.isSave) {
+      events.push({
+        id: nextId(),
+        kind: 'death-save',
+        mobName: meta.mobName,
+      })
+      continue
+    }
     switch (entry.kind) {
       case 'chapter': {
         const chMeta = entry.meta
@@ -184,6 +192,14 @@ export function deriveEvents(ctx: EffectContext): EffectEvent[] {
           if (rarity === 'rare' || rarity === 'epic' || rarity === 'legendary') {
             events.push({ id: nextId(), kind: 'new-item', name: candName })
           }
+        }
+        break
+      }
+      case 'favor-tier-up': {
+        const tier = entry.meta?.tier
+        const tierName = entry.meta?.tierName
+        if (tier && tierName) {
+          events.push({ id: nextId(), kind: 'favor-tier-up', tier, tierName })
         }
         break
       }

@@ -13,6 +13,7 @@ import type { Rng } from '../rng'
 import { uuid } from '../util/uuid'
 import type { WorldContent } from '../worlds'
 import { biasEquipmentDrop } from './lootBias'
+import { getItem } from './worldLookup'
 import { computeInventoryWeight, weightCapacity } from './weight'
 
 function rarityRank(r: Rarity): number {
@@ -327,7 +328,7 @@ export function applyDrops(
   let inventory = character.inventory
   let segment = character.segment
   for (const entry of resolved.entries) {
-    const def = world.items.find((i) => i.id === entry.archetypeId)
+    const def = getItem(world, entry.archetypeId)
     if (!def) continue
     inventory = addItemToInventory(
       inventory,
@@ -406,10 +407,10 @@ function resolveDrops(
   // per-drop addends matches `applyDrops`'s prior behaviour.
   let runningWeight = computeInventoryWeight(
     { ...character, inventory: existingInventory },
-    world.items,
+    world,
   )
   for (const drop of dropItems) {
-    const def = world.items.find((i) => i.id === drop.itemId)
+    const def = getItem(world, drop.itemId)
     if (!def) continue
     const addWeight = (def.weight ?? 1) * drop.qty
     if (runningWeight + addWeight > hardCap) {
@@ -455,7 +456,7 @@ export function applyChestEntries(
   let segment = character.segment
   for (const entry of entries) {
     if (!entry.archetypeId) continue
-    const def = world.items.find((i) => i.id === entry.archetypeId)
+    const def = getItem(world, entry.archetypeId)
     if (!def) continue
     const rarity = entry.rarity ?? 'common'
     const level = entry.level ?? 1

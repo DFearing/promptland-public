@@ -20,6 +20,18 @@ export const SEVERITIES: Severity[] = [
   'critical',
 ]
 
+/** Step a severity up by `steps` ladder rungs. Saturates at `critical`.
+ *  Used by the Anointed (tier 4) shrine blessing to add one severity tier
+ *  to every character attack — `grazing` becomes `light`, `severe`
+ *  becomes `critical`, and so on. Negative `steps` are clamped at 0. */
+export function ascendSeverity(severity: Severity, steps: number): Severity {
+  if (steps <= 0) return severity
+  const idx = SEVERITIES.indexOf(severity)
+  if (idx < 0) return severity
+  const next = Math.min(SEVERITIES.length - 1, idx + steps)
+  return SEVERITIES[next]
+}
+
 export interface VerbSet {
   grazing: string[]
   light: string[]

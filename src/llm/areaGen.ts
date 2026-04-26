@@ -1,6 +1,7 @@
 import { enforceAreaCaps, pruneDisconnectedRooms, type ShapeRoom } from '../areas'
-import type { Area, Room, RoomEncounter } from '../areas/types'
+import type { Area, NPC, Room, RoomEncounter } from '../areas/types'
 import { roomKey } from '../areas/types'
+import { isNPCFriendlyRoomType } from './templates'
 import type { EntityCache, EntityCacheEntry, GenerationMeta } from '../storage/types'
 
 /** Maximum number of LLM-generated areas per world. */
@@ -9,7 +10,9 @@ export const MAX_GENERATED_AREAS = 100
 /** Shape returned by the LLM flavor-only pass. The LLM names and
  *  describes rooms in order against a pre-built shape; positions and
  *  types come from the shape, not the payload. Optional per-room
- *  `encounter` lets the LLM curate specific foes by mob id (Phase 1). */
+ *  `encounter` lets the LLM curate specific foes by mob id (Phase 1).
+ *  Optional per-room `npc` adds a fixed flavor character whose
+ *  dialogue is generated up-front and replayed on every visit. */
 export interface GeneratedAreaPayload {
   id: string
   name: string
@@ -18,6 +21,7 @@ export interface GeneratedAreaPayload {
     name: string
     description: string
     encounter?: RoomEncounter
+    npc?: NPC
   }>
 }
 
@@ -53,6 +57,11 @@ export function payloadToArea(
     // dead data.
     const encounter =
       s.type !== 'safe' && flavor?.encounter ? flavor.encounter : undefined
+    // NPCs only ride along on welcoming room types — the prompt asks
+    // for the same restriction, but the install pass enforces it so a
+    // hallucinated NPC in a corridor or boss room can't slip through.
+    const npc =
+      flavor?.npc && isNPCFriendlyRoomType(s.type) ? flavor.npc : undefined
     rooms[roomKey(s.x, s.y, s.z)] = {
       x: s.x,
       y: s.y,
@@ -61,6 +70,7 @@ export function payloadToArea(
       name,
       description,
       ...(encounter ? { encounter } : {}),
+      ...(npc ? { npc } : {}),
       // Exit rooms in generated areas are frontier exits — mark them as
       // pending so the tick loop triggers a fresh generation when the
       // player reaches them, enabling recursive exploration.

@@ -32,10 +32,12 @@ Every character carries:
 - **6 stats** — STR, DEX, CON, INT, WIS, CHA (`src/character/types.ts:7`).
 - **HP / MP / XP** — both HP and MP pool sizes are derived from species + class bases plus CON/MIND stat mods; XP is per-level.
 - **11 equipment slots** — weapon, offhand, armor (torso), head, arms, hands, legs, feet, cape, amulet, ring1, ring2. One-handed weapons can dual-wield into the offhand; two-handers occupy both hands.
-- **Inventory** — flat array. Items carry archetype id, name, rarity, level, and acquisition metadata (source, mob, area, room). Stackable items (junk, scrolls, consumables) merge when archetype + rarity + level all match.
-- **Drives** — 5-element vector (hunger, fatigue, greed, curiosity, weight). The top drive above threshold picks the current goal.
+- **Inventory** — flat array. Items carry archetype id, name, rarity, level, and acquisition metadata (source, mob, area, room). Stackable items (junk, scrolls, consumables) merge when archetype + rarity + level all match. Some equipment carries passive buffs: `hungerSlow` reduces hunger accrual; rest-boost items improve HP recovery per resting tick.
+- **Drives** — 6-element vector (hunger, fatigue, greed, curiosity, weight, piety). The top drive above threshold picks the current goal.
 - **Death record** — every death is logged with cause, area, room, killer, timestamp. Becomes LLM fodder for later flavor.
 - **Title** — hand-authored ladder per class up to level 100 (`src/worlds/manifests.ts`). Beyond 100, titles are LLM-generated per character and cached.
+- **Journal** — chronological milestone log (area-discovered, mob-first-defeat, boss-defeat, item-first-loot, level-up, death, death-save, favor-tier-up). Grouped by area in the Journal tab on the character sheet.
+- **Favor & blessings** — favor (0–1000) accumulates from sacrifices at shrine rooms. Crosses tier thresholds (Unseen → Touched → Witnessed → Beloved → Anointed) that gate shrine effects. A shrine visit at tier ≥ 1 grants an `ActiveBlessing` that ticks down over the run. At Anointed, one death-save is allowed: the lethal blow is converted to a 50% HP wound, conditions clear, the character respawns at `lastSafePosition`, and favor resets to 0. Saves are tracked separately from deaths in `character.saved` (`SavedRecord[]`).
 
 Level-up: every level grants a flat HP + MP bump (species + class base + CON/MIND mod). Stat bumps fire at class-defined intervals — some classes bump STR every 4 levels, others every 3. See `applyOneLevel` in `src/game/tick.ts`.
 
@@ -51,8 +53,9 @@ Stat-driven, turn-based, MUD-style. Each tick during `fighting` is one round. Th
 - **Mob self-heal:** mobs with `healCharges > 0` heal when HP < 35%. One charge per use, capped by the template's `healAmount`.
 - **Conditions:** `poisoned`, `bleeding`, `burning`, `slowed`, `stunned`, `blessed`, and per-world customs. Three kinds: `dot` (damage each tick, clamped so DOTs can't kill), `skip` (skip next action), `stat-mod` (temporary attack/defense/stat changes).
 - **Elements:** conditions carry an optional element tag (`fire`, `ice`, `electric`, `earth`, `hack`). Drives themed visual effects and some status interactions.
-- **Spells:** magic-capable classes cast damage, heal, buff/debuff, and teleport-to-safe spells from the world's spell library. Scroll items carry single-use versions of spells.
+- **Spells:** magic-capable classes cast damage, heal, buff/debuff, and teleport-to-safe spells from the world's spell library. Scroll items carry single-use versions of spells. Additional spells are acquired as the character levels up, following class-specific acquisition rules.
 - **Auto-consume:** when HP drops below 50%, healing potions fire automatically. Mana potions fire below 50% MP. See `maybeAutoConsume` in `src/game/consume.ts`.
+- **Stealth:** rogue and ranger classes open combat with a stealth first-strike — a free damage hit before the mob gets its first action. The log marks the opener with its own style.
 
 Combat ends when HP hits zero for either side. On defeat, `resolveMobDefeat` awards XP, rolls loot, satisfies greed, auto-equips upgrades, and returns to exploring.
 
@@ -69,8 +72,9 @@ Drives accumulate over time while exploring and drop when satisfied. The top dri
 | `greed` | Exploring | Defeating mobs (gold/loot drops) |
 | `curiosity` | Exploring | Entering a previously unvisited room |
 | `weight` | Computed from inventory | Selling at a shop — not yet an auto-trigger, but drives the "heading to a shop" goal via the same BFS |
+| `piety` | Computed from favor tier | A shrine visit that picks up a blessing; piety stays low while a blessing is active and rises again as it expires |
 
-`weight` is special — it's not incremented each tick; it's recomputed from the inventory's total weight vs. the character's STR-derived capacity. See `src/game/weight.ts`.
+`weight` and `piety` are computed each tick rather than incremented — `weight` from inventory total vs. STR capacity (`src/game/weight.ts`), `piety` from the favor tier and current blessing state (`src/game/favor.ts`). Higher tiers feel a stronger shrine pull; Anointed effectively always wants the shrine when no blessing is running.
 
 ---
 
@@ -115,7 +119,7 @@ Dead characters' corpses could become discoverable entities in the shared-world 
 - **Shop inventory** — hand-authored per world in `WorldContent.shopInventory`. Each entry has `itemId`, `price`, and `maxStock`.
 - **Auto-buy (wired):** when the character is in a shop with `gold >= price`, `tryShopPurchase` in `src/game/tick.ts` buys healing potions when HP < 50% and mana potions when magic < 50%. Capped at 3 per consumable already in inventory.
 - **Auto-sell (wired):** when `weight` drive crosses threshold at a shop, `pickItemsToSell` in `src/game/sell.ts` picks items to offload. Class-aware — always keeps consumables and scrolls, sells junk, filters equipment by whether it matches class bonuses.
-- **Sacrifice (dev-only):** `pickItemsToSacrifice` in `src/game/sacrifice.ts` offloads low-rarity items for 1 gold each. Currently only callable from the Dev Panel; not wired into the main loop.
+- **Sacrifice (wired):** `pickItemsToSacrifice` in `src/game/sacrifice.ts` offloads overflow low-rarity items for 1 gold each at shrine rooms. Triggered automatically when the weight drive is high and no shop is reachable. Also callable manually from the Dev Panel.
 
 > ⚠️ **No player-initiated shop UI.** Shopping is entirely automatic. A player can't browse a shop's inventory and pick something to buy. The shop's presence is only visible in the room's description.
 

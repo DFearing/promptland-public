@@ -65,12 +65,29 @@ const WEIGHT_LINES: readonly string[] = [
   '{name} adjusts the straps; everything they own is demanding a second opinion.',
 ]
 
+// Piety lines fire when the shrine pull becomes the dominant goal — the
+// character's thoughts turn to the gods (or net, or archive) and a
+// chapel-shaped destination starts to feel overdue. Kept faith-neutral
+// so the same pool reads under fantasy / cyberpunk / sci-fi without
+// re-skinning per world.
+const PIETY_LINES: readonly string[] = [
+  "{name}'s thoughts turn to the silence above the lanterns.",
+  '{name} feels watched, as if from a long way off, and the feeling is not unkind.',
+  '{name} remembers a candle they did not light.',
+  '{name} starts looking for a place quiet enough to be heard in.',
+  "{name}'s steps slow at the thought of an altar — a prayer is overdue.",
+  '{name} catches themselves listening for something the road never says back.',
+  '{name} feels the weight of a debt no purse will settle.',
+  '{name} starts wanting somewhere lit by something other than torches.',
+]
+
 const LINES_BY_DRIVE: Record<Drive, readonly string[]> = {
   hunger: HUNGER_LINES,
   fatigue: FATIGUE_LINES,
   greed: GREED_LINES,
   curiosity: CURIOSITY_LINES,
   weight: WEIGHT_LINES,
+  piety: PIETY_LINES,
 }
 
 /** Pick a narrative line announcing the character is now pursuing the

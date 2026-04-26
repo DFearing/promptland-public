@@ -492,8 +492,11 @@ export default function Topbar({
         .topbar__btn-arrow { display: inline-block; font-family: var(--font-mono); }
         .topbar__btn--roster { color: var(--fg-1); }
         .topbar__btn--roster:hover { color: var(--fg-1); text-shadow: 0 0 6px var(--fg-1); }
-        .topbar__btn--settings { color: var(--warn); }
-        .topbar__btn--settings:hover { color: var(--warn); text-shadow: 0 0 6px var(--warn); }
+        /* Same color as the Roster button so the two nav entries read as
+           a matched pair instead of the gear standing out in warn-amber.
+           Settings is utility, not a status indicator. */
+        .topbar__btn--settings { color: var(--fg-1); }
+        .topbar__btn--settings:hover { color: var(--fg-1); text-shadow: 0 0 6px var(--fg-1); }
         /* Icon reads as light-gray chrome against the warn-colored label —
            the button's color applies to the text, the icon gets a quieter
            own color so it feels like an icon, not a second accent. Spins a

@@ -1,4 +1,5 @@
 export type {
+  ActiveBlessing,
   Character,
   DeathRecord,
   Equipped,
@@ -10,11 +11,12 @@ export type {
   LevelSegment,
   LevelUpLearnedSpell,
   LevelUpRecord,
+  SavedRecord,
   StatBlock,
 } from './types'
 export { formatActorName, type ActorContext } from './actorName'
 export { describeCharacter, type CharacterDisplay } from './display'
-export { BASE_HP, maxHpFor, xpToNextLevel } from './stats'
+export { BASE_HP, castingStatValue, maxHpFor, maxMagicFor, xpToNextLevel } from './stats'
 export { makeDefaults, migrateCharacter } from './defaults'
 export {
   LAST_AUTHORED_TITLE_INDEX,

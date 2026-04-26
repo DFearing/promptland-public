@@ -4,6 +4,7 @@ import {
   type InventoryItem,
   makeDefaults,
   maxHpFor,
+  maxMagicFor,
 } from '../../character'
 import { mulberry32 } from '../../rng'
 import { getWorldContent, getWorldManifest } from '../../worlds'
@@ -64,7 +65,10 @@ function makeStartingCharacter(): Character {
     acquired: { at: FROZEN_TIME, source: 'starting' },
   }))
   const maxHp = maxHpFor(stats)
-  const maxMagic = klass.startingMaxMagic
+  const maxMagic =
+    klass.magicAffinity !== undefined
+      ? maxMagicFor(stats, klass.magicAffinity, klass.castingStat)
+      : (klass.startingMaxMagic ?? 0)
   const defaults = makeDefaults('fantasy')
   return {
     ...defaults,
@@ -181,43 +185,26 @@ describe('runTick: structural invariants over a 50-tick scripted run', () => {
     expect(final.log.length).toBeLessThanOrEqual(200)
   })
 
-  it('reports drift between meta.name and entry.text (KNOWN ISSUE)', () => {
-    // Surfaces the live tick.ts emitters that set `meta.name = c.name`
-    // while the rendered text uses `formatActorName(c, 'log')`. At low
-    // levels (idx < 5) those produce different strings ("Hiro" vs
-    // "Wayfarer"), so LogPanel.tsx's name-token highlight silently
-    // fails on those lines.
-    //
-    // Worst-case impact today is cosmetic on narrative / explore lines,
-    // but the same drift on a `damage` line would mis-route the
-    // effects/derive `damage-dealt` vs `damage-taken` decision (it
-    // splits on `text.startsWith(characterName)`). The drift kinds are
-    // tracked here so adding a new offender flips the snapshot, while
-    // an authored fix that aligns name + text shrinks the list.
-    const offenders: Array<{ kind: string; text: string; metaName: string }> = []
+  it('every log entry whose meta.name is set embeds it in text', () => {
+    // Crown invariant: LogPanel.tsx highlights the actor token by
+    // string-matching `meta.name` inside `entry.text`, and
+    // effects/derive.ts splits damage events on `text.startsWith(name)`
+    // — both rely on meta.name being literally present in text. A
+    // regression here means an emitter is rendering text with the
+    // formatted name (e.g. "Wayfarer" at low levels) but stamping the
+    // bare character name into meta, or vice-versa. Live-fire scan over
+    // the full 50-tick scripted log so any tick-time emitter that
+    // drifts gets caught.
     for (const e of final.log) {
       const meta = 'meta' in e ? e.meta : undefined
-      if (meta?.name && !e.text.includes(meta.name)) {
-        offenders.push({ kind: e.kind, text: e.text, metaName: meta.name })
+      if (meta?.name) {
+        expect(
+          e.text,
+          `${e.kind} entry: meta.name=${JSON.stringify(meta.name)} text=${JSON.stringify(e.text)}`,
+        ).toContain(meta.name)
       }
     }
-    // If this snapshot grows, you've added a new emitter that drifts.
-    // If it shrinks, you've fixed one — update the snapshot.
-    expect({
-      offenderCount: offenders.length,
-      offenderKinds: [...new Set(offenders.map((o) => o.kind))].sort(),
-    }).toMatchSnapshot()
   })
-
-  // The strict per-entry assertion `meta.name ⊆ text` is currently
-  // violated at low levels by tick.ts emitters that set `meta.name =
-  // c.name` while rendering text via `formatActorName(c, 'log')`
-  // (e.g. tick.ts:939 explore line, ~2631 damage line). The drift
-  // surfaces in the offender snapshot above; a strict assertion here
-  // would just be redundant noise until those callsites are fixed.
-  // When tick.ts threads the formatted name into both fields, flip
-  // this back on by re-asserting `text.includes(meta.name)` for every
-  // entry kind.
 
   it('every log entry whose meta.mobName is set embeds it in text', () => {
     for (const e of final.log) {

@@ -12,13 +12,10 @@ export const DEFAULT_THEME: ThemeId = 'mud'
 export const THEMES: readonly ThemeMeta[] = [
   { id: 'mud', name: 'MUD (Modern)', description: 'Phosphor green hud with semantic color accents. The default.' },
   { id: 'mud-classic', name: 'MUD (Classic)', description: 'Pure green-on-black. No color accents — every token collapses to a single phosphor shade.' },
-  { id: 'amber', name: 'Amber', description: 'PC/3270 amber terminal.' },
-  { id: 'phosphor', name: 'Phosphor', description: 'Paper white on black.' },
-  { id: 'neon', name: 'Neon', description: 'Purple on slate. The old look.' },
-  { id: 'cyber', name: 'Cyber', description: 'Magenta and cyan on near-black.' },
-  { id: 'vacuum', name: 'Vacuum', description: 'Ice-white on navy.' },
-  { id: 'vellum', name: 'Vellum', description: 'Ink on parchment. The only light one.' },
-  { id: 'paper', name: 'Paper', description: 'Pure white background, black text. For debugging color rules.' },
+  { id: 'chromejack', name: 'Chromejack', description: 'Cyber-yellow chrome on slate. Cyan runner, magenta links, hot-pink danger.' },
+  { id: 'lcars', name: 'LCARS', description: 'Star Trek TNG console — peach on void, mauve chrome, Federation blue navigation.' },
+  { id: 'channel', name: 'Channel', description: 'Office-chat aesthetic. Aubergine highlights, channel blue, mention yellow.' },
+  { id: 'newsroom', name: 'Newsroom', description: 'Broadsheet ink on cream paper. The only light one.' },
   { id: 'custom', name: 'Custom', description: 'Your own palette — eight tokens. Selecting this theme reveals the editor.' },
 ] as const
 

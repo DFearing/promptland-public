@@ -523,6 +523,29 @@ export interface AreaGenRoomFlavor {
    *  rooms, story beats) — future entries after defeat revert to the
    *  pool. */
   encounter?: AreaGenRoomEncounter
+  /** Optional fixed NPC standing in this room. Generated once at area-
+   *  gen time, baked into the cached payload, replayed verbatim
+   *  forever — no further LLM calls per interaction. NPCs only belong
+   *  in welcoming room types (safe, inn, shrine, shop, water,
+   *  entrance); the install pass strips them from rooms where they'd
+   *  read as out of place. */
+  npc?: AreaGenNPC
+}
+
+/** NPC the area-gen LLM emits inline. Field-compatible with the
+ *  in-game `NPC` (areas/types.ts) — copied directly into the room at
+ *  install time. */
+export interface AreaGenNPC {
+  id: string
+  name: string
+  role: string
+  description: string
+  cares: 'class' | 'species'
+  hooks: Record<string, string>
+  firstMeet: string
+  regular: string[]
+  frontierUnknown?: string
+  frontierKnown?: string
 }
 
 /** Common rarity / firstOnly / loot fields shared by both variants. */
@@ -718,6 +741,12 @@ export interface AreaGenParams {
   /** World's item pool, passed to the LLM so curated loot drops can
    *  reference existing items by id before inventing bespoke ones. */
   itemPool: AreaGenItemPoolEntry[]
+  /** Class ids the world supports. The LLM emits NPC `hooks` keyed by
+   *  these ids when an NPC's coin flip lands on `cares: "class"`. */
+  classIds: string[]
+  /** Species ids the world supports. Same purpose as classIds, but
+   *  for the `cares: "species"` axis. */
+  speciesIds: string[]
 }
 
 /** Compact pool entry handed to the LLM so it can pick curated
@@ -751,6 +780,28 @@ function formatMobPool(pool: AreaGenMobPoolEntry[]): string {
 function formatItemPool(pool: AreaGenItemPoolEntry[]): string {
   if (pool.length === 0) return '(none)'
   return pool.map((i) => `- ${i.id}: ${i.name} [${i.kind}]`).join('\n')
+}
+
+function formatIdList(ids: string[]): string {
+  if (ids.length === 0) return '(none)'
+  return ids.map((id) => `- ${id}`).join('\n')
+}
+
+/** Room types where a fixed NPC reads as plausible. Mobs and dungeon
+ *  rooms aren't a place to find a chatty informant. Mirrored in the
+ *  parser and in payloadToArea so a hallucinated NPC in an unfit room
+ *  gets dropped rather than baked into the area. */
+const NPC_FRIENDLY_ROOM_TYPES: readonly RoomType[] = [
+  'safe',
+  'inn',
+  'shrine',
+  'shop',
+  'water',
+  'entrance',
+]
+
+export function isNPCFriendlyRoomType(t: RoomType): boolean {
+  return (NPC_FRIENDLY_ROOM_TYPES as readonly string[]).includes(t)
 }
 
 const RARITY_LIST: readonly Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary']
@@ -796,6 +847,83 @@ function parseBespokeMob(v: unknown): AreaGenBespokeMob | null {
     level: Math.max(1, Math.round(m.level)),
     ...(loot && loot.length > 0 ? { loot } : {}),
   }
+}
+
+// ---- NPC parser ---------------------------------------------------------
+
+// Tightens the LLM's NPC payload into a well-typed AreaGenNPC. Returns
+// null on any structural failure so the room just stays NPC-less rather
+// than failing the whole area gen — fixed NPCs are flavor, not load-
+// bearing. Strips empty/whitespace strings, drops hooks whose value is
+// not a non-empty string, and tolerates an empty `regular` array (the
+// runtime line picker falls back to `firstMeet` when there's nothing
+// to rotate through).
+function parseAreaGenNPC(v: unknown): AreaGenNPC | null {
+  if (!v || typeof v !== 'object') return null
+  const m = v as Record<string, unknown>
+  if (
+    typeof m.id !== 'string' ||
+    typeof m.name !== 'string' ||
+    typeof m.role !== 'string' ||
+    typeof m.description !== 'string' ||
+    typeof m.firstMeet !== 'string'
+  ) {
+    return null
+  }
+  if (m.cares !== 'class' && m.cares !== 'species') return null
+  const id = m.id.trim()
+  const name = m.name.trim()
+  const role = m.role.trim()
+  const description = m.description.trim()
+  const firstMeet = m.firstMeet.trim()
+  if (
+    id.length === 0 ||
+    name.length === 0 ||
+    role.length === 0 ||
+    description.length === 0 ||
+    firstMeet.length === 0
+  ) {
+    return null
+  }
+  const hooks: Record<string, string> = {}
+  if (m.hooks && typeof m.hooks === 'object') {
+    for (const [k, hv] of Object.entries(m.hooks as Record<string, unknown>)) {
+      if (typeof hv !== 'string') continue
+      const trimmed = hv.trim()
+      if (trimmed.length === 0) continue
+      hooks[k.trim()] = trimmed
+    }
+  }
+  const regular: string[] = []
+  if (Array.isArray(m.regular)) {
+    for (const line of m.regular) {
+      if (typeof line !== 'string') continue
+      const trimmed = line.trim()
+      if (trimmed.length > 0) regular.push(trimmed)
+    }
+  }
+  const out: AreaGenNPC = {
+    id,
+    name,
+    role,
+    description,
+    cares: m.cares,
+    hooks,
+    firstMeet,
+    regular,
+  }
+  // Frontier overrides are paired — include both or neither. If only
+  // one is present the runtime would fall back to the missing side at
+  // the wrong moment, which is worse than no frontier flavor at all.
+  if (typeof m.frontierUnknown === 'string' && typeof m.frontierKnown === 'string') {
+    const fu = m.frontierUnknown.trim()
+    const fk = m.frontierKnown.trim()
+    if (fu.length > 0 && fk.length > 0) {
+      out.frontierUnknown = fu
+      out.frontierKnown = fk
+    }
+  }
+  return out
 }
 
 // ---- Curated loot + bespoke item parsers --------------------------------
@@ -967,12 +1095,14 @@ function parseBespokeLoot(v: unknown): AreaGenBespokeMob['loot'] | null {
 }
 
 // Shape-first area generation. v3 added curated-encounter refs by id.
-// v4 added bespoke mobs. v5 adds curated per-room loot overrides
-// (including bespoke items via inline `newItem`). Older cached payloads
-// (v2..v4) still parse — loot / newItem / newMob fields are all optional.
+// v4 added bespoke mobs. v5 added curated per-room loot overrides
+// (including bespoke items via inline `newItem`). v6 adds optional
+// fixed NPCs in welcoming rooms (safe / inn / shrine / shop / water /
+// entrance). Older cached payloads (v2..v5) still parse — every new
+// field is optional.
 export const areaGenTemplate: PromptTemplate<AreaGenParams, AreaGenPayload> = {
   id: 'areaGen',
-  version: '5',
+  version: '7',
   kind: 'location',
   defaultSystemTemplate: `You generate flavor (names + short descriptions) for new explorable areas in a {{worldId}} world.{{worldContext}}
 The character is a level {{characterLevel}} {{characterClass}} named {{characterName}}.
@@ -992,8 +1122,14 @@ Available mobs (pick from these ids when adding a curated encounter):
 Available items (pick from these ids for curated loot drops; kind = junk/consumable/equipment/scroll):
 {{itemPoolList}}
 
+Class ids (use these as keys in an NPC's "hooks" map when the NPC's "cares" is "class"):
+{{classIdList}}
+
+Species ids (use these as keys in an NPC's "hooks" map when the NPC's "cares" is "species"):
+{{speciesIdList}}
+
 Respond with compact JSON in this exact shape:
-{"id": string, "name": string, "description": string, "rooms": [{"name": string, "description": string, "encounter"?: (REF | NEW)}]}
+{"id": string, "name": string, "description": string, "rooms": [{"name": string, "description": string, "encounter"?: (REF | NEW), "npc"?: NPC}]}
 
 An encounter is EITHER a reference to an existing mob (REF), OR a new bespoke mob (NEW). Pick exactly one mob variant per encounter. Both REF and NEW may ALSO carry an optional curated-loot override under "loot".
 
@@ -1014,6 +1150,9 @@ NEW: {"newItem": BespokeItem, "rarity"?: Rarity, "qty"?: number, "level"?: numbe
 
 BespokeItem:
 {"id": string, "name": string, "description": string, "kind": "junk"|"equipment", "value"?: number, "stackable"?: boolean, "weight"?: number, "slot"?: "weapon"|"armor"|"head"|"arms"|"hands"|"legs"|"feet"|"cape"|"amulet"|"ring", "bonuses"?: {"attack"?: number, "defense"?: number, "strength"?: number, "dexterity"?: number, "constitution"?: number, "intelligence"?: number, "wisdom"?: number, "charisma"?: number}, "hands"?: 1|2, "requirements"?: {"level"?: number, "strength"?: number, "dexterity"?: number, "intelligence"?: number, "wisdom"?: number}}
+
+NPC (a fixed flavor character standing in a room):
+{"id": string, "name": string, "role": string, "description": string, "cares": "class"|"species", "hooks": {[id]: string}, "firstMeet": string, "regular": [string], "frontierUnknown"?: string, "frontierKnown"?: string}
 
 Rules:
 - id: short kebab-case slug (e.g. "forsaken-hollow").
@@ -1040,7 +1179,22 @@ Rules:
   * 1-3 items per loot table. More than that feels like a vendor dump, not a drop.
   * PREFER REF for items — reuse existing ids from the item pool. Use NEW (bespoke items) only when the pool doesn't have a thematic fit.
   * Bespoke items: kind must be "junk" or "equipment" (consumables and scrolls are not supported as bespoke yet). Equipment requires "slot" and "bonuses". Scale bonuses to area level {{areaLevel}}: roughly areaLevel / 2 each for attack/defense at common rarity, then rarity multiplies (rare ≈ ×1.5, legendary ≈ ×2.5).
-  * Rarity on a curated item is OPTIONAL — set it for a named-item drop ("the Marrow Lord's crown is always legendary"), omit for ambient pool items where the usual rarity roll is fine.`,
+  * Rarity on a curated item is OPTIONAL — set it for a named-item drop ("the Marrow Lord's crown is always legendary"), omit for ambient pool items where the usual rarity roll is fine.
+- NPC guidance (OPTIONAL — most rooms omit it):
+  * Add an "npc" only on rooms with one of these types: safe, inn, shrine, shop, water, entrance. NEVER place an NPC in a corridor, chamber, crypt, storage, portal, or exit room — they read as out of place there and the install pass will drop them anyway.
+  * At most ONE NPC per area on a wilderness, dungeon, or ruin (a hermit, a wandering survivor, a shrine-keeper). Settlements may carry up to TWO. Never more.
+  * Most rooms have no NPC. NPCs are flavor accents, not fixtures on every safe tile.
+  * id: kebab-case slug, unique among NPCs in this area.
+  * name: 1-3 words, fitting {{worldId}} naming conventions.
+  * role: a single short noun phrase ("retired city guard", "dock-side mender") — shapes voice, not displayed verbatim.
+  * description: 1-2 sentences for what the character sees.
+  * cares: flip a coin, pick exactly one — "class" OR "species". Each NPC reacts to ONE axis only.
+  * hooks: a short greeting fragment per id on the chosen axis, used to color the first meeting. If cares is "class", hooks MUST be keyed by class ids from the list above; if "species", by species ids. Provide a hook for EVERY id in the chosen axis (the engine falls through to a hookless first meet for any missing key, which feels like the NPC didn't notice the player). Each hook is 4-15 words, not a full sentence — it gets prepended to firstMeet.
+  * firstMeet: 1-2 sentences that introduce the NPC and give one piece of local lay-of-the-land — what part of the area they know best, what's nearby, who lives here. This line plays once.
+  * regular: 2-4 distinct lines (1-2 sentences each), each a different small observation, rumor, or warning. The engine rotates through them on subsequent visits. Each line should READ as if days have passed since the last meeting — references like "still here, eh?" are good.
+  * frontierUnknown / frontierKnown: include BOTH or NEITHER. Include them when the NPC's room neighbors an exit room (look at the layout above; an "exit" type at an adjacent (x,y,z) within 2 tiles counts). frontierUnknown is what the NPC says when the exit's destination hasn't been generated yet — phrase it as warning about an unknown route ("there is an exit to an unknown destination, and I would not walk it lightly"). frontierKnown contains a literal "{areaName}" placeholder the engine substitutes once that exit resolves to a named area ("they say {areaName} lies down that way — bring rope").
+  * Voice: the NPC speaks IN VOICE — first person, no narration around it. Don't write "Harwick says: 'hello'." Write "Hello, traveler. I'm Harwick — used to walk the city wall before my knees gave out."
+  * Tone discipline: every NPC line (firstMeet, hooks, regular, frontierUnknown, frontierKnown) MUST stay inside the "Allowed concepts" list above and MUST NOT mention any item from the "Forbidden concepts" list. NPCs are baked once and replayed forever, so a single tone-breaking word ("chrome" in a fantasy world, "spell" in a sci-fi world) poisons the cached area permanently. When in doubt, choose plainer words from the world's allowed vocabulary.`,
   systemPlaceholders: [
     'worldId',
     'characterName',
@@ -1057,6 +1211,8 @@ Rules:
     'roomCount',
     'mobPoolList',
     'itemPoolList',
+    'classIdList',
+    'speciesIdList',
   ],
   systemValues(params, ctx) {
     return {
@@ -1075,6 +1231,8 @@ Rules:
       roomCount: String(params.rooms.length),
       mobPoolList: formatMobPool(params.mobPool),
       itemPoolList: formatItemPool(params.itemPool),
+      classIdList: formatIdList(params.classIds),
+      speciesIdList: formatIdList(params.speciesIds),
     }
   },
   worldIdOf(params) {
@@ -1134,6 +1292,11 @@ Rules:
           }
         }
       }
+      // NPC is optional, follows the same "drop silently on bad shape"
+      // policy as encounter. A malformed NPC shouldn't tank the whole
+      // area — the room just stays NPC-less.
+      const npc = parseAreaGenNPC((r as { npc?: unknown }).npc)
+      if (npc) flavor.npc = npc
       return flavor
     })
     if (rooms.length === 0) {

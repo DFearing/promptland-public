@@ -28,6 +28,11 @@ Requirements:
 | `npm run lint` | ESLint across the whole repo. Uses the flat-config setup in `eslint.config.js`. Zero-warnings is the goal; there's currently 1 known benign warning on `App.tsx`. |
 | `npm run preview` | Serve the built `dist/` via Vite's preview server. Useful for sanity-checking a production build. |
 | `npm run proxy` | Start the Claude Code proxy (`tools/claude-proxy/server.mjs`). See [LLM-SETUP.md](LLM-SETUP.md). |
+| `npm run sim` | Run the pacing simulator with the default profile (`tools/sim/goals.json`). Exit code 1 on any failing verdict. See `tools/sim/README.md`. |
+| `npm run sim:warrior` | Sim with the warrior-quick profile. |
+| `npm run sim:mage` | Sim with the mage-midgame profile. |
+| `npm run sim:long` | Sim with the long-haul profile. |
+| `npm run pixel-gen` | Start the local pixel-art bridge (`tools/pixel-gen/server.mjs`) that fronts a ComfyUI instance. See `tools/pixel-gen/README.md`. |
 
 ---
 
@@ -40,6 +45,7 @@ A side panel accessible via a toggle hotkey (see `src/App.tsx` for the current b
 - **Rest / Meditate.** Transition to resting or meditating for 6 ticks.
 - **Reset location.** Teleport back to the world's starting room without wiping any other state.
 - **Sell items / Sacrifice items.** One-click bulk-offload batches.
+- **Save.** Force an immediate save to IndexedDB outside of the normal event-driven cadence.
 - **Die.** Two-click (2s confirm) instant-kill to test death/respawn.
 
 ### Spawn
@@ -63,6 +69,9 @@ Swap themes, scale, and per-state tick speeds live. Changes persist to `localSto
 ### Area
 Lists every loaded area (authored + LLM-generated) grouped into level bands (1–5, 6–10, 11–15, …). Click any area to teleport. "Purge generated areas" wipes all LLM-generated areas for the current world (useful when iterating on prompts).
 
+### Gen
+Pixel-art image generation panel (`src/components/DevPanelGen.tsx`). Fires a test generation request to the running pixel-gen bridge and displays the result inline. Shows bridge health status. Requires `npm run pixel-gen` to be running.
+
 ---
 
 ## Project structure
@@ -82,7 +91,9 @@ Lists every loaded area (authored + LLM-generated) grouped into level bands (1�
 │   ├── effects/ game/ items/ llm/ log/ mobs/ sound/
 │   ├── spells/ storage/ themes/ util/ worlds/
 ├── tools/
-│   └── claude-proxy/         # local proxy to Claude Code subscription
+│   ├── claude-proxy/         # local proxy to Claude Code subscription
+│   ├── pixel-gen/            # ComfyUI bridge for pixel-art sprite generation
+│   └── sim/                  # deterministic pacing simulator
 └── vite.config.ts
 ```
 
@@ -97,6 +108,14 @@ Prose. Current: [GAMEPLAY.md](GAMEPLAY.md), [ARCHITECTURE.md](ARCHITECTURE.md), 
 ### `tools/claude-proxy/`
 
 A tiny Node server exposing Claude Code's headless mode as an OpenAI-compatible endpoint. Zero dependencies beyond Node's standard library.
+
+### `tools/pixel-gen/`
+
+Single-file Node bridge that fronts a local ComfyUI instance. Accepts `POST /generate {prompt, seed?, width?, height?, steps?}` and returns a PNG. The browser-side client lives in `src/gen/`. See `tools/pixel-gen/README.md` for hardware requirements and setup.
+
+### `tools/sim/`
+
+Headless deterministic pacing simulator. Runs `runTick` in a loop with a seeded PRNG against the authored Millhaven content and reports level-up timing statistics. Drop JSON profile configs in `tools/sim/profiles/`. See `tools/sim/README.md`.
 
 ---
 
@@ -113,11 +132,11 @@ A tiny Node server exposing Claude Code's headless mode as an OpenAI-compatible 
 
 ## Testing
 
-**There are no automated tests yet.** The audit-driven development style has leaned on:
+**There are no automated unit/integration tests yet.** The audit-driven development style has leaned on:
 
 1. **Typechecking as correctness floor.** `tsc -b --noEmit` catches most structural bugs.
 2. **Lint as hygiene enforcement.** Custom rules (like the `react-hooks/set-state-in-effect` rule that flags effect-side setState chains) catch real footguns.
-3. **Deterministic replay.** The tick loop is pure, so a known seed produces identical output. Not yet codified as a test harness.
+3. **Pacing simulator.** `npm run sim` runs the tick loop headlessly with a seeded PRNG and asserts level-up timing targets. Exit code 1 on any failing verdict — suitable for CI. This is the closest thing to an automated test in the repo today.
 4. **Mock LLM client.** Exercises the full template pipeline offline.
 5. **Dev Panel.** Every edge-case state is reachable in seconds for manual verification.
 

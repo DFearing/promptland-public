@@ -99,6 +99,12 @@ export interface LogMeta {
    *  effects layer used to do — now that death verbs rotate, a flag
    *  is the only stable signal. */
   isDeath?: boolean
+  /** Marks a `death-save` entry — the deity-intervention line that
+   *  replaces a death when favor is at the Anointed tier. Effects
+   *  layer keys off this flag to fire the death-save fullscreen
+   *  card. Distinct from `isDeath` so the death banner doesn't
+   *  also fire. */
+  isSave?: boolean
   /** Stealth first-strike from rogue/ranger — paints the opener line
    *  and the follow-up damage with a distinct style. Transient flag;
    *  not used by journal derivation. */
@@ -106,6 +112,20 @@ export interface LogMeta {
   /** Ranger trap events — set on trap-lay and trap-fire lines so the
    *  log renderer can tint them consistently. */
   trap?: boolean
+  /** Raw favor amount mentioned in the entry (sacrifice gain, donation
+   *  tithe, blessing, death-save reset). Powers field-indicator deltas
+   *  and journal accounting. */
+  favorAmount?: number
+  /** Rendered "+N favor" / "-N favor" substring in the entry text — log
+   *  renderer paints it in the favor color so the gauge gain reads at a
+   *  glance. World-themed nouns (favor / standing) are rendered through
+   *  this same span. */
+  favorText?: string
+  /** Tier label set on `favor-tier-up` and `shrine-blessing` lines. Drives
+   *  the entry's tint and the journal/popover summary. */
+  tierName?: string
+  /** Ordinal of the favor tier referenced in the entry (1–4). */
+  tier?: 1 | 2 | 3 | 4
 }
 
 export type ConsumeKind = 'heal' | 'restore-magic'
@@ -154,3 +174,15 @@ export type LogEntry =
     }
   | { kind: 'condition-tick'; text: string; amount: number; conditionId: string; meta?: LogMeta }
   | { kind: 'condition-end'; text: string; conditionId: string; meta?: LogMeta }
+  /** The character crossed into a higher favor tier this tick. Drives a
+   *  rim-flash event and a journal entry. */
+  | { kind: 'favor-tier-up'; text: string; meta?: LogMeta }
+  /** A shrine blessing was applied during a shrine rest. Rendered in the
+   *  favor color so it reads as a divine event distinct from a normal
+   *  rest tick. */
+  | { kind: 'shrine-blessing'; text: string; meta?: LogMeta }
+  /** The character was saved from death by the deity at Anointed tier.
+   *  Cost is favor reset to 0 (the deity bills the books). Mirrors a
+   *  death line's `meta.isDeath` flag pattern via `meta.isSave: true` —
+   *  the effects layer keys off that to fire the fullscreen card. */
+  | { kind: 'death-save'; text: string; meta?: LogMeta }
