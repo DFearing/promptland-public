@@ -1,22 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import pkg from '../../package.json'
-import { AREA_KINDS, type AreaKind } from '../areas'
 import {
-  KEYLESS_HOSTS,
   LLMError,
   LLM_PRESETS,
-  areaFlavorTemplate,
   createLLMClient,
-  generate,
-  itemFlavorTemplate,
   loadLLMConfig,
-  loreSnippetTemplate,
-  mobFlavorTemplate,
-  roomFlavorTemplate,
   saveLLMConfig,
-  type GenerateResult,
   type LLMConfig,
-  type TemplateId,
 } from '../llm'
 import type { EffectEvent } from '../effects'
 import type { Storage } from '../storage'
@@ -34,7 +24,6 @@ import {
   type SoundSettings,
   type SoundThemeId,
 } from '../sound'
-import { getWorldContent, getWorldManifest } from '../worlds'
 import {
   DEFAULT_CUSTOM_THEME,
   DEFAULT_EFFECTS,
@@ -65,31 +54,13 @@ import {
   type ThemeId,
 } from '../themes'
 import ConfirmDialog from './ConfirmDialog'
+import GenerationPanel from './GenerationPanel'
 
 type TestState =
   | { kind: 'idle' }
   | { kind: 'running' }
   | { kind: 'ok'; sample: string }
   | { kind: 'error'; message: string }
-
-type GenResult =
-  | { shape: 'named'; template: TemplateId; name: string; description: string }
-  | { shape: 'area'; template: TemplateId; name: string; description: string; theme: string }
-  | { shape: 'lore'; template: TemplateId; text: string; topics: string[] }
-
-type GenState =
-  | { kind: 'idle' }
-  | { kind: 'running' }
-  | { kind: 'ok'; result: GenResult; cached: boolean; hash: string }
-  | { kind: 'error'; message: string }
-
-const TEMPLATE_OPTIONS: { id: TemplateId; label: string; defaultHint: string }[] = [
-  { id: 'itemFlavor', label: 'Item flavor', defaultHint: 'something a tavern rat would drop' },
-  { id: 'mobFlavor', label: 'Mob flavor', defaultHint: 'a scruffy cave rat' },
-  { id: 'areaFlavor', label: 'Area flavor', defaultHint: 'a forgotten crypt below the tavern' },
-  { id: 'roomFlavor', label: 'Room flavor', defaultHint: 'a narrow passage stained with lichen' },
-  { id: 'loreSnippet', label: 'Lore snippet', defaultHint: 'the fall of the Thornfall dynasty' },
-]
 
 interface Props {
   onResetCharacters: () => Promise<void> | void
@@ -129,22 +100,6 @@ function ToggleRow({ title, desc, on, onClick }: ToggleRowProps) {
   )
 }
 
-// Which providers require an API key? Prefer the preset table when the base URL
-// matches one; otherwise assume any non-localhost endpoint needs a key so users
-// don't fire doomed requests against OpenAI/Anthropic/etc. with a blank key.
-function needsApiKey(baseUrl: string): boolean {
-  const trimmed = baseUrl.trim()
-  if (!trimmed) return false
-  const preset = LLM_PRESETS.find((p) => p.baseUrl === trimmed)
-  if (preset) return preset.apiKeyRequired
-  try {
-    const host = new URL(trimmed).hostname
-    return !KEYLESS_HOSTS.includes(host)
-  } catch {
-    return false
-  }
-}
-
 /** Build a minimal EffectEvent suitable for previewing a single sound. */
 function previewEvent(kind: SoundEventKind): EffectEvent {
   const id = `preview-${kind}`
@@ -179,6 +134,10 @@ function previewEvent(kind: SoundEventKind): EffectEvent {
       return { id, kind, name: 'Bone Die' }
     case 'generating-area':
       return { id, kind }
+    case 'death-save':
+      return { id, kind, mobName: 'Cave Rat' }
+    case 'favor-tier-up':
+      return { id, kind, tier: 4, tierName: 'Anointed' }
   }
 }
 
@@ -291,20 +250,29 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
   const [soundTheme, setSoundThemeState] = useState<SoundThemeId>(() => loadSoundTheme())
   const [saved, setSaved] = useState(false)
   const [test, setTest] = useState<TestState>({ kind: 'idle' })
-  const [gen, setGen] = useState<GenState>({ kind: 'idle' })
-  const [genTemplate, setGenTemplate] = useState<TemplateId>('itemFlavor')
-  const [genHint, setGenHint] = useState<string>(TEMPLATE_OPTIONS[0].defaultHint)
-  const [genRarity, setGenRarity] = useState<string>('none')
-  const [genAreaKind, setGenAreaKind] = useState<AreaKind>('dungeon')
+  // Tracks whether the user has clicked Test connection while the API
+  // key was missing. Stays false during the form-filling phase so we
+  // don't preemptively scold them.
+  const [keyAttempted, setKeyAttempted] = useState(false)
+  const [genOpen, setGenOpen] = useState(false)
 
   const [confirmReset, setConfirmReset] = useState(false)
   const [confirmResetDefaults, setConfirmResetDefaults] = useState(false)
+
+  // Auto-open the Generation block once a connection test has succeeded so the
+  // user lands directly on the integration tools they unlocked. Manual toggles
+  // (open or close) after that take precedence — this only fires on transition.
+  useEffect(() => {
+    if (test.kind === 'ok') setGenOpen(true)
+  }, [test.kind])
 
   const update = (patch: Partial<LLMConfig>) => {
     setConfig((c) => ({ ...c, ...patch }))
     setSaved(false)
     setTest({ kind: 'idle' })
-    setGen({ kind: 'idle' })
+    // Any field edit clears the missing-key warning. Re-typing a key,
+    // pasting one, or flipping Local server on all dismiss it.
+    setKeyAttempted(false)
   }
 
   const applyPreset = (presetId: string) => {
@@ -313,6 +281,10 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
     update({
       baseUrl: preset.baseUrl,
       model: preset.defaultModel ?? config.model,
+      // Hosted presets (apiKeyRequired) flip Local off; local/proxy
+      // presets flip it on. The user can still override by toggling
+      // afterwards — applyPreset only fires on preset click.
+      local: !preset.apiKeyRequired,
     })
   }
 
@@ -494,6 +466,15 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
   }
 
   const handleTest = async () => {
+    // Surface the missing-key hint only after the user has attempted a
+    // test — keeps the warning quiet while they're still filling out the
+    // form. Short-circuits before the network call: the missing key
+    // would have produced a 401/auth error anyway, so we'd rather show
+    // a precise local message.
+    if (!config.local && config.apiKey.trim().length === 0) {
+      setKeyAttempted(true)
+      return
+    }
     setTest({ kind: 'running' })
     try {
       const client = createLLMClient(config)
@@ -519,127 +500,18 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
     }
   }
 
-  const handleGenerate = async () => {
-    setGen({ kind: 'running' })
-    try {
-      const manifest = getWorldManifest('fantasy')
-      if (!manifest) throw new Error('Fantasy world manifest not found.')
-      const content = getWorldContent('fantasy')
-      if (!content) throw new Error('Fantasy world content not found.')
-      const client = createLLMClient(config)
-      const ctx = { llm: client, cache: storage.entities }
-      const opts = { manifestVersion: manifest.version, maxTokens: 200 }
-      const hint = genHint.trim() || TEMPLATE_OPTIONS.find((o) => o.id === genTemplate)!.defaultHint
-      const concepts = {
-        allowedConcepts: manifest.allowedConcepts,
-        forbiddenConcepts: manifest.forbiddenConcepts,
-      }
-
-      let result: GenResult
-      let cached = false
-      let hash = ''
-
-      const rarity = genRarity === 'none' ? undefined : genRarity
-
-      if (genTemplate === 'itemFlavor') {
-        const r = await generate(
-          itemFlavorTemplate,
-          {
-            worldId: manifest.id,
-            archetypeKind: 'junk',
-            archetypeHint: hint,
-            rarity,
-            ...concepts,
-          },
-          content.context,
-          ctx,
-          opts,
-        )
-        result = { shape: 'named', template: 'itemFlavor', ...r.payload }
-        cached = r.cached
-        hash = r.hash
-      } else if (genTemplate === 'mobFlavor') {
-        const r = await generate(
-          mobFlavorTemplate,
-          { worldId: manifest.id, archetypeHint: hint, rarity, ...concepts },
-          content.context,
-          ctx,
-          opts,
-        )
-        result = { shape: 'named', template: 'mobFlavor', ...r.payload }
-        cached = r.cached
-        hash = r.hash
-      } else if (genTemplate === 'areaFlavor') {
-        const r = await generate(
-          areaFlavorTemplate,
-          { worldId: manifest.id, areaKind: genAreaKind, areaHint: hint, rarity, ...concepts },
-          content.context,
-          ctx,
-          opts,
-        )
-        result = { shape: 'area', template: 'areaFlavor', ...r.payload }
-        cached = r.cached
-        hash = r.hash
-      } else if (genTemplate === 'roomFlavor') {
-        const r = await generate(
-          roomFlavorTemplate,
-          {
-            worldId: manifest.id,
-            areaName: 'Crypt of Thorns',
-            areaTheme: 'moldering crypt',
-            roomType: 'corridor',
-            roomHint: hint,
-            rarity,
-            ...concepts,
-          },
-          content.context,
-          ctx,
-          opts,
-        )
-        result = { shape: 'named', template: 'roomFlavor', ...r.payload }
-        cached = r.cached
-        hash = r.hash
-      } else {
-        const r: GenerateResult<{ text: string; topics: string[] }> = await generate(
-          loreSnippetTemplate,
-          { worldId: manifest.id, topic: hint, rarity, ...concepts },
-          content.context,
-          ctx,
-          opts,
-        )
-        result = { shape: 'lore', template: 'loreSnippet', ...r.payload }
-        cached = r.cached
-        hash = r.hash
-      }
-
-      setGen({ kind: 'ok', result, cached, hash })
-    } catch (err) {
-      const message =
-        err instanceof LLMError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : String(err)
-      setGen({ kind: 'error', message })
-    }
-  }
-
-  const pickTemplate = (id: TemplateId) => {
-    setGenTemplate(id)
-    setGenHint(TEMPLATE_OPTIONS.find((o) => o.id === id)?.defaultHint ?? '')
-    setGen({ kind: 'idle' })
-  }
-
-  const apiKeyNeeded = needsApiKey(config.baseUrl)
-  const apiKeyOk = !apiKeyNeeded || config.apiKey.trim().length > 0
+  const apiKeyNeeded = !config.local
   const baseReady =
-    config.baseUrl.trim().length > 0 && config.model.trim().length > 0 && apiKeyOk
+    config.baseUrl.trim().length > 0 && config.model.trim().length > 0
 
+  // Test is allowed even with a missing key — the click is what flips
+  // keyAttempted, which is what surfaces the missingKeyHint. Disabling
+  // the button silently would leave the user staring at a non-clickable
+  // control with no explanation.
   const canTest = baseReady && test.kind !== 'running'
-  const canGenerate = baseReady && gen.kind !== 'running'
   const missingKeyHint =
-    apiKeyNeeded && config.apiKey.trim().length === 0
-      ? 'This provider needs an API key. Paste one above to enable.'
+    keyAttempted && apiKeyNeeded && config.apiKey.trim().length === 0
+      ? 'This provider needs an API key.'
       : null
 
   return (
@@ -675,7 +547,8 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
                 <p className="settings__about-pitch">
                   A browser-based game that plays itself. Pick a world, pick a
                   character, watch them live. The game is algorithm-driven;
-                  LLMs generate the flavor.
+                  the LLM names the items, mobs, rooms, and areas the world is
+                  built from.
                 </p>
                 <dl className="settings__about-meta">
                   <dt>Version</dt>
@@ -721,20 +594,20 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
               <section className="settings__section settings__about-ai">
                 <h2>AI &amp; content generation</h2>
                 <p className="settings__about-pitch">
-                  Promptland uses a language model — Bring Your Own Key —
-                  to generate in-game flavor: item descriptions, mob lore,
-                  spell names, room descriptions, and the occasional new
-                  area. You supply an API key or point the LLM tab at a
-                  local endpoint; the game does the calls directly from
-                  your browser.
+                  Promptland uses a language model — Bring Your Own Key — to
+                  generate items, mobs, rooms, and whole areas as the world
+                  expands. You supply an API key or point the LLM tab at a
+                  local endpoint; the game makes the calls directly from your
+                  browser.
                 </p>
                 <ul className="settings__about-ai-list">
                   <li>
-                    <strong>Flavor only, not gameplay.</strong> The core
-                    loop — combat math, drives, damage, loot rolls —
-                    is algorithmic and deterministic. The model never
-                    decides a hit, a heal, or a stat. It writes the
-                    sentences around the numbers and names the props.
+                    <strong>Names and descriptions, not gameplay.</strong>
+                    The core loop — combat math, drives, damage, loot rolls
+                    — is algorithmic and deterministic. The model never
+                    decides a hit, a heal, or a stat. It writes the sentences
+                    around the numbers and names the things you fight and
+                    loot.
                   </li>
                   <li>
                     <strong>Cached per entity.</strong> Generated text is
@@ -864,6 +737,46 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
           {tab === 'appearance' && (
             <>
               <section className="settings__section">
+                <h2>Text size</h2>
+                <div className="settings__scales">
+                  {SCALES.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className={'settings__scale' + (scale === s.id ? ' settings__scale--active' : '')}
+                      onClick={() => pickScale(s.id)}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="settings__section">
+                <h2>Display</h2>
+                <div className="settings__fxgrid">
+                  <ToggleRow
+                    title="Scanlines"
+                    desc="CRT line overlay across the whole interface."
+                    on={effects.scanlines}
+                    onClick={toggleScanlines}
+                  />
+                  <ToggleRow
+                    title="Log numbers"
+                    desc="Show exact HP / MP / XP amounts in the log instead of descriptive words."
+                    on={effects.logNumbers}
+                    onClick={toggleLogNumbers}
+                  />
+                  <ToggleRow
+                    title="Sheet numbers"
+                    desc='Show the "12 / 30", "8 / 12", "125 / 300" readouts next to the HP, MP, and XP bars on the sheet. Off leaves just the bars.'
+                    on={effects.sheetNumbers}
+                    onClick={toggleSheetNumbers}
+                  />
+                </div>
+              </section>
+
+              <section className="settings__section">
                 <h2>Theme</h2>
                 <div className="settings__themes">
                   {THEMES.map((t) => (
@@ -934,51 +847,11 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
                   </div>
                 </section>
               )}
-
-              <section className="settings__section">
-                <h2>Text size</h2>
-                <div className="settings__scales">
-                  {SCALES.map((s) => (
-                    <button
-                      key={s.id}
-                      type="button"
-                      className={'settings__scale' + (scale === s.id ? ' settings__scale--active' : '')}
-                      onClick={() => pickScale(s.id)}
-                    >
-                      {s.label}
-                    </button>
-                  ))}
-                </div>
-              </section>
             </>
           )}
 
           {tab === 'effects' && (
             <>
-              <section className="settings__section">
-                <h2>Display</h2>
-                <div className="settings__fxgrid">
-                  <ToggleRow
-                    title="Scanlines"
-                    desc="CRT line overlay on the map and log."
-                    on={effects.scanlines}
-                    onClick={toggleScanlines}
-                  />
-                  <ToggleRow
-                    title="Log numbers"
-                    desc="Show exact HP / MP / XP amounts in the log instead of descriptive words."
-                    on={effects.logNumbers}
-                    onClick={toggleLogNumbers}
-                  />
-                  <ToggleRow
-                    title="Sheet numbers"
-                    desc='Show the "12 / 30", "8 / 12", "125 / 300" readouts next to the HP, MP, and XP bars on the sheet. Off leaves just the bars.'
-                    on={effects.sheetNumbers}
-                    onClick={toggleSheetNumbers}
-                  />
-                </div>
-              </section>
-
               {/* Full-screen group — collapsed by default. Summary shows the
                   master toggle; expand to see the per-effect grid. */}
               <details className="settings__group">
@@ -1027,6 +900,12 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
                     on={effects.fullscreen.death}
                     onClick={() => toggleFullscreen('death')}
                   />
+                  <ToggleRow
+                    title="New area banner"
+                    desc="Banner announcing the area name on entry. Rare+ areas get a stronger variant."
+                    on={effects.fullscreen.newArea}
+                    onClick={() => toggleFullscreen('newArea')}
+                  />
                 </div>
               </details>
 
@@ -1048,7 +927,9 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
                   </button>
                 </summary>
                 <p className="settings__group-desc">
-                  Pixi canvas under the sprite. Per-effect toggles are ignored when the group is off.
+                  Effects rendered on the character viewport — the Pixi canvas
+                  where the sprite is drawn. Per-effect toggles are ignored
+                  when the group is off.
                 </p>
                 <div className={'settings__fxgrid' + (effects.viewport.enabled ? '' : ' settings__fxgrid--dim')}>
                   <ToggleRow
@@ -1294,6 +1175,15 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
             </div>
           </section>
 
+          <section className="settings__section">
+            <ToggleRow
+              title="Local server"
+              desc="Drops the API key requirement. Use for Ollama, LM Studio, llama.cpp, the Claude Code proxy, or any LAN endpoint."
+              on={config.local}
+              onClick={() => update({ local: !config.local })}
+            />
+          </section>
+
           <section className="settings__section settings__fields">
             <label className="settings__label">
               <span>Base URL</span>
@@ -1308,17 +1198,26 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
               />
             </label>
 
-            <label className="settings__label">
-              <span>API key</span>
-              <input
-                type="password"
-                value={config.apiKey}
-                onChange={(e) => update({ apiKey: e.target.value })}
-                placeholder="sk-... (leave blank for local servers)"
-                spellCheck={false}
-                autoComplete="off"
-              />
-            </label>
+            {!config.local && (
+              <label className="settings__label">
+                <span>API key</span>
+                <input
+                  type="password"
+                  value={config.apiKey}
+                  onChange={(e) => update({ apiKey: e.target.value })}
+                  placeholder="sk-..."
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                {missingKeyHint && (
+                  <span className="settings__field-hint">{missingKeyHint}</span>
+                )}
+                <span className="settings__field-note">
+                  Stored in this browser's localStorage and sent only to the
+                  endpoint above.
+                </span>
+              </label>
+            )}
 
             <label className="settings__label">
               <span>Model</span>
@@ -1342,9 +1241,16 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
                 onClick={handleTest}
                 disabled={!canTest}
               >
-                {test.kind === 'running' ? 'Testing…' : 'Test connection'}
+                {test.kind === 'running' ? (
+                  <>
+                    <span className="settings__spinner" aria-hidden="true" />
+                    Testing…
+                  </>
+                ) : (
+                  'Test connection'
+                )}
               </button>
-              <button type="button" className="settings__btn settings__btn--primary" onClick={handleSave}>
+              <button type="button" className="settings__btn" onClick={handleSave}>
                 {saved ? 'Saved' : 'Save settings'}
               </button>
             </div>
@@ -1359,119 +1265,35 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
                 {test.message}
               </p>
             )}
-            {missingKeyHint && test.kind === 'idle' && (
-              <p className="settings__result">{missingKeyHint}</p>
-            )}
           </section>
 
-          <section className="settings__section">
-            <h2>Try generation</h2>
-            <p className="settings__note">
-              Runs a template end-to-end. Same inputs → cache hit (no network). Change the hint
-              to force a new cache miss. Watch the hash to see the key change.
-            </p>
-            <label className="settings__label">
-              <span>Template</span>
-              <select
-                value={genTemplate}
-                onChange={(e) => pickTemplate(e.target.value as TemplateId)}
-              >
-                {TEMPLATE_OPTIONS.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="settings__label">
-              <span>Hint</span>
-              <input
-                type="text"
-                value={genHint}
-                onChange={(e) => setGenHint(e.target.value)}
-                placeholder={
-                  TEMPLATE_OPTIONS.find((o) => o.id === genTemplate)?.defaultHint ?? ''
-                }
-                spellCheck={false}
-              />
-            </label>
-
-            <label className="settings__label">
-              <span>Rarity</span>
-              <select value={genRarity} onChange={(e) => setGenRarity(e.target.value)}>
-                <option value="none">none (no rarity passed)</option>
-                <option value="common">common</option>
-                <option value="uncommon">uncommon</option>
-                <option value="rare">rare</option>
-                <option value="epic">epic</option>
-                <option value="legendary">legendary</option>
-              </select>
-            </label>
-
-            {genTemplate === 'areaFlavor' && (
-              <label className="settings__label">
-                <span>Area kind</span>
-                <select
-                  value={genAreaKind}
-                  onChange={(e) => setGenAreaKind(e.target.value as AreaKind)}
-                >
-                  {AREA_KINDS.map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            <div className="settings__actions">
-              <button
-                type="button"
-                className="settings__btn"
-                onClick={handleGenerate}
-                disabled={!canGenerate}
-              >
-                {gen.kind === 'running' ? 'Generating…' : 'Generate'}
-              </button>
-            </div>
-            {gen.kind === 'ok' && (
-              <p className="settings__result settings__result--ok">
-                <strong>{gen.cached ? 'Cache hit' : 'Generated'}</strong> ({gen.result.template}):
-                {' '}
-                {gen.result.shape === 'named' && (
-                  <>
-                    <code>{gen.result.name}</code> — {gen.result.description}
-                  </>
-                )}
-                {gen.result.shape === 'area' && (
-                  <>
-                    <code>{gen.result.name}</code> — {gen.result.description}
-                    <br />
-                    <small>theme: <code>{gen.result.theme}</code></small>
-                  </>
-                )}
-                {gen.result.shape === 'lore' && (
-                  <>
-                    {gen.result.text}
-                    <br />
-                    <small>topics: <code>{gen.result.topics.join(', ')}</code></small>
-                  </>
-                )}
-                <br />
-                <small>hash: <code>{gen.hash.slice(0, 28)}…</code></small>
+          <details
+            className="settings__group"
+            open={genOpen}
+            onToggle={(e) => setGenOpen((e.currentTarget as HTMLDetailsElement).open)}
+          >
+            <summary className="settings__group-summary">
+              <h2>Generation</h2>
+              {test.kind !== 'ok' && (
+                <span className="settings__group-hint">Test connection to unlock</span>
+              )}
+            </summary>
+            {test.kind === 'ok' ? (
+              <>
+                <p className="settings__group-desc">
+                  Run the items, mobs, areas, and rooms generation pipeline
+                  end-to-end against your LLM and ComfyUI image bridge. Same
+                  inputs hit the cache on a re-run — no second network call.
+                </p>
+                <GenerationPanel storage={storage} />
+              </>
+            ) : (
+              <p className="settings__group-desc">
+                Test your LLM connection above to unlock the generation
+                pipeline (items, mobs, areas, rooms, and the image bridge).
               </p>
             )}
-            {gen.kind === 'error' && (
-              <p className="settings__result settings__result--err">{gen.message}</p>
-            )}
-            {missingKeyHint && gen.kind === 'idle' && (
-              <p className="settings__result">{missingKeyHint}</p>
-            )}
-          </section>
-
-          <p className="settings__note">
-            Your API key is stored in this browser's localStorage and is never sent anywhere except directly to the endpoint you configure.
-          </p>
+          </details>
             </>
           )}
 
@@ -1552,7 +1374,12 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
       />
 
       <style>{`
-        .settings { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: var(--sp-7) var(--sp-4); background: var(--bg-0); }
+        /* Anchor the card to the top of the viewport (not vertically
+           centered) so switching tabs doesn't reposition the card when
+           tabs have different content heights — only the bottom edge
+           moves. The card still has a max-height equal to the viewport
+           minus padding; oversized tabs scroll internally. */
+        .settings { min-height: 100%; display: flex; align-items: flex-start; justify-content: center; padding: var(--sp-7) var(--sp-4); background: var(--bg-0); }
         .settings__card { width: 100%; max-width: 760px; max-height: calc(100vh - var(--sp-7) * 2); background: var(--bg-1); border: 1px solid var(--line-2); display: flex; flex-direction: column; }
         .settings__header { padding: var(--sp-5) var(--sp-6) var(--sp-3); border-bottom: 1px solid var(--line-1); }
         .settings__header h1 { margin: 0; font-family: var(--font-display); font-size: var(--text-3xl); color: var(--accent-hot); text-shadow: var(--glow-sm); letter-spacing: 0.02em; }
@@ -1566,11 +1393,13 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
         .settings__fxgrid--dim { opacity: 0.45; }
         .settings__fxgrid .settings__toggle-row,
         .settings__fxgrid .settings__slider-row { padding: var(--sp-2) var(--sp-3); }
-        .settings__fxgrid .settings__toggle-title { font-size: var(--text-sm); }
-        .settings__fxgrid .settings__toggle-desc { font-size: var(--text-xs); }
+        .settings__fxgrid .settings__toggle-title { font-size: var(--text-md); }
+        .settings__fxgrid .settings__toggle-desc { font-size: var(--text-sm); line-height: 1.7; }
         .settings__group-head { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); }
         .settings__group-head h2 { margin: 0; border-bottom: none; padding-bottom: 0; flex: 1; }
-        .settings__group-desc { margin: 0 0 var(--sp-2); font-family: var(--font-body); font-size: var(--text-xs); color: var(--fg-3); font-style: italic; }
+        /* Descriptive paragraphs across Settings: matched to the About tab's
+           pitch styling — body font, sm, fg-2, line-height 1.7, no italics. */
+        .settings__group-desc { margin: 0 0 var(--sp-2); font-family: var(--font-body); font-size: var(--text-sm); color: var(--fg-2); line-height: 1.7; }
 
         /* Collapsible effect groups — <details> + <summary>. Keeps the tab
            short by default; user expands only the group they want to tune. */
@@ -1627,12 +1456,12 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
         .settings__theme:hover { background: var(--bg-2); border-color: var(--line-3); }
         .settings__theme--active { background: var(--bg-3); border-color: var(--line-3); }
         .settings__theme-name { font-family: var(--font-display); font-size: var(--text-md); letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-hot); text-shadow: var(--glow-sm); }
-        .settings__theme-desc { font-family: var(--font-body); font-size: var(--text-xs); color: var(--fg-3); }
+        .settings__theme-desc { font-family: var(--font-body); font-size: var(--text-sm); color: var(--fg-2); line-height: 1.7; }
 
         .settings__toggle-row { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); padding: var(--sp-3); background: var(--bg-inset); border: 1px solid var(--line-1); }
         .settings__toggle-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
         .settings__toggle-title { font-family: var(--font-display); font-size: var(--text-md); letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-1); }
-        .settings__toggle-desc { font-family: var(--font-body); font-size: var(--text-xs); color: var(--fg-3); }
+        .settings__toggle-desc { font-family: var(--font-body); font-size: var(--text-sm); color: var(--fg-2); line-height: 1.7; }
         .settings__toggle { padding: 4px var(--sp-3); min-width: 56px; background: var(--bg-1); border: 1px solid var(--line-2); color: var(--fg-3); cursor: pointer; font-family: var(--font-display); font-size: var(--text-md); letter-spacing: 0.08em; text-transform: uppercase; transition: color var(--dur-fast) var(--ease-crt), border-color var(--dur-fast) var(--ease-crt), background var(--dur-fast) var(--ease-crt); }
         .settings__toggle:hover { background: var(--bg-2); border-color: var(--line-3); }
         .settings__toggle--on { background: var(--bg-3); border-color: var(--line-3); color: var(--accent-hot); text-shadow: var(--glow-sm); }
@@ -1661,14 +1490,47 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
 
         .settings__fields { gap: var(--sp-3); }
         .settings__label { display: flex; flex-direction: column; gap: 4px; }
-        .settings__label span { font-family: var(--font-display); font-size: var(--text-sm); letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-2); }
+        /* Form labels: dropped the uppercase + letter-spaced + display-font
+           treatment so labels read like sentence-case prose, not control
+           panel rocker switches. The display-uppercase look is reserved for
+           h2 section headers; field labels are body-text. */
+        .settings__label span { font-family: var(--font-body); font-size: var(--text-sm); color: var(--fg-2); font-weight: 500; }
         .settings__label input,
-        .settings__label select { padding: var(--sp-2) var(--sp-3); font-family: var(--font-mono); font-size: var(--text-sm); background: var(--bg-inset); color: var(--fg-1); border: 1px solid var(--line-1); box-shadow: var(--shadow-inset); outline: none; }
+        .settings__label select { padding: var(--sp-2) var(--sp-3); font-family: var(--font-mono); font-size: var(--text-sm); background: var(--bg-inset); color: var(--fg-1); border: 1px solid var(--line-1); border-radius: 4px; box-shadow: var(--shadow-inset); outline: none; }
         .settings__label input:focus,
-        .settings__label select:focus { border-color: var(--line-3); }
+        .settings__label select:focus { border-color: var(--accent); box-shadow: var(--shadow-inset), 0 0 0 2px rgba(123, 255, 136, 0.15); }
         .settings__label select { appearance: none; padding-right: calc(var(--sp-3) + 18px); background-image: linear-gradient(45deg, transparent 50%, var(--fg-2) 50%), linear-gradient(135deg, var(--fg-2) 50%, transparent 50%); background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; cursor: pointer; }
         .settings__label select:hover { border-color: var(--line-2); }
         .settings__label select option { background: var(--bg-0); color: var(--fg-1); }
+        /* Inline field-level hint — sits directly under the input it
+           refers to. Warn-colored so it reads as a heads-up, not an error,
+           and uses the body font so it doesn't compete with the uppercase
+           field label above. Selector specificity outranks
+           .settings__label span so it's not pulled back into the label
+           styling. */
+        .settings__label .settings__field-hint {
+          font-family: var(--font-body);
+          font-size: var(--text-sm);
+          color: var(--warn);
+          line-height: 1.6;
+          letter-spacing: 0;
+          text-transform: none;
+          margin-top: 4px;
+        }
+        /* Informational sibling to settings__field-hint — used for the
+           privacy note under the API key field (and any other muted
+           assurance text). Same selector specificity trick as
+           settings__field-hint so the .settings__label span styling
+           doesn't pull it into uppercase display-font. */
+        .settings__label .settings__field-note {
+          font-family: var(--font-body);
+          font-size: var(--text-xs);
+          color: var(--fg-3);
+          line-height: 1.6;
+          letter-spacing: 0;
+          text-transform: none;
+          margin-top: 2px;
+        }
 
         .settings__prompt { border: 1px solid var(--line-1); background: var(--bg-inset); padding: var(--sp-2) var(--sp-3); margin-top: var(--sp-2); }
         .settings__prompt > summary { cursor: pointer; font-family: var(--font-display); font-size: var(--text-sm); letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-2); list-style: none; padding: 4px 0; }
@@ -1683,23 +1545,46 @@ export default function Settings({ onResetCharacters, onLlmConnected, characterC
         .settings__prompt-preview pre { margin: 0; padding: var(--sp-2) var(--sp-3); background: var(--bg-0); border: 1px solid var(--line-1); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-2); white-space: pre-wrap; word-break: break-word; }
 
         .settings__actions { display: flex; gap: var(--sp-2); justify-content: flex-end; }
-        .settings__btn { padding: 6px var(--sp-4); background: var(--bg-1); border: 1px solid var(--line-2); color: var(--fg-1); cursor: pointer; font-family: var(--font-display); font-size: var(--text-md); letter-spacing: 0.08em; text-transform: uppercase; text-shadow: var(--glow-sm); transition: border-color var(--dur-fast) var(--ease-crt), background var(--dur-fast) var(--ease-crt); }
-        .settings__btn:hover:not(:disabled) { background: var(--bg-2); border-color: var(--line-3); color: var(--accent-hot); text-shadow: var(--glow-md); }
+        /* Modernized button: body font sentence-case, rounded corners, no
+           uppercase/letter-spacing display-font shouty look. The primary
+           variant gets the accent fill so the visual hierarchy is carried
+           by color, not by all-caps. */
+        .settings__btn { padding: 6px var(--sp-3); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 4px; color: var(--fg-1); cursor: pointer; font-family: var(--font-body); font-size: var(--text-sm); font-weight: 500; transition: border-color var(--dur-fast) var(--ease-crt), background var(--dur-fast) var(--ease-crt), color var(--dur-fast) var(--ease-crt); }
+        .settings__btn:hover:not(:disabled) { background: var(--bg-2); border-color: var(--accent); color: var(--accent-hot); }
         .settings__btn:disabled { opacity: 0.4; cursor: not-allowed; }
-        .settings__btn--primary { background: var(--bg-2); border-color: var(--line-3); color: var(--accent-hot); text-shadow: var(--glow-md); }
-        .settings__btn--danger { border-color: var(--bad); color: var(--bad); text-shadow: none; }
-        .settings__btn--danger:hover:not(:disabled) { background: var(--bg-2); border-color: var(--bad); color: var(--bad); text-shadow: var(--glow-sm); }
+        .settings__btn--primary { background: var(--accent); border-color: var(--accent); color: var(--bg-0); font-weight: 600; }
+        .settings__btn--primary:hover:not(:disabled) { background: var(--accent-hot); border-color: var(--accent-hot); color: var(--bg-0); }
+        .settings__btn--danger { background: transparent; border-color: var(--bad); color: var(--bad); }
+        .settings__btn--danger:hover:not(:disabled) { background: var(--bad); border-color: var(--bad); color: var(--bg-0); }
+        /* Inline spinner inside the Test connection button — small ring
+           that rotates while the request is in flight. Kept proportional
+           to the button text (1em) so it scales with text-size settings. */
+        .settings__spinner {
+          display: inline-block;
+          width: 0.9em;
+          height: 0.9em;
+          margin-right: var(--sp-1);
+          border: 2px solid var(--line-2);
+          border-top-color: var(--accent-hot);
+          border-radius: 50%;
+          vertical-align: -2px;
+          animation: settings-spin 0.8s linear infinite;
+        }
+        @keyframes settings-spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) {
+          .settings__spinner { animation: none; border-top-color: var(--accent); }
+        }
 
         .settings__danger { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); padding: var(--sp-3); background: var(--bg-inset); border: 1px solid var(--line-1); }
         .settings__danger-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
         .settings__danger-title { font-family: var(--font-display); font-size: var(--text-md); letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-1); }
-        .settings__danger-desc { font-family: var(--font-body); font-size: var(--text-xs); color: var(--fg-3); }
+        .settings__danger-desc { font-family: var(--font-body); font-size: var(--text-sm); color: var(--fg-2); line-height: 1.7; }
 
         .settings__result { margin: var(--sp-1) 0 0; font-family: var(--font-body); font-size: var(--text-sm); padding: var(--sp-2) var(--sp-3); border-style: solid; border-width: 1px; word-break: break-word; }
         .settings__result--ok { background: var(--bg-2); border-color: var(--good); color: var(--good); }
         .settings__result--err { background: var(--bg-2); border-color: var(--bad); color: var(--bad); }
         .settings__result code { background: var(--bg-inset); padding: 1px 4px; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-1); }
-        .settings__note { margin: 0; font-family: var(--font-body); font-size: var(--text-xs); color: var(--fg-3); font-style: italic; line-height: 1.6; }
+        .settings__note { margin: 0; font-family: var(--font-body); font-size: var(--text-sm); color: var(--fg-2); line-height: 1.7; }
 
         /* About tab — repo + deps + credits. Read-heavy, no controls, so
            leans on body font with comfortable line-height. Dep list is a

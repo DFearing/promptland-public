@@ -13,11 +13,12 @@ export type UsingAction =
   | { kind: 'satisfy'; drives: Drive[] }
   | { kind: 'traverse-portal'; destination: Position }
   | { kind: 'sell' }
-  /** Offers unwanted inventory at a shrine for a modest gold return.
-   *  Fallback for overloaded characters who haven't made it to a shop
-   *  — narrative fit (the gods accept offerings), mechanical relief
-   *  (weight drive goes down, character lightens up). Fires when the
-   *  explore tick lands on a shrine with weight at threshold. */
+  /** Offers unwanted inventory for a modest gold return.
+   *  Genuine fallback weight offload — fires anywhere when the
+   *  character is overweight, hasn't reached a shop, and isn't
+   *  currently busy with a higher-priority room beat (rest, drink,
+   *  etc.). Greed gates it: a high-greed character refuses to
+   *  part with loot even when overloaded. */
   | { kind: 'sacrifice' }
   /** Portal Hub selection — the player stepped on a portalHub tile and
    *  must choose between forging a new path (LLM gen) or revisiting a
@@ -53,13 +54,14 @@ export type GameState =
       /** Opening-attack bonus for one side. Decrements each tick until 0,
        *  at which point normal alternating combat resumes. `side` is the
        *  ambusher; the other side skips its action while ticks remain.
-       *  `reason: 'stealth'` flags rogue/ranger first-round stealth strikes
-       *  — the first fight tick grants bonus damage and a guaranteed
-       *  on-hit poison for rogues. */
+       *  `reason: 'stealth'` flags rogue/ranger DEX-driven first-round
+       *  strikes; `reason: 'reversed'` flags WIS-driven counter-ambushes
+       *  where a stealth class spotted the mob and turned it around.
+       *  Both flavors grant the bonus opening damage. */
       ambush?: {
         side: 'character' | 'mob'
         ticksLeft: number
-        reason?: 'stealth'
+        reason?: 'stealth' | 'reversed'
       }
       /** When set, this fight is a gateway-guardian encounter spawned to
        *  mask LLM area generation latency. The value is the exit room key

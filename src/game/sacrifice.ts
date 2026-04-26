@@ -5,6 +5,12 @@ import { RARITIES, type Rarity } from '../items'
 interface SacrificeResult {
   sacrificed: Array<{ item: InventoryItem; def: ItemDef }>
   totalGold: number
+  /** 1 favor per sacrificed item (stack quantity counts). Earned alongside
+   *  `totalGold` — the user explicitly asked for both. The shrine-tithe
+   *  bonus (+5 favor / -5 gold) is layered on at the call site, not
+   *  here, because it depends on `room.type === 'shrine'` and the
+   *  character's gold balance. */
+  totalFavor: number
   remainingInventory: InventoryItem[]
 }
 
@@ -77,9 +83,15 @@ export function pickItemsToSacrifice(
     sacrificed.push({ item, def })
   }
 
-  const totalGold = sacrificed.reduce(
-    (sum, s) => sum + (s.item.quantity ?? 1),
-    0,
-  )
-  return { sacrificed, totalGold, remainingInventory: remaining }
+  // Both ledgers are computed independently from the same source (sacrificed
+  // stack quantities) so changing one curve later won't silently change the
+  // other. Today they're identical — 1 gold and 1 favor per item — but that's
+  // an intentional design choice, not a coupling. Rarity scaling was
+  // considered and rejected: common drops dominate end-game inventory anyway,
+  // and a flat-rate makes the "did the gods notice?" math instantly readable.
+  const sumQuantities = (acc: number, s: { item: InventoryItem }) =>
+    acc + (s.item.quantity ?? 1)
+  const totalGold = sacrificed.reduce(sumQuantities, 0)
+  const totalFavor = sacrificed.reduce(sumQuantities, 0)
+  return { sacrificed, totalGold, totalFavor, remainingInventory: remaining }
 }

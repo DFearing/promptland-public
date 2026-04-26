@@ -206,8 +206,8 @@ const FANTASY: WorldManifest = {
       id: 'warrior',
       name: 'Warrior',
       description: 'Steel, shields, and scars.',
-      startingStats: { strength: 14, dexterity: 10, constitution: 14, intelligence: 8, wisdom: 10, charisma: 10 },
-      startingMaxMagic: 6,
+      startingStats: { strength: 14, dexterity: 12, constitution: 14, intelligence: 6, wisdom: 10, charisma: 10 },
+      magicAffinity: 0.5,
       startingInventory: [
         { name: 'Worn Sword', description: 'Notched but sharp enough.' },
         { name: 'Leather Cuirass' },
@@ -226,8 +226,8 @@ const FANTASY: WorldManifest = {
       id: 'rogue',
       name: 'Rogue',
       description: 'Quiet feet, loose purses.',
-      startingStats: { strength: 10, dexterity: 14, constitution: 10, intelligence: 10, wisdom: 10, charisma: 12 },
-      startingMaxMagic: 8,
+      startingStats: { strength: 10, dexterity: 14, constitution: 10, intelligence: 6, wisdom: 12, charisma: 14 },
+      magicAffinity: 0.7,
       startingInventory: [
         { name: 'Shortblade' },
         { name: 'Lockpicks', quantity: 5 },
@@ -239,15 +239,15 @@ const FANTASY: WorldManifest = {
         statBumps: { dexterity: 1, charisma: 1 },
       },
       primaryStats: ['DEX', 'CHA'],
-      secondaryStat: 'INT',
+      secondaryStat: 'WIS',
       titles: FANTASY_ROGUE_TITLES,
     },
     {
       id: 'mage',
       name: 'Mage',
       description: 'Old books, older words.',
-      startingStats: { strength: 8, dexterity: 10, constitution: 8, intelligence: 14, wisdom: 12, charisma: 10 },
-      startingMaxMagic: 16,
+      startingStats: { strength: 6, dexterity: 12, constitution: 10, intelligence: 14, wisdom: 14, charisma: 10 },
+      magicAffinity: 2.5,
       startingInventory: [
         { name: 'Wooden Staff' },
         { name: 'Candle Stub', description: 'Barely enough for a cantrip.' },
@@ -267,8 +267,9 @@ const FANTASY: WorldManifest = {
       id: 'cleric',
       name: 'Cleric',
       description: 'Faith as both shield and sword.',
-      startingStats: { strength: 10, dexterity: 8, constitution: 12, intelligence: 10, wisdom: 14, charisma: 12 },
-      startingMaxMagic: 12,
+      startingStats: { strength: 14, dexterity: 10, constitution: 12, intelligence: 6, wisdom: 14, charisma: 10 },
+      magicAffinity: 1.5,
+      castingStat: 'WIS',
       startingInventory: [
         { name: 'Oak Mace' },
         { name: 'Prayer Beads' },
@@ -278,18 +279,18 @@ const FANTASY: WorldManifest = {
         hpPerLevel: 4,
         mpPerLevel: 4,
         statBumpInterval: 4,
-        statBumps: { wisdom: 1, constitution: 1 },
+        statBumps: { wisdom: 1, strength: 1 },
       },
-      primaryStats: ['WIS', 'CON'],
-      secondaryStat: 'CHA',
+      primaryStats: ['WIS', 'STR'],
+      secondaryStat: 'CON',
       titles: FANTASY_CLERIC_TITLES,
     },
     {
       id: 'ranger',
       name: 'Ranger',
       description: 'A bow, a path, a long silence.',
-      startingStats: { strength: 10, dexterity: 14, constitution: 12, intelligence: 10, wisdom: 12, charisma: 8 },
-      startingMaxMagic: 8,
+      startingStats: { strength: 10, dexterity: 14, constitution: 14, intelligence: 10, wisdom: 12, charisma: 6 },
+      magicAffinity: 0.8,
       startingInventory: [
         { name: 'Hunting Bow' },
         { name: 'Trail Rations', quantity: 3 },
@@ -317,6 +318,40 @@ const FANTASY: WorldManifest = {
   birthIntro:
     'The kingdom has been old a long time. Moths in the lanterns, rust on whatever\'s slung at the hip, dust on every threshold worth crossing. One more Wayfarer takes to the road anyway — they call them {name}.',
   sacrificePhrase: 'The gods smile and grant',
+  favorName: 'Favor',
+  favorTierNames: ['Touched', 'Witnessed', 'Favored', 'Anointed'],
+  favorTierTooltips: [
+    'The gods do not yet know your name.',
+    'The gods are watching.',
+    'The gods know your face.',
+    'The gods walk a step behind you.',
+    'The gods will not let you fall.',
+  ],
+  favorTierAcknowledgements: [
+    [
+      'Oh, {name}, you are touched. Have a blessed day.',
+      '{name} — touched. The gods see you walking.',
+      'Touched one — {name}, may their gaze be gentle.',
+    ],
+    [
+      '{name}, witnessed by the gods. Walk well.',
+      'Witnessed — {name}, the gods know your name now.',
+      'Honored to see you, {name}. The gods are watching close.',
+    ],
+    [
+      '{name}, favored — the gods walk a step behind you today.',
+      'Welcome, favored {name}. May the road be soft.',
+      'Favored {name}, light a candle for the road.',
+    ],
+    [
+      '{name}, anointed. The gods will not let you fall.',
+      'Anointed {name} — bless me, in passing.',
+      'The gods themselves walk with you, {name}. Anointed.',
+    ],
+  ],
+  deityWord: 'gods',
+  pietyName: 'Piety',
+  pietyDescription: 'Your desire to be one with everything.',
 }
 
 const CYBERPUNK: WorldManifest = {
@@ -447,6 +482,40 @@ const CYBERPUNK: WorldManifest = {
   birthIntro:
     'The city has been on too long. Rain on the neon, chrome fogged from the inside, rent due on whatever coffin counts as a home. Another Nobody jacks into the grid anyway — handle: {name}.',
   sacrificePhrase: 'The net pings back and credits',
+  favorName: 'Standing',
+  favorTierNames: ['Pinged', 'Tracked', 'Trusted', 'Whitelisted'],
+  favorTierTooltips: [
+    "The net hasn't logged your handle.",
+    'The net is watching your packets.',
+    'The net knows your routing.',
+    'The net boosts your throughput.',
+    "The net won't let your link drop.",
+  ],
+  favorTierAcknowledgements: [
+    [
+      "Hey, {name} — net's got eyes on you.",
+      "{name}, you're pinged. Mind the trace.",
+      'Pinged, eh? {name}, the net knows your handle.',
+    ],
+    [
+      "{name}, tracked. The net's logged your routing.",
+      "Tracked — {name}, you're in the system now.",
+      'I see you, {name}. The net tracks you.',
+    ],
+    [
+      '{name}, trusted by the net. Channels run smoother for you.',
+      'Welcome, trusted {name}. Your packets get priority.',
+      'Trusted handle, {name}. Drop me a line sometime.',
+    ],
+    [
+      '{name}, whitelisted. The net keeps your link warm.',
+      "Whitelisted {name} — your session won't drop.",
+      'The net runs clean for you, {name}. Whitelisted.',
+    ],
+  ],
+  deityWord: 'net',
+  pietyName: 'Sync',
+  pietyDescription: 'Your craving for the always-on hum of the net.',
 }
 
 const SCIFI: WorldManifest = {
@@ -597,6 +666,40 @@ const SCIFI: WorldManifest = {
   birthIntro:
     'The station has been in slow orbit a long time. Coolant lines ticking, recyclers humming a note flatter than last year, the star outside cooling faster than the surveys promised. One more Cadet reports aboard anyway — designation: {name}.',
   sacrificePhrase: 'The archive registers the offering and issues',
+  favorName: 'Standing',
+  favorTierNames: ['Indexed', 'Catalogued', 'Cited', 'Canonical'],
+  favorTierTooltips: [
+    'The archive has no entry under your name.',
+    'The archive has logged your existence.',
+    'The archive cross-references you.',
+    'The archive cites your name in the margins.',
+    'The archive will not let your record be lost.',
+  ],
+  favorTierAcknowledgements: [
+    [
+      '{name}, indexed. The archive has you on file.',
+      'Indexed — welcome, {name}. The record knows you.',
+      "{name}, you've been logged. The archive is patient.",
+    ],
+    [
+      '{name}, catalogued. The archive cross-references you.',
+      'Catalogued — {name}, your record runs deep.',
+      'Welcome, catalogued {name}. The archive watches.',
+    ],
+    [
+      '{name}, cited in the margins. The archive marks your name.',
+      'Cited {name} — your record echoes.',
+      'Cited — {name}, the archive refers to you often.',
+    ],
+    [
+      '{name}, canonical. The archive will not lose your record.',
+      'Canonical {name} — the record holds you.',
+      'The archive cites you forever, canonical {name}.',
+    ],
+  ],
+  deityWord: 'archive',
+  pietyName: 'Reverence',
+  pietyDescription: 'Your urge to be inscribed in the long record.',
 }
 
 export const WORLD_MANIFESTS: readonly WorldManifest[] = [FANTASY, CYBERPUNK, SCIFI] as const

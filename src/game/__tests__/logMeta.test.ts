@@ -54,7 +54,7 @@ function makeCharacter(level: number, name = 'Hiro'): Character {
     visitedRooms: [],
     deaths: [],
     levelUps: [],
-    drives: { hunger: 0, fatigue: 0, greed: 0, curiosity: 0, weight: 0 },
+    drives: { hunger: 0, fatigue: 0, greed: 0, curiosity: 0, weight: 0, piety: 0 },
     conditions: [],
     spells: [],
     rngState: 1,

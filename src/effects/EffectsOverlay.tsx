@@ -55,6 +55,8 @@ interface ActiveFx {
   /** Area rarity — drives the new-area banner variant. Rare+ renders a
    *  distinct "Rare Area Discovered" card in the rarity color. */
   rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
+  /** Tier label on a `favor-tier-up` rim flash ("Touched", "Anointed", …). */
+  tierName?: string
 }
 
 function formatDuration(ms: number): string {
@@ -292,6 +294,14 @@ export default function EffectsOverlay({
         renderable.push({ id: e.id, kind: e.kind, name: e.name })
       } else if (e.kind === 'new-item') {
         renderable.push({ id: e.id, kind: e.kind, name: e.name })
+      } else if (e.kind === 'death-save') {
+        // Death-save is celebrated as a golden rim flash that bypasses
+        // the blocking queue — the log line carries the narrative beat
+        // and a fullscreen card would compete with the death card layout
+        // for too little incremental signal.
+        renderable.push({ id: e.id, kind: e.kind })
+      } else if (e.kind === 'favor-tier-up') {
+        renderable.push({ id: e.id, kind: e.kind, tierName: e.tierName })
       }
     }
     // Admit-on-arrival semantics: flags are evaluated here, not at render
@@ -492,6 +502,32 @@ export default function EffectsOverlay({
                         </dd>
                       </div>
                     )}
+                    {rec.endFavorTierName && (
+                      <div>
+                        <dt>Favor</dt>
+                        <dd
+                          className={
+                            'fx-levelup-favor' +
+                            (rec.favorTierUpgraded ? ' fx-levelup-favor--up' : '')
+                          }
+                        >
+                          {rec.endFavorTierName}
+                          {rec.favorTierUpgraded && rec.startFavorTierName ? (
+                            <span className="fx-levelup-tier">
+                              {' '}↑ from {rec.startFavorTierName}
+                            </span>
+                          ) : null}
+                        </dd>
+                      </div>
+                    )}
+                    {rec.savesThisLevel && rec.savesThisLevel > 0 ? (
+                      <div>
+                        <dt>Saved</dt>
+                        <dd className="fx-levelup-saved">
+                          {rec.savesThisLevel}× — Not today, death.
+                        </dd>
+                      </div>
+                    ) : null}
                     <div>
                       <dt>Best item</dt>
                       <dd>
@@ -741,6 +777,26 @@ export default function EffectsOverlay({
             </div>
           )
         }
+        if (fx.kind === 'death-save') {
+          return (
+            <div key={fx.id} className="fx-cluster">
+              <div
+                className="fx-flash fx-flash--save"
+                onAnimationEnd={() => handleEnd(fx.id)}
+              />
+            </div>
+          )
+        }
+        if (fx.kind === 'favor-tier-up') {
+          return (
+            <div key={fx.id} className="fx-cluster">
+              <div
+                className="fx-flash fx-flash--favor"
+                onAnimationEnd={() => handleEnd(fx.id)}
+              />
+            </div>
+          )
+        }
         return null
       })}
 
@@ -770,6 +826,36 @@ export default function EffectsOverlay({
         @keyframes fx-heal {
           0%   { opacity: 0; }
           25%  { opacity: var(--fx-peak, 0.7); }
+          100% { opacity: 0; }
+        }
+
+        /* Golden rim flash for the divine save — broader and longer than
+           a heal so the moment registers as celebratory. Scales the
+           favor token via --favor with a fallback so themes that don't
+           define one still render readable gold. */
+        .fx-flash--save {
+          background: radial-gradient(ellipse at center, transparent 30%, var(--favor, #f5c542) 130%);
+          animation: fx-save 1400ms ease-out forwards;
+          opacity: 0;
+          mix-blend-mode: screen;
+        }
+        @keyframes fx-save {
+          0%   { opacity: 0; }
+          25%  { opacity: 0.85; }
+          100% { opacity: 0; }
+        }
+
+        /* Lighter, shorter version of the save flash — the favor-tier-up
+           is a smaller beat. Uses a subtler peak. */
+        .fx-flash--favor {
+          background: radial-gradient(ellipse at center, transparent 50%, var(--favor, #f5c542) 130%);
+          animation: fx-favor 800ms ease-out forwards;
+          opacity: 0;
+          mix-blend-mode: screen;
+        }
+        @keyframes fx-favor {
+          0%   { opacity: 0; }
+          30%  { opacity: 0.55; }
           100% { opacity: 0; }
         }
 
@@ -876,6 +962,15 @@ export default function EffectsOverlay({
         .fx-levelup-spell--lv3 { color: var(--rarity-rare); }
         .fx-levelup-spell--lv4 { color: var(--rarity-epic); }
         .fx-levelup-spell--lv5 { color: var(--rarity-legendary); text-shadow: 0 0 4px currentColor; }
+        /* Favor row on the level-up card. Default reads dim (Unseen / no
+           change); the upgraded variant brightens to the favor accent so
+           a tier-up reads as a milestone alongside gold / XP gains. */
+        .fx-levelup-favor { color: var(--fg-3); }
+        .fx-levelup-favor--up { color: var(--accent-hot) !important; text-shadow: 0 0 4px rgba(245, 197, 66, 0.4); }
+        /* Saved row — Anointed-tier death-save count. Same favor accent
+           as a tier-up but always-on whenever it appears. The count
+           pops; the "Not today, death." flavor reads under it. */
+        .fx-levelup-saved { color: var(--accent-hot) !important; text-shadow: 0 0 4px rgba(245, 197, 66, 0.4); font-weight: 500; }
         /* Continue button — lets the impatient skip the card. Overrides the
            overlay's pointer-events:none so clicks land on the button but
            not on anything behind it. Fades in shortly after the card is

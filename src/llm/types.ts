@@ -2,6 +2,11 @@ export interface LLMConfig {
   baseUrl: string
   apiKey: string
   model: string
+  /** Marks the endpoint as keyless. When true the API key is ignored
+   *  (and the field is hidden in Settings). Auto-set by presets — local
+   *  / proxy presets flip it on, hosted presets flip it off — but the
+   *  user can override either way. */
+  local: boolean
 }
 
 export type LLMRole = 'system' | 'user' | 'assistant'

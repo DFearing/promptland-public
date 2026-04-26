@@ -95,6 +95,7 @@ import { loadEffects, loadTickSpeed, tickSpeedMult, type Effects, type TickSpeed
 import { loadSoundSettings, saveSoundSettings, soundManager, type SoundSettings } from './sound'
 import { pickItemsToSell } from './game/sell'
 import { pickItemsToSacrifice } from './game/sacrifice'
+import { deityWord, favorName, favorTierName, gainFavor } from './game/favor'
 import { getWorldContent, getWorldManifest, WORLD_CONTENTS } from './worlds'
 import './App.css'
 
@@ -420,6 +421,68 @@ function buildLogSamples(character: Character, world: WorldContent): LogEntry[] 
     kind: 'system',
     text: `[Dev] Sold 4 items for 38 gold.`,
   })
+
+  // Favor / shrine / blessing / death-save samples — every variant the
+  // favor system can emit. Reuses the actual world manifest so the
+  // tier names + deity word + currency thread through. Sacrifice +
+  // tithe lines mirror what the in-tick shrine path produces.
+  {
+    const mf = getWorldManifest(character.worldId)
+    const currency = (mf?.currencyName ?? 'gold').toLowerCase()
+    const phrase = mf?.sacrificePhrase ?? 'The gods smile and grant'
+    const fName = favorName(mf).toLowerCase()
+    const dWord = deityWord(mf)
+    const sampleTier = 2 as 1 | 2 | 3 | 4
+    const tName = favorTierName(sampleTier, mf)
+    base.push({
+      kind: 'loot',
+      text: `${phrase} 8 ${currency} and +13 ${fName}.`,
+      meta: {
+        name: charName,
+        goldAmount: 8,
+        goldText: `8 ${currency}`,
+        favorAmount: 13,
+        favorText: `+13 ${fName}`,
+      },
+    })
+    base.push({
+      kind: 'narrative',
+      text: `${charName} sacrifices 8 items at the Shrine of Saint Maren.`,
+      meta: { name: charName, areaId, roomKey: firstRoomKey, roomName },
+    })
+    base.push({
+      kind: 'narrative',
+      text: `${charName} drops 5 ${currency} on the altar — a donation to the ${dWord}.`,
+      meta: {
+        name: charName,
+        goldAmount: 5,
+        goldText: `5 ${currency}`,
+        favorAmount: 5,
+      },
+    })
+    base.push({
+      kind: 'favor-tier-up',
+      text: `${charName} is now ${tName} of the ${dWord}.`,
+      meta: { name: charName, tierName: tName, tier: sampleTier },
+    })
+    base.push({
+      kind: 'shrine-blessing',
+      text: `The ${dWord} settle their gaze on ${charName} — Blessing of the ${tName} takes hold.`,
+      meta: { name: charName, tierName: tName, tier: sampleTier },
+    })
+    base.push({
+      kind: 'death-save',
+      text: `The ${dWord} step in. ${charName} should have died — instead, they wake in the ${roomName}.`,
+      meta: {
+        name: charName,
+        mobName,
+        areaId,
+        roomKey: firstRoomKey,
+        roomName,
+        isSave: true,
+      },
+    })
+  }
 
   // Level-up + title-earned chapters — sparkler-decorated celebrations.
   // Pair them so the dev preview shows them back-to-back (matches the
@@ -919,6 +982,14 @@ export default function App() {
                       name: i.name,
                       kind: i.kind,
                     })),
+                    // Class / species ids drive NPC hook keys: an NPC
+                    // that flips "cares: class" emits a hook fragment
+                    // for each class id; "cares: species" does the
+                    // same for species ids. We expose the bare id list
+                    // (the LLM already has names from the prompt's
+                    // characterClass mention) to keep the payload small.
+                    classIds: manifest.classes.map((c) => c.id),
+                    speciesIds: manifest.species.map((s) => s.id),
                   },
                   world.context,
                   { llm: client, cache: storage.entities },
@@ -1490,12 +1561,19 @@ export default function App() {
             case 'greed':
             case 'curiosity':
             case 'weight':
+            case 'piety':
               next = {
                 ...c,
                 drives: {
                   ...c.drives,
                   [cmd.field]: Math.max(0, Math.min(100, Math.round(cmd.value))),
                 },
+              }
+              break
+            case 'favor':
+              next = {
+                ...c,
+                favor: Math.max(0, Math.min(1000, Math.round(cmd.value))),
               }
               break
           }
@@ -1526,6 +1604,8 @@ export default function App() {
               hp: p.character.maxHp,
               position: respawn,
               deaths: [...p.character.deaths, record],
+              favor: 0,
+              blessing: undefined,
             },
             state: { kind: 'exploring' },
             log: appendLog({
@@ -1565,7 +1645,14 @@ export default function App() {
             ...p,
             character: {
               ...p.character,
-              drives: { hunger: 100, fatigue: 100, greed: 100, curiosity: 100, weight: p.character.drives.weight },
+              drives: {
+                hunger: 100,
+                fatigue: 100,
+                greed: 100,
+                curiosity: 100,
+                weight: p.character.drives.weight,
+                piety: p.character.drives.piety,
+              },
             },
           }
 
@@ -1574,7 +1661,14 @@ export default function App() {
             ...p,
             character: {
               ...p.character,
-              drives: { hunger: 0, fatigue: 0, greed: 0, curiosity: 0, weight: p.character.drives.weight },
+              drives: {
+                hunger: 0,
+                fatigue: 0,
+                greed: 0,
+                curiosity: 0,
+                weight: p.character.drives.weight,
+                piety: p.character.drives.piety,
+              },
             },
           }
 
@@ -1630,18 +1724,43 @@ export default function App() {
           const cur = (mf?.currencyName ?? 'gold').toLowerCase()
           const phrase = mf?.sacrificePhrase ?? 'The gods smile and grant'
           const n = result.sacrificed.reduce((s, e) => s + (e.item.quantity ?? 1), 0)
+          // Dev-panel sacrifice can fire anywhere — no shrine tithe here. The
+          // tick.ts in-game shrine path layers +5 favor / -5 gold on top.
+          const fav = gainFavor(p.character.favor, result.totalFavor)
+          const fName = favorName(mf).toLowerCase()
           const updatedChar: Character = {
             ...p.character,
             inventory: result.remainingInventory,
             gold: p.character.gold + result.totalGold,
+            favor: fav.next,
           }
           const noun = n === 1 ? 'item' : 'items'
-          const text = `${p.character.name} sacrifices ${n} ${noun}. ${phrase} ${result.totalGold} ${cur}.`
+          const goldText = `${result.totalGold} ${cur}`
+          const favorText = `+${result.totalFavor} ${fName}`
+          const text = `${p.character.name} sacrifices ${n} ${noun}. ${phrase} ${goldText} and ${favorText}.`
           const sacLog: LogEntry[] = [
             ...p.log,
-            { kind: 'loot' as const, text, meta: { goldAmount: result.totalGold } },
-          ].slice(-200)
-          return { ...p, character: updatedChar, log: sacLog }
+            {
+              kind: 'loot' as const,
+              text,
+              meta: {
+                goldAmount: result.totalGold,
+                goldText,
+                favorAmount: result.totalFavor,
+                favorText,
+              },
+            },
+          ]
+          if (fav.tieredUp && fav.toTier > 0) {
+            const tName = favorTierName(fav.toTier, mf)
+            const dWord = deityWord(mf)
+            sacLog.push({
+              kind: 'favor-tier-up' as const,
+              text: `${p.character.name} is now ${tName} of the ${dWord}.`,
+              meta: { tierName: tName, tier: fav.toTier as 1 | 2 | 3 | 4, name: p.character.name },
+            })
+          }
+          return { ...p, character: updatedChar, log: sacLog.slice(-200) }
         }
 
         case 'move-direction': {
@@ -2619,6 +2738,7 @@ export default function App() {
                   events={events}
                   elementEvents={elementEvents}
                   viewport={effects.viewport}
+                  character={phase.character}
                 />
                 {phase.state.kind === 'fighting' ? (
                   <div className="game__target-overlay">

@@ -24,7 +24,7 @@ exports[`runTick: rendered-text snapshot (first 15 log entries) > matches record
   },
   {
     "kind": "damage",
-    "text": "The Strong Cellar Spider needles Wayfarer.",
+    "text": "The Strong Cellar Spider grazes Wayfarer.",
   },
   {
     "kind": "damage",
@@ -32,93 +32,74 @@ exports[`runTick: rendered-text snapshot (first 15 log entries) > matches record
   },
   {
     "kind": "damage",
-    "text": "The Strong Cellar Spider perforates Wayfarer.",
+    "text": "The Strong Cellar Spider lances at Wayfarer.",
   },
   {
-    "kind": "narrative",
-    "text": "Wayfarer Hiro slumps, skewered by the Strong Cellar Spider. They wake again in the Market Square.",
+    "kind": "condition-gain",
+    "text": "The Strong Cellar Spider poisons Hiro.",
   },
   {
-    "kind": "narrative",
-    "text": "Wayfarer explores north to the The Crow & Cup. Low beams, smoke-stained rafters, a fire that gives more light than warmth. Three tables, one tap, a keep who pretends not to listen.",
-  },
-  {
-    "kind": "narrative",
-    "text": "Wayfarer explores east to the Potter's Row. A line of shuttered workshops. Clay dust never fully settles; you can taste it on the back of your tongue.",
-  },
-  {
-    "kind": "narrative",
-    "text": "Wayfarer explores east to the The Old Smithy. A smithy with a cold forge. The anvil is still here because it's too heavy to steal. Iron filings crunch underfoot.",
-  },
-  {
-    "kind": "narrative",
-    "text": "A Barrow Crow bars the way. A big, black bird with a grudge. It has seen things in that hole and decided they were yours.",
-  },
-  {
-    "kind": "narrative",
-    "text": "The Barrow Crow catches Wayfarer off guard! (Ambush — 2× damage)",
+    "kind": "condition-tick",
+    "text": "Poison rubs Hiro.",
   },
   {
     "kind": "damage",
-    "text": "The Barrow Crow bites into Wayfarer.",
+    "text": "Wayfarer clobbers the Strong Cellar Spider.",
+  },
+  {
+    "kind": "loot",
+    "text": "The Strong Cellar Spider falls. (+65 XP)",
+  },
+  {
+    "kind": "narrative",
+    "text": "Wayfarer stows the spoils in a strange chest. It clicks shut.",
+  },
+  {
+    "kind": "condition-tick",
+    "text": "Poison dusts Hiro.",
+  },
+  {
+    "kind": "narrative",
+    "text": "Wayfarer heads southeast to the Market Square.",
   },
 ]
 `;
 
-exports[`runTick: structural invariants over a 50-tick scripted run > reports drift between meta.name and entry.text (KNOWN ISSUE) 1`] = `
-{
-  "offenderCount": 8,
-  "offenderKinds": [
-    "loot",
-    "narrative",
-  ],
-}
-`;
-
 exports[`runTick: structural snapshot > matches the recorded structural fingerprint 1`] = `
 {
-  "deathCount": 2,
-  "finalGold": 0,
-  "finalHp": 13,
+  "deathCount": 0,
+  "finalGold": 2,
+  "finalHp": 29,
   "finalLevel": 2,
   "finalMaxHp": 47,
-  "finalState": "fighting",
-  "inventorySize": 3,
+  "finalState": "exploring",
+  "inventorySize": 4,
   "journalEntryKinds": [
-    "death",
-    "death",
     "level-up",
-    "mob-first-defeat",
   ],
   "levelUpCount": 1,
-  "logCount": 87,
+  "logCount": 70,
   "logKindCounts": {
     "chapter": 2,
-    "damage": 30,
-    "death-loss": 2,
-    "loot": 6,
-    "narrative": 46,
-    "thought": 1,
+    "condition-gain": 1,
+    "condition-tick": 3,
+    "damage": 15,
+    "loot": 5,
+    "narrative": 42,
+    "thought": 2,
   },
   "stateTransitions": [
     "exploring",
     "fighting",
     "exploring",
-    "fighting",
-    "exploring",
-    "fighting",
-    "exploring",
-    "fighting",
-    "exploring",
-    "fighting",
+    "resting",
     "exploring",
     "resting",
     "exploring",
     "fighting",
     "exploring",
-    "fighting",
   ],
   "ticks": 50,
-  "visitedRoomCount": 10,
+  "visitedRoomCount": 13,
 }
 `;

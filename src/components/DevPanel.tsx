@@ -18,7 +18,6 @@ import {
 } from '../themes'
 import type { Area } from '../areas'
 import type { WorldContent } from '../worlds'
-import DevPanelGen from './DevPanelGen'
 
 export type FullscreenFxKind =
   | 'level-up'
@@ -80,6 +79,8 @@ export type SetField =
   | 'greed'
   | 'curiosity'
   | 'weight'
+  | 'piety'
+  | 'favor'
 
 interface Props {
   paused: boolean
@@ -90,7 +91,7 @@ interface Props {
   conditions?: ConditionDef[]
 }
 
-type Tab = 'control' | 'set' | 'fx' | 'sound' | 'area' | 'system' | 'gen'
+type Tab = 'control' | 'set' | 'fx' | 'sound' | 'area' | 'system'
 
 const FULLSCREEN_FX_LABELS: Record<FullscreenFxKind, string> = {
   'level-up': 'Level up',
@@ -156,6 +157,7 @@ const VALUE_FIELD_GROUPS: Array<{ title: string; rows: ValueRow[] }> = [
       { kind: 'single', field: 'level', label: 'Level' },
       { kind: 'single', field: 'xp', label: 'XP' },
       { kind: 'single', field: 'gold', label: 'Gold' },
+      { kind: 'single', field: 'favor', label: 'Favor' },
     ],
   },
   {
@@ -166,6 +168,7 @@ const VALUE_FIELD_GROUPS: Array<{ title: string; rows: ValueRow[] }> = [
       { kind: 'single', field: 'greed', label: 'Greed' },
       { kind: 'single', field: 'curiosity', label: 'Curiosity' },
       { kind: 'single', field: 'weight', label: 'Weight' },
+      { kind: 'single', field: 'piety', label: 'Piety' },
     ],
   },
 ]
@@ -184,18 +187,15 @@ const VALUE_FIELDS: SetField[] = VALUE_FIELD_GROUPS.flatMap((g) =>
 const THEME_PREVIEW: Record<ThemeId, { bg: string; fg: string; shadow?: string }> = {
   mud:            { bg: '#0a110d', fg: '#c4ffcb', shadow: '0 0 6px rgba(168,255,176,0.4)' },
   'mud-classic':  { bg: '#000000', fg: '#7bff88', shadow: '0 0 6px rgba(123,255,136,0.55)' },
-  amber:    { bg: '#140d05', fg: '#ffe0a8', shadow: '0 0 6px rgba(255,204,102,0.4)' },
-  phosphor: { bg: '#10101a', fg: '#ffffff' },
-  neon:     { bg: '#15151c', fg: '#e9d5ff', shadow: '0 0 6px rgba(192,132,252,0.4)' },
-  cyber:    { bg: '#0a0a1e', fg: '#ff9de8', shadow: '0 0 6px rgba(255,61,248,0.4)' },
-  vacuum:   { bg: '#07132a', fg: '#b8ecff', shadow: '0 0 6px rgba(94,214,255,0.4)' },
-  vellum:   { bg: '#ece1c0', fg: '#a82c00' },
-  paper:    { bg: '#ffffff', fg: '#101010' },
+  chromejack:     { bg: '#11111a', fg: '#fcee0a', shadow: '0 0 6px rgba(0,240,255,0.4)' },
+  lcars:          { bg: '#07070a', fg: '#ff9966', shadow: '0 0 6px rgba(255,153,102,0.3)' },
+  channel:        { bg: '#222529', fg: '#d1d2d3', shadow: '0 0 6px rgba(54,197,240,0.3)' },
+  newsroom:       { bg: '#e3ded3', fg: '#1a1814' },
   // Custom preview uses the default custom palette as a static swatch.
   // Live-tracking the user's actual custom colors would require
   // rendering through CSS vars, which the dev panel's preview grid
   // doesn't do — so the preview reads as "a generic user palette".
-  custom:   { bg: '#050706', fg: '#a8ffb0', shadow: '0 0 6px rgba(76,255,106,0.4)' },
+  custom:         { bg: '#050706', fg: '#a8ffb0', shadow: '0 0 6px rgba(76,255,106,0.4)' },
 }
 
 function currentValue(c: Character, field: SetField): number {
@@ -212,6 +212,8 @@ function currentValue(c: Character, field: SetField): number {
     case 'greed': return Math.round(c.drives.greed)
     case 'curiosity': return Math.round(c.drives.curiosity)
     case 'weight': return Math.round(c.drives.weight)
+    case 'piety': return Math.round(c.drives.piety ?? 0)
+    case 'favor': return Math.round(c.favor ?? 0)
   }
 }
 
@@ -256,8 +258,7 @@ function loadSavedTab(): Tab {
       raw === 'fx' ||
       raw === 'sound' ||
       raw === 'area' ||
-      raw === 'system' ||
-      raw === 'gen'
+      raw === 'system'
     ) {
       return raw
     }
@@ -267,6 +268,9 @@ function loadSavedTab(): Tab {
     if (raw === 'play') return 'control'
     if (raw === 'spawn' || raw === 'log' || raw === 'theme') return 'system'
     if (raw === 'cond') return 'set'
+    // 'gen' tab was moved into Settings → LLM in PR #94. Route saved tab
+    // values forward to System so the panel doesn't open empty.
+    if (raw === 'gen') return 'system'
   } catch {
     // ignore
   }
@@ -736,7 +740,6 @@ export default function DevPanel({
     { id: 'fx', label: 'FX' },
     { id: 'sound', label: 'SND' },
     { id: 'area', label: 'Area' },
-    { id: 'gen', label: 'Gen' },
     { id: 'system', label: 'SYS' },
   ]
 
@@ -1234,7 +1237,6 @@ export default function DevPanel({
           />
         )}
 
-        {tab === 'gen' && <DevPanelGen />}
       </div>
 
       <style>{`

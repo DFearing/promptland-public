@@ -42,6 +42,22 @@ export type EffectEvent =
   | { id: string; kind: 'new-mob'; name: string }
   | { id: string; kind: 'new-item'; name: string }
   | { id: string; kind: 'generating-area' }
+  | {
+      id: string
+      kind: 'death-save'
+      /** Mob whose killing blow was averted, if any. Used for the
+       *  "should have been killed by …" subtitle on the fullscreen card. */
+      mobName?: string
+    }
+  | {
+      id: string
+      kind: 'favor-tier-up'
+      /** Tier the character just crossed into (1-4). */
+      tier: 1 | 2 | 3 | 4
+      /** Pretty tier label ("Touched" / "Anointed" / etc.) — drives the
+       *  rim-flash text. */
+      tierName: string
+    }
 
 export interface EffectContext {
   prevStateKind: GameState['kind']

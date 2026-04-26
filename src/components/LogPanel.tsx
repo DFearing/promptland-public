@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Panel from './Panel'
 import type { Character } from '../character'
 import type { GameState } from '../game'
@@ -14,6 +14,8 @@ type SubjectClickHandler = (
   subject: Subject,
   e: React.MouseEvent<HTMLButtonElement>,
 ) => void
+
+type HistoryItem = { at: number; text: ReactNode; saved?: boolean }
 
 interface Props {
   character: Character
@@ -250,6 +252,12 @@ function buildParts(
     parts.push({
       match: meta.spellName,
       render: (t) => <span className="logp__tok logp__tok--spell">{t}</span>,
+    })
+  }
+  if (meta.favorText) {
+    parts.push({
+      match: meta.favorText,
+      render: (t) => <span className="logp__tok logp__tok--favor">{t}</span>,
     })
   }
   if (meta.verb && meta.severity) {
@@ -759,6 +767,21 @@ function LogLine({
           <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
         </p>
       )
+
+    case 'favor-tier-up':
+    case 'shrine-blessing':
+      return (
+        <p className="logp__line logp__line--favor">
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
+        </p>
+      )
+
+    case 'death-save':
+      return (
+        <p className="logp__line logp__line--save">
+          <Highlight text={entry.text} meta={meta} world={world} showNumbers={showNumbers} onSubjectClick={onSubjectClick} />
+        </p>
+      )
   }
 }
 
@@ -789,10 +812,10 @@ export default function LogPanel({
     return set
   }, [lines])
 
-  const onSubjectClick: SubjectClickHandler = (subject, e) => {
+  const onSubjectClick: SubjectClickHandler = useCallback((subject, e) => {
     const rect = e.currentTarget.getBoundingClientRect()
     setPopover({ subject, anchor: rect })
-  }
+  }, [])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -800,17 +823,55 @@ export default function LogPanel({
   }, [lines])
 
   const life = character.deaths.length + 1
-  const deathItems = character.deaths.map((d) => {
-    // Highlight the mob name in cause if we know it. Renders as a clickable
-    // token that opens the mob popover on top of the deaths dialog.
-    const causeNode: ReactNode = (() => {
-      if (!d.mobName) return d.cause
-      const idx = d.cause.indexOf(d.mobName)
-      if (idx < 0) return d.cause
-      const mobName = d.mobName
-      return (
-        <>
-          {d.cause.slice(0, idx)}
+  // Memoized so the death/save dialog ReactNode arrays don't rebuild on every
+  // tick-driven rerender (LogPanel rerenders frequently). Keyed on the raw
+  // record arrays + the click handler — death/save lists only change on
+  // actual events, while ticks keep arriving.
+  const historyItems: HistoryItem[] = useMemo(() => {
+    const deathItems: HistoryItem[] = character.deaths.map((d) => {
+      // Highlight the mob name in cause if we know it. Renders as a clickable
+      // token that opens the mob popover on top of the deaths dialog.
+      const causeNode: ReactNode = (() => {
+        if (!d.mobName) return d.cause
+        const idx = d.cause.indexOf(d.mobName)
+        if (idx < 0) return d.cause
+        const mobName = d.mobName
+        return (
+          <>
+            {d.cause.slice(0, idx)}
+            <button
+              type="button"
+              className="logp__tok logp__tok--mob logp__tok--link"
+              onClick={(e) => onSubjectClick({ kind: 'mob', name: mobName }, e)}
+            >
+              {mobName}
+            </button>
+            {d.cause.slice(idx + mobName.length)}
+          </>
+        )
+      })()
+
+      const roomNode: ReactNode = d.roomName
+        ? <span className="logp__tok logp__tok--room">{d.roomName}</span>
+        : null
+
+      return {
+        at: d.at,
+        text: roomNode ? (
+          <>{causeNode} in the {roomNode}.</>
+        ) : (
+          <>{causeNode}.</>
+        ),
+      }
+    })
+    // Death-save records from the favor system. Render in the same dialog
+    // so the player has one place to look for "ways I've almost died".
+    // Tagged with `saved: true` so the renderer can paint them golden /
+    // distinct from real deaths.
+    const saveItems: HistoryItem[] = (character.saved ?? []).map((s) => {
+      const mobName = s.mobName
+      const mobNode: ReactNode = mobName
+        ? (
           <button
             type="button"
             className="logp__tok logp__tok--mob logp__tok--link"
@@ -818,24 +879,26 @@ export default function LogPanel({
           >
             {mobName}
           </button>
-          {d.cause.slice(idx + mobName.length)}
-        </>
-      )
-    })()
-
-    const roomNode: ReactNode = d.roomName
-      ? <span className="logp__tok logp__tok--room">{d.roomName}</span>
-      : null
-
-    return {
-      at: d.at,
-      text: roomNode ? (
-        <>{causeNode} in the {roomNode}.</>
-      ) : (
-        <>{causeNode}.</>
-      ),
-    }
-  })
+        )
+        : 'something'
+      const roomNode: ReactNode = s.roomName
+        ? <span className="logp__tok logp__tok--room">{s.roomName}</span>
+        : null
+      return {
+        at: s.at,
+        saved: true,
+        text: (
+          <>
+            <span className="logp__save-flair">Not today, death!</span>
+            {' '}Saved from {mobNode}
+            {roomNode ? <> in the {roomNode}</> : null}
+            .
+          </>
+        ),
+      }
+    })
+    return [...deathItems, ...saveItems].sort((a, b) => a.at - b.at)
+  }, [character.deaths, character.saved, onSubjectClick])
 
   const stateLabel: ReactNode = paused ? 'Paused' : describeState(state)
   const stateTooltip = stateTip(state, !!paused)
@@ -866,7 +929,7 @@ export default function LogPanel({
       <HistoryDialog
         open={showDeaths}
         title={`${character.name} — Deaths`}
-        items={deathItems}
+        items={historyItems}
         emptyText="Still alive."
         onClose={() => setShowDeaths(false)}
       />
@@ -1144,6 +1207,30 @@ export default function LogPanel({
         .logp__line--buff { color: var(--fg-body, var(--fg-2)); }
         .logp__line--debuff { color: var(--fg-body, var(--fg-2)); }
         .logp__line--cond-end { color: var(--fg-2); font-style: italic; }
+        /* Favor and shrine-blessing lines pick up the favor color so a
+           tier-up or blessing reads as a divine event distinct from the
+           surrounding action stream. Bright but not screaming. */
+        .logp__line--favor {
+          color: var(--favor, #e8da6e);
+          text-shadow: 0 0 4px rgba(245, 197, 66, 0.4);
+        }
+        /* Death-save shares the favor accent at full brightness — this is
+           the "the gods stepped in" moment, the most celebrated event the
+           favor system can fire. */
+        .logp__line--save {
+          color: var(--favor, #e8da6e);
+          font-weight: 500;
+          text-shadow: 0 0 6px rgba(245, 197, 66, 0.55);
+        }
+        /* Save flair span — used in the death-history dialog to mark
+           saved-from-death entries with a "Not today, death!" prefix
+           in the favor accent so it reads distinct from real deaths. */
+        .logp__save-flair {
+          color: var(--favor, #e8da6e);
+          font-weight: 600;
+          text-shadow: 0 0 4px rgba(245, 197, 66, 0.45);
+          letter-spacing: 0.02em;
+        }
         .logp__tok--cond { color: var(--magic); font-style: italic; }
         .logp__speaker {
           font-family: var(--font-display);
@@ -1213,6 +1300,16 @@ export default function LogPanel({
         .logp__tok--gold {
           color: #ffb040;
           text-shadow: 0 0 4px rgba(255, 176, 64, 0.4);
+          font-variant-numeric: tabular-nums;
+        }
+        /* Favor token — pale lime-gold, deliberately cooler and lighter
+           than coin gold (#ffb040) so the two tokens read as adjacent-
+           but-distinct on a sacrifice line that mentions both ("12 gold
+           and ✦ +12 favor"). The leading ✦ glyph is added at the emit
+           site for an extra layer of typographic separation. */
+        .logp__tok--favor {
+          color: var(--favor, #e8da6e);
+          text-shadow: 0 0 4px rgba(232, 218, 110, 0.5);
           font-variant-numeric: tabular-nums;
         }
         .logp__tok--xp {

@@ -1,6 +1,7 @@
 /* ============================================================================
    Promptland — extra themes
    Layered on top of design/colors_and_type.css. Same token shape, new palettes.
+   See docs/THEMING.md for the per-token role guide and new-theme checklist.
    ============================================================================ */
 
 /* ----------------------------------------------------------------------------
@@ -132,168 +133,283 @@
 }
 
 /* ----------------------------------------------------------------------------
-   Theme: Neon — purple on slate. Preserves the scaffold look.
+   Theme: Chromejack — cyberpunk yellow chrome on slate-black.
+   Yellow primary (the brand chrome), cyan as the runner/interactive voice,
+   hot magenta-pink as both the link and the danger color. The rarity ramp
+   keeps its canonical grey→green→blue→purple→gold ordering using
+   cyberpunk-saturation hues.
    ---------------------------------------------------------------------------- */
-:root[data-theme='neon'] {
-  --bg-0:         #0b0b10;
-  --bg-1:         #15151c;
-  --bg-2:         #1d1d26;
-  --bg-3:         #2a2a36;
-  --bg-inset:     #08080c;
+:root[data-theme='chromejack'] {
+  --bg-0:         #0a0a0e;
+  --bg-1:         #11111a;
+  --bg-2:         #1a1a26;
+  --bg-3:         #242435;
+  --bg-inset:     #050508;
 
-  --fg-1:         #e6e6ea;
-  --fg-2:         #c7c7d4;
-  --fg-3:         #8a8a9a;
-  --fg-dim:       #3d3d4d;
+  --fg-1:         #fcee0a;
+  --fg-2:         #c5b800;
+  --fg-3:         #7a7000;
+  --fg-dim:       #2e2a05;
+  /* Log body stays cool grey so the yellow chrome and the cyan/magenta
+     accent tokens read against neutral prose instead of fighting a yellow
+     wash. */
+  --fg-body:      #c8c8d4;
 
-  --accent:       #c084fc;
-  --accent-hot:   #e9d5ff;
-  --link:         #8ab6ff;
+  /* Player paints in cyan (not yellow) so the protagonist stands clear
+     of the yellow hud — same separation rationale as MUD's white-on-green. */
+  --player:       #00f0ff;
+  --dir:          #00f0ff;
+  --heat:         #ff2e6a;
 
-  --good:         #86efac;
-  --warn:         #fbbf24;
-  --bad:          #f87171;
-  --magic:        #c084fc;
-  --hp:           #ef4444;
-  --speech:       #fde68a;
+  --accent:       #00f0ff;
+  --accent-hot:   #6efeff;
+  --link:         #ff7df0;
 
-  --line-1:       #2a2a36;
-  --line-2:       #3d3d4d;
-  --line-3:       #c084fc;
-
-  --glow-sm:      0 0 2px rgba(192, 132, 252, 0.35);
-  --glow-md:      0 0 6px rgba(192, 132, 252, 0.25), 0 0 1px rgba(192, 132, 252, 0.6);
-  --glow-lg:      0 0 12px rgba(192, 132, 252, 0.35), 0 0 2px rgba(192, 132, 252, 0.8);
-
-  --scanline:     repeating-linear-gradient(
-                    to bottom,
-                    rgba(0, 0, 0, 0) 0px,
-                    rgba(0, 0, 0, 0) 2px,
-                    rgba(20, 10, 30, 0.35) 3px,
-                    rgba(20, 10, 30, 0.35) 3px
-                  );
-}
-
-/* ----------------------------------------------------------------------------
-   Theme: Cyber — magenta and cyan on near-black.
-   ---------------------------------------------------------------------------- */
-:root[data-theme='cyber'] {
-  --bg-0:         #04040c;
-  --bg-1:         #0a0a1e;
-  --bg-2:         #12122e;
-  --bg-3:         #1a1a42;
-  --bg-inset:     #020208;
-
-  --fg-1:         #aee8ff;
-  --fg-2:         #6fc3e0;
-  --fg-3:         #3f7e99;
-  --fg-dim:       #1a3a4a;
-
-  --accent:       #ff3df8;
-  --accent-hot:   #ff9de8;
-  --link:         #00d9ff;
-
-  --good:         #5afff0;
-  --warn:         #ffaa33;
+  --good:         #4cff8c;
+  --warn:         #ffb347;
   --bad:          #ff2e6a;
-  --magic:        #ff3df8;
+  --magic:        #d846ff;
+  --speech:       #ffe066;
+  --verb-emph:    #ff2e6a;
+
   --hp:           #ff2e6a;
-  --speech:       #ffe58a;
+  --mp:           #00f0ff;
+  --xp:           #fcee0a;
+  --log-hp:       #ff5a8a;
+  --log-mp:       #6ff0ff;
+  --log-neutral:  #e8e8ea;
+  --log-muted:    #5a5a5a;
 
-  --line-1:       #1e1e38;
-  --line-2:       #2e2e55;
-  --line-3:       #ff3df8;
+  --rarity-common:    #707080;
+  --rarity-uncommon:  #4cff8c;
+  --rarity-rare:      #00f0ff;
+  --rarity-epic:      #d846ff;
+  --rarity-legendary: #fcee0a;
 
-  --glow-sm:      0 0 2px rgba(174, 232, 255, 0.4);
-  --glow-md:      0 0 6px rgba(255, 61, 248, 0.3), 0 0 1px rgba(174, 232, 255, 0.6);
-  --glow-lg:      0 0 12px rgba(255, 61, 248, 0.4), 0 0 2px rgba(0, 217, 255, 0.8);
+  --line-1:       #1a1a2a;
+  --line-2:       #2e2e4a;
+  --line-3:       #00f0ff;
 
-  --scanline:     repeating-linear-gradient(
-                    to bottom,
-                    rgba(0, 0, 0, 0) 0px,
-                    rgba(0, 0, 0, 0) 2px,
-                    rgba(10, 0, 30, 0.4) 3px,
-                    rgba(10, 0, 30, 0.4) 3px
-                  );
-}
-
-/* ----------------------------------------------------------------------------
-   Theme: Vacuum — ice-white on deep navy. Vault, cold, clinical.
-   ---------------------------------------------------------------------------- */
-:root[data-theme='vacuum'] {
-  --bg-0:         #030918;
-  --bg-1:         #07132a;
-  --bg-2:         #0d1f40;
-  --bg-3:         #162d56;
-  --bg-inset:     #020611;
-
-  --fg-1:         #e8f2ff;
-  --fg-2:         #a8c5e8;
-  --fg-3:         #6a87b0;
-  --fg-dim:       #2a3f5c;
-
-  --accent:       #5ed6ff;
-  --accent-hot:   #b8ecff;
-  --link:         #9bb8ff;
-
-  --good:         #8af0c8;
-  --warn:         #ffd27a;
-  --bad:          #ff8585;
-  --magic:        #c0a8ff;
-  --hp:           #ff5a6a;
-  --speech:       #fff2c4;
-
-  --line-1:       #1a2d4c;
-  --line-2:       #2a4370;
-  --line-3:       #4a6ca0;
-
-  --glow-sm:      0 0 2px rgba(232, 242, 255, 0.3);
-  --glow-md:      0 0 6px rgba(94, 214, 255, 0.25), 0 0 1px rgba(232, 242, 255, 0.6);
-  --glow-lg:      0 0 12px rgba(94, 214, 255, 0.3), 0 0 2px rgba(184, 236, 255, 0.8);
+  /* Three-color bloom — yellow base, cyan mid, magenta peak. Mirrors the
+     way a real neon sign layers tube colors at different intensities. */
+  --glow-sm:      0 0 2px rgba(252, 238, 10, 0.40);
+  --glow-md:      0 0 6px rgba(0, 240, 255, 0.30), 0 0 1px rgba(252, 238, 10, 0.6);
+  --glow-lg:      0 0 12px rgba(255, 46, 106, 0.40), 0 0 2px rgba(0, 240, 255, 0.8);
 
   --scanline:     repeating-linear-gradient(
                     to bottom,
                     rgba(0, 0, 0, 0) 0px,
                     rgba(0, 0, 0, 0) 2px,
-                    rgba(0, 10, 30, 0.3) 3px,
-                    rgba(0, 10, 30, 0.3) 3px
+                    rgba(20, 20, 35, 0.40) 3px,
+                    rgba(20, 20, 35, 0.40) 3px
                   );
 }
 
 /* ----------------------------------------------------------------------------
-   Theme: Vellum — ink on parchment. The only light theme.
-   Inverts the background/foreground relationship but keeps the same semantics.
+   Theme: LCARS — Star Trek TNG console aesthetic.
+   Peach is the iconic LCARS chrome color; the foreground ramp dims through
+   mauve and violet rather than grey. Federation blue carries navigation;
+   Red Alert red carries damage. Glow is nearly off — LCARS is a flat
+   color-block aesthetic, not a phosphor-bloom one.
    ---------------------------------------------------------------------------- */
-:root[data-theme='vellum'] {
-  --bg-0:         #f3e9d0;   /* parchment page */
-  --bg-1:         #ece1c0;   /* panel */
-  --bg-2:         #e3d6ab;   /* raised */
-  --bg-3:         #d9c992;   /* pressed */
-  --bg-inset:     #faf1dc;   /* sunken field — lighter than page */
+:root[data-theme='lcars'] {
+  --bg-0:         #000000;
+  --bg-1:         #07070a;
+  --bg-2:         #11111a;
+  --bg-3:         #1c1c2a;
+  /* Wells share the page color — LCARS sunken regions are the void showing
+     through, separated from panels by the inset border, not by a different
+     surface color. */
+  --bg-inset:     #000000;
 
-  --fg-1:         #2a1e10;   /* ink */
-  --fg-2:         #4a3720;   /* secondary */
-  --fg-3:         #735839;   /* metadata */
-  --fg-dim:       #a8956e;   /* fog */
+  --fg-1:         #ff9966;
+  --fg-2:         #cc6699;
+  --fg-3:         #996699;
+  --fg-dim:       #443344;
+  /* Log body in clean light grey so the peach/mauve/violet chrome reads as
+     accent rather than competing wash. */
+  --fg-body:      #cccccc;
 
-  --accent:       #8b2500;   /* burnt sienna */
-  --accent-hot:   #a82c00;
-  --link:         #1e5a8a;   /* indigo ink */
+  /* Captain reads brightest; navigation in Federation blue. */
+  --player:       #ffcc99;
+  --dir:          #99ccff;
+  --heat:         #ff6633;
 
-  --good:         #2f6b2f;
-  --warn:         #a86a1f;
+  --accent:       #ffcc66;
+  --accent-hot:   #ffe6b3;
+  --link:         #99ccff;
+
+  --good:         #99cc99;
+  --warn:         #ffcc66;
+  --bad:          #cc3333;
+  --magic:        #cc99ff;
+  --speech:       #ffd699;
+  --verb-emph:    #ff6633;
+
+  --hp:           #cc3333;
+  --mp:           #6699cc;
+  --xp:           #ffcc66;
+  --log-hp:       #ff6666;
+  --log-mp:       #99bbff;
+  --log-neutral:  #e8e8ea;
+  --log-muted:    #555566;
+
+  --rarity-common:    #888899;
+  --rarity-uncommon:  #99cc99;
+  --rarity-rare:      #99ccff;
+  --rarity-epic:      #cc99ff;
+  --rarity-legendary: #ffcc66;
+
+  --line-1:       #221a1a;
+  --line-2:       #443322;
+  --line-3:       #ff9966;
+
+  /* LCARS doesn't bloom — color-blocks separated by black do the work.
+     Glow is dialed way down so headings don't read as "neon Trek". */
+  --glow-sm:      0 0 2px rgba(255, 153, 102, 0.25);
+  --glow-md:      0 0 4px rgba(255, 153, 102, 0.20);
+  --glow-lg:      0 0 8px rgba(255, 153, 102, 0.25);
+
+  --scanline:     repeating-linear-gradient(
+                    to bottom,
+                    rgba(0, 0, 0, 0) 0px,
+                    rgba(0, 0, 0, 0) 2px,
+                    rgba(10, 5, 0, 0.30) 3px,
+                    rgba(10, 5, 0, 0.30) 3px
+                  );
+}
+
+/* ----------------------------------------------------------------------------
+   Theme: Channel — office-chat aesthetic (Slack-inspired).
+   Aubergine highlights, channel-blue accents, mention-yellow for the
+   protagonist, status-light green/red for good/bad. Keeps the Promptland
+   flat-panel CRT look but replaces the phosphor hues with the unmistakable
+   workplace-app palette. Glow is muted — chat apps don't bloom.
+   ---------------------------------------------------------------------------- */
+:root[data-theme='channel'] {
+  --bg-0:         #1a1d21;
+  --bg-1:         #222529;
+  --bg-2:         #2c2d30;
+  --bg-3:         #350d36;   /* aubergine pop on selected — the brand color */
+  --bg-inset:     #121417;
+
+  --fg-1:         #d1d2d3;
+  --fg-2:         #ababad;
+  --fg-3:         #797a7c;
+  --fg-dim:       #3f4042;
+  --fg-body:      #c9c9cb;
+
+  /* Mentions paint in yellow in the source app — using it for the
+     protagonist's name reads as "this is the one being addressed." */
+  --player:       #ecb22e;
+  --dir:          #1d9bd1;
+  --heat:         #e01e5a;
+
+  --accent:       #1d9bd1;
+  --accent-hot:   #36c5f0;
+  --link:         #1d9bd1;
+
+  --good:         #2bac76;
+  --warn:         #ecb22e;
+  --bad:          #e01e5a;
+  /* Magic = aubergine. The brand purple already carries an "elevated"
+     semantic in the source app (channel descriptions, files panel), which
+     maps cleanly to Promptland's "magical/otherworldly" role. */
+  --magic:        #b96ab9;
+  --speech:       #ecb22e;
+  --verb-emph:    #e01e5a;
+
+  --hp:           #e01e5a;
+  --mp:           #1d9bd1;
+  --xp:           #2bac76;
+  --log-hp:       #ff5070;
+  --log-mp:       #36c5f0;
+  --log-neutral:  #e8e8ea;
+  --log-muted:    #5a5a5a;
+
+  /* Rarity ramp in app-status colors: grey (offline) → green (online) →
+     blue (channel) → aubergine (admin) → mention-yellow (alert). */
+  --rarity-common:    #797a7c;
+  --rarity-uncommon:  #2bac76;
+  --rarity-rare:      #1d9bd1;
+  --rarity-epic:      #b96ab9;
+  --rarity-legendary: #ecb22e;
+
+  --line-1:       #2c2d30;
+  --line-2:       #3f4042;
+  --line-3:       #1d9bd1;
+
+  /* Chat apps use weight + color, not bloom. Subtle blue-tinted glow
+     keeps headings legible without breaking the "this is workspace
+     software" reading. */
+  --glow-sm:      0 0 2px rgba(54, 197, 240, 0.25);
+  --glow-md:      0 0 4px rgba(54, 197, 240, 0.18);
+  --glow-lg:      0 0 8px rgba(54, 197, 240, 0.22);
+
+  --scanline:     repeating-linear-gradient(
+                    to bottom,
+                    rgba(0, 0, 0, 0) 0px,
+                    rgba(0, 0, 0, 0) 2px,
+                    rgba(0, 5, 10, 0.30) 3px,
+                    rgba(0, 5, 10, 0.30) 3px
+                  );
+}
+
+/* ----------------------------------------------------------------------------
+   Theme: Newsroom — broadsheet ink on cream paper. The light theme.
+   Cool newsprint cream page, deep ink primary, headline red for the
+   protagonist and "breaking" accents, indigo for links (the conventional
+   newspaper link blue). Glow stripped — paper doesn't bloom — and a
+   second rule below kills h1–h5 text-shadow so headings render as ink.
+   ---------------------------------------------------------------------------- */
+:root[data-theme='newsroom'] {
+  --bg-0:         #ebe6dc;   /* newsprint page */
+  --bg-1:         #e3ded3;   /* panel */
+  --bg-2:         #d8d3c8;   /* raised */
+  --bg-3:         #c8c3b5;   /* pressed */
+  --bg-inset:     #f4efe5;   /* sunken — lighter than page, see vellum */
+
+  --fg-1:         #1a1814;   /* deep ink */
+  --fg-2:         #3a352a;
+  --fg-3:         #66604f;
+  --fg-dim:       #a9a48f;
+  --fg-body:      #2a2820;
+
+  --player:       #8b1a1a;   /* byline red */
+  --dir:          #1e3a8a;   /* indigo ink */
+  --heat:         #b91c1c;
+
+  --accent:       #b91c1c;   /* breaking-news red */
+  --accent-hot:   #991515;
+  --link:         #1e3a8a;
+
+  --good:         #1f5c2e;   /* proof-mark green */
+  --warn:         #b8830f;   /* highlighter pencil */
   --bad:          #8b1a1a;
-  --magic:        #5b2e82;
+  --magic:        #5c2982;   /* royal purple */
+  --speech:       #5c2982;   /* quoted purple ink */
+  --verb-emph:    #8b1a1a;
+
   --hp:           #8b1a1a;
   --mp:           #1e3a8a;
-  --speech:       #3f2b63;
-  --verb-emph:    #6b1313;
+  --xp:           #1f5c2e;
+  --log-hp:       #8b1a1a;
+  --log-mp:       #1e3a8a;
+  --log-neutral:  #1a1814;
+  --log-muted:    #66604f;
+  --log-scale:    #6f4e37;
 
-  --line-1:       #c5b58a;   /* subtle line */
-  --line-2:       #9a8659;   /* panel */
-  --line-3:       #6b5a36;   /* focus */
+  --rarity-common:    #66604f;
+  --rarity-uncommon:  #1f5c2e;
+  --rarity-rare:      #1e3a8a;
+  --rarity-epic:      #5c2982;
+  --rarity-legendary: #b8830f;
 
-  --glow-sm:      none;       /* no phosphor in a paper theme */
+  --line-1:       #c8c3b5;
+  --line-2:       #9a9685;
+  --line-3:       #66604f;
+
+  --glow-sm:      none;
   --glow-md:      none;
   --glow-lg:      none;
 
@@ -303,72 +419,21 @@
   --scanline:     none;
 }
 
-/* In vellum, headings keep their display face but drop the glow. */
-:root[data-theme='vellum'] h1,
-:root[data-theme='vellum'] h2,
-:root[data-theme='vellum'] h3,
-:root[data-theme='vellum'] h4,
-:root[data-theme='vellum'] h5 {
+/* In newsroom, headings keep their display face but drop the phosphor glow —
+   ink doesn't bloom. */
+:root[data-theme='newsroom'] h1,
+:root[data-theme='newsroom'] h2,
+:root[data-theme='newsroom'] h3,
+:root[data-theme='newsroom'] h4,
+:root[data-theme='newsroom'] h5 {
   text-shadow: none;
 }
 
-/* ----------------------------------------------------------------------------
-   Theme: Paper — plain white page, black text, saturated semantics.
-   Debugging aid: every span that relies on a semantic token stands out hard
-   against a neutral body copy, so it's obvious when a rule isn't landing.
-   ---------------------------------------------------------------------------- */
-:root[data-theme='paper'] {
-  --bg-0:         #ffffff;
-  --bg-1:         #ffffff;
-  --bg-2:         #f2f2f2;
-  --bg-3:         #e4e4e4;
-  --bg-inset:     #fafafa;
-
-  --fg-1:         #101010;   /* primary text */
-  --fg-2:         #555555;   /* secondary / narrative body */
-  --fg-3:         #888888;   /* metadata / tertiary */
-  --fg-dim:       #bcbcbc;   /* fog / disabled */
-
-  --accent:       #1e5ab8;
-  --accent-hot:   #0f3a87;
-  --link:         #1450b8;
-
-  --good:         #0b8a3e;
-  --warn:         #b86a00;
-  --bad:          #c02020;
-  --magic:        #7a1ab8;
-  --hp:           #c02020;
-  --mp:           #1450b8;
-  --speech:       #8a6a00;
-  --verb-emph:    #5a0000;
-
-  --line-1:       #dcdcdc;
-  --line-2:       #b8b8b8;
-  --line-3:       #6e6e6e;
-
-  --glow-sm:      none;
-  --glow-md:      none;
-  --glow-lg:      none;
-
-  --shadow-panel: 0 0 0 1px var(--line-2);
-  --shadow-inset: inset 0 1px 0 rgba(0, 0, 0, 0.05), inset 0 0 0 1px var(--line-1);
-
-  --scanline:     none;
-}
-
-/* Paper strips glow and CRT effects so the color hierarchy is unambiguous. */
-:root[data-theme='paper'] h1,
-:root[data-theme='paper'] h2,
-:root[data-theme='paper'] h3,
-:root[data-theme='paper'] h4,
-:root[data-theme='paper'] h5 {
-  text-shadow: none;
-}
-
-/* Paper forces scanlines off even when the user has them globally enabled.
-   Purely visual — the user's scanlines preference is preserved and reapplies
-   as soon as they switch to any other theme. */
-html[data-theme='paper'].fx-scanlines .scanlines::after {
+/* Newsroom forces scanlines off even when the user has them globally
+   enabled. The CRT sweep on broadsheet paper is wrong; the user's scanlines
+   preference is preserved and reapplies as soon as they switch back to a
+   dark theme. */
+html[data-theme='newsroom'].fx-scanlines .scanlines::after {
   display: none;
 }
 

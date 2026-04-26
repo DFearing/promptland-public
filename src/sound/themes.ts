@@ -139,6 +139,17 @@ const retroTheme: SoundTheme = {
       { type: 'sine', startFreq: 262, durationS: 0.6, attackS: 0.08, releaseS: 0.4, peakGain: 0.2 },
       { type: 'triangle', startFreq: 392, durationS: 0.5, attackS: 0.06, releaseS: 0.35, peakGain: 0.25, delayS: 0.15 },
     ],
+    'death-save': [
+      // Salvific rising chord: low sustained bell + ascending triangle harmonics
+      { type: 'sine', startFreq: 261, durationS: 1.4, attackS: 0.04, releaseS: 1.0, peakGain: 0.35 },
+      { type: 'triangle', startFreq: 392, durationS: 1.2, attackS: 0.06, releaseS: 0.9, peakGain: 0.3, delayS: 0.1 },
+      { type: 'triangle', startFreq: 523, durationS: 1.0, attackS: 0.06, releaseS: 0.8, peakGain: 0.32, delayS: 0.25 },
+    ],
+    'favor-tier-up': [
+      // Bright shimmer — quick triangle-wave climb
+      { type: 'triangle', startFreq: 784, durationS: 0.18, attackS: 0.005, peakGain: 0.32 },
+      { type: 'triangle', startFreq: 1047, durationS: 0.22, attackS: 0.005, releaseS: 0.16, peakGain: 0.36, delayS: 0.1 },
+    ],
   },
 }
 
@@ -220,6 +231,15 @@ const chiptuneTheme: SoundTheme = {
       { type: 'triangle', startFreq: 262, durationS: 0.5, attackS: 0.06, releaseS: 0.35, peakGain: 0.22 },
       { type: 'sawtooth', startFreq: 392, durationS: 0.45, attackS: 0.05, releaseS: 0.3, peakGain: 0.2, delayS: 0.12 },
     ],
+    'death-save': [
+      { type: 'triangle', startFreq: 261, durationS: 1.3, attackS: 0.04, releaseS: 0.95, peakGain: 0.32 },
+      { type: 'sawtooth', startFreq: 392, durationS: 1.1, attackS: 0.06, releaseS: 0.85, peakGain: 0.24, delayS: 0.12 },
+      { type: 'triangle', startFreq: 523, durationS: 0.9, attackS: 0.06, releaseS: 0.7, peakGain: 0.3, delayS: 0.28 },
+    ],
+    'favor-tier-up': [
+      { type: 'triangle', startFreq: 784, durationS: 0.18, attackS: 0.005, peakGain: 0.3 },
+      { type: 'sawtooth', startFreq: 1047, durationS: 0.22, attackS: 0.005, releaseS: 0.16, peakGain: 0.28, delayS: 0.1 },
+    ],
   },
 }
 
@@ -298,6 +318,15 @@ const harmonicTheme: SoundTheme = {
     'generating-area': [
       { type: 'sine', startFreq: 262, durationS: 0.55, attackS: 0.08, releaseS: 0.38, peakGain: 0.2 },
       { type: 'sine', startFreq: 392, durationS: 0.5, attackS: 0.06, releaseS: 0.35, peakGain: 0.22, delayS: 0.14 },
+    ],
+    'death-save': [
+      { type: 'sine', startFreq: 261, durationS: 1.4, attackS: 0.04, releaseS: 1.0, peakGain: 0.36 },
+      { type: 'sine', startFreq: 392, durationS: 1.2, attackS: 0.06, releaseS: 0.9, peakGain: 0.32, delayS: 0.1 },
+      { type: 'sine', startFreq: 523, durationS: 1.0, attackS: 0.06, releaseS: 0.8, peakGain: 0.3, delayS: 0.25 },
+    ],
+    'favor-tier-up': [
+      { type: 'sine', startFreq: 784, durationS: 0.2, attackS: 0.008, peakGain: 0.32 },
+      { type: 'sine', startFreq: 1047, durationS: 0.24, attackS: 0.008, releaseS: 0.18, peakGain: 0.34, delayS: 0.1 },
     ],
   },
 }
@@ -395,6 +424,15 @@ const orchestralTheme: SoundTheme = {
       { type: 'sine', startFreq: 262, durationS: 0.5, attackS: 0.06, releaseS: 0.35, peakGain: 0.2 },
       { type: 'triangle', startFreq: 330, durationS: 0.48, attackS: 0.05, releaseS: 0.32, peakGain: 0.18, delayS: 0.12 },
     ],
+    'death-save': [
+      { type: 'sine', startFreq: 261, durationS: 1.5, attackS: 0.05, releaseS: 1.1, peakGain: 0.4 },
+      { type: 'triangle', startFreq: 392, durationS: 1.3, attackS: 0.06, releaseS: 1.0, peakGain: 0.34, delayS: 0.12 },
+      { type: 'sine', startFreq: 523, durationS: 1.1, attackS: 0.06, releaseS: 0.85, peakGain: 0.3, delayS: 0.3 },
+    ],
+    'favor-tier-up': [
+      { type: 'triangle', startFreq: 784, durationS: 0.2, attackS: 0.008, peakGain: 0.34 },
+      { type: 'sine', startFreq: 1047, durationS: 0.24, attackS: 0.008, releaseS: 0.18, peakGain: 0.32, delayS: 0.1 },
+    ],
   },
 }
 
@@ -475,6 +513,16 @@ const dungeonTheme: SoundTheme = {
       { type: 'sawtooth', startFreq: 165, durationS: 0.5, attackS: 0.06, releaseS: 0.35, peakGain: 0.2 },
       { type: 'sine', startFreq: 220, durationS: 0.45, attackS: 0.05, releaseS: 0.3, peakGain: 0.18, delayS: 0.12 },
     ],
+    'death-save': [
+      // Dungeon ambience: sustained low triangle + bell — rescue at the bottom of the well
+      { type: 'triangle', startFreq: 196, durationS: 1.6, attackS: 0.05, releaseS: 1.2, peakGain: 0.34 },
+      { type: 'sine', startFreq: 392, durationS: 1.2, attackS: 0.07, releaseS: 0.95, peakGain: 0.28, delayS: 0.2 },
+      { type: 'sine', startFreq: 523, durationS: 1.0, attackS: 0.06, releaseS: 0.8, peakGain: 0.26, delayS: 0.4 },
+    ],
+    'favor-tier-up': [
+      { type: 'sawtooth', startFreq: 660, durationS: 0.18, attackS: 0.008, peakGain: 0.28 },
+      { type: 'triangle', startFreq: 880, durationS: 0.24, attackS: 0.008, releaseS: 0.18, peakGain: 0.3, delayS: 0.1 },
+    ],
   },
 }
 
@@ -530,6 +578,12 @@ const minimalTheme: SoundTheme = {
     ],
     'generating-area': [
       { type: 'sine', startFreq: 262, durationS: 0.1, attackS: 0.005, peakGain: 0.15 },
+    ],
+    'death-save': [
+      { type: 'sine', startFreq: 523, durationS: 0.5, attackS: 0.02, releaseS: 0.4, peakGain: 0.22 },
+    ],
+    'favor-tier-up': [
+      { type: 'sine', startFreq: 880, durationS: 0.12, attackS: 0.005, peakGain: 0.18 },
     ],
   },
 }

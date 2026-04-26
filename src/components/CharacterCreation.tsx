@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Character, InventoryItem, StatBlock } from '../character'
-import { makeDefaults, maxHpFor } from '../character'
+import { makeDefaults, maxHpFor, maxMagicFor } from '../character'
 import { uuid } from '../util/uuid'
 import { WORLD_MANIFESTS, getWorldManifest, hasWorldContent } from '../worlds'
 import type { SpeciesOption, WorldManifest } from '../worlds'
@@ -110,7 +110,10 @@ export default function CharacterCreation({ onComplete, onCancel }: Props) {
       acquired: { at: startedAt, source: 'starting' },
     }))
     const maxHp = maxHpFor(stats)
-    const maxMagic = classDef.startingMaxMagic
+    const maxMagic =
+      classDef.magicAffinity !== undefined
+        ? maxMagicFor(stats, classDef.magicAffinity, classDef.castingStat)
+        : (classDef.startingMaxMagic ?? 0)
     const createdAt = Date.now()
     onComplete(
       {

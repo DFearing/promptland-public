@@ -32,6 +32,9 @@ export function makeDefaults(worldId?: string): Pick<
   | 'spells'
   | 'journal'
   | 'rngState'
+  | 'favor'
+  | 'saved'
+  | 'npcInteractionCounts'
 > {
   const area = resolveStartingArea(worldId)
   const start = { areaId: area.id, x: area.startX, y: area.startY, z: area.startZ }
@@ -47,6 +50,9 @@ export function makeDefaults(worldId?: string): Pick<
     equipped: {},
     conditions: [],
     spells: [],
+    favor: 0,
+    saved: [],
+    npcInteractionCounts: {},
     // Seed the journal with a starting-area discovery entry so new
     // characters immediately have something under their first area in
     // the Journal panel (instead of an empty list until the first mob

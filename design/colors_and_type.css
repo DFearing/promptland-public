@@ -181,84 +181,10 @@
   --panel-gap:   var(--sp-3);
 }
 
-/* ----------------------------------------------------------------------------
-   Theme: Amber — alternate CRT palette (PC/3270 terminal lineage)
-   ---------------------------------------------------------------------------- */
-:root[data-theme="amber"] {
-  --bg-0:         #0a0704;
-  --bg-1:         #140d05;
-  --bg-2:         #1c1208;
-  --bg-3:         #28190b;
-  --bg-inset:     #05030200;
-
-  --fg-1:         #ffcc66;
-  --fg-2:         #d99a3d;
-  --fg-3:         #8c6322;
-  --fg-dim:       #3d2d11;
-
-  --accent:       #ffb347;
-  --accent-hot:   #ffe0a8;
-  --link:         #ff8a8a;
-
-  --good:         #ffd97a;
-  --warn:         #ffb347;
-  --bad:          #ff6b6b;
-  --magic:        #e5b0ff;
-  --hp:           #ff5a6a;
-  --mp:           #6f9aff;
-  --speech:       #fff1c2;
-
-  --line-1:       #3a2811;
-  --line-2:       #5a3f1c;
-  --line-3:       #8a6128;
-
-  --glow-sm:      0 0 2px rgba(255, 204, 102, 0.35);
-  --glow-md:      0 0 6px rgba(255, 204, 102, 0.25), 0 0 1px rgba(255, 204, 102, 0.6);
-  --glow-lg:      0 0 12px rgba(255, 179, 71, 0.35), 0 0 2px rgba(255, 179, 71, 0.8);
-
-  --scanline:     repeating-linear-gradient(
-                    to bottom,
-                    rgba(0, 0, 0, 0) 0px,
-                    rgba(0, 0, 0, 0) 2px,
-                    rgba(30, 10, 0, 0.35) 3px,
-                    rgba(30, 10, 0, 0.35) 3px
-                  );
-}
-
-/* ----------------------------------------------------------------------------
-   Theme: Phosphor — white-on-black, paper-terminal feel
-   ---------------------------------------------------------------------------- */
-:root[data-theme="phosphor"] {
-  --bg-0:         #08080a;
-  --bg-1:         #10101a;
-  --bg-2:         #181820;
-  --bg-3:         #22222c;
-  --bg-inset:     #04040608;
-
-  --fg-1:         #e8e8ea;
-  --fg-2:         #a8a8b0;
-  --fg-3:         #6e6e78;
-  --fg-dim:       #2a2a34;
-
-  --accent:       #ffffff;
-  --accent-hot:   #ffffff;
-  --link:         #8ab6ff;
-
-  --good:         #9bf57a;
-  --warn:         #ffcc66;
-  --bad:          #ff6b6b;
-  --magic:        #c99bff;
-  --hp:           #e63855;
-  --speech:       #ffe58a;
-
-  --line-1:       #23232d;
-  --line-2:       #3a3a46;
-  --line-3:       #55555f;
-
-  --glow-sm:      0 0 2px rgba(255, 255, 255, 0.25);
-  --glow-md:      0 0 4px rgba(255, 255, 255, 0.18);
-  --glow-lg:      0 0 10px rgba(255, 255, 255, 0.22);
-}
+/* Additional themes (mud-classic, chromejack, lcars, channel, newsroom)
+   are layered in src/themes/extra.css. The default `mud` palette above is
+   the canonical reference — see docs/THEMING.md for the per-token role
+   guide and the new-theme checklist. */
 
 /* ============================================================================
    Base element styles — semantic defaults so headings/p/code "just work"
